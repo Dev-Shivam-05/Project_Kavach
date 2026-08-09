@@ -1,0 +1,222 @@
+{
+  "modules": [
+    {
+      "source": "test/main/__mocks__/jsx/index.js",
+      "dependencies": [
+        {
+          "module": "./jsx",
+          "moduleSystem": "cjs",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "require"],
+          "resolved": "test/main/__mocks__/jsx/jsx.jsx",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/jsx/jsx.jsx",
+      "dependencies": [
+        {
+          "module": "components/pay-method-choice",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["unknown"],
+          "resolved": "components/pay-method-choice",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "components/product-detail",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["unknown"],
+          "resolved": "components/product-detail",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "products",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["unknown"],
+          "resolved": "products",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "react",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["unknown"],
+          "resolved": "react",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "tracking",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["unknown"],
+          "resolved": "tracking",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "utils",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["unknown"],
+          "resolved": "utils",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": ["test/main/__mocks__/jsx/index.js"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "components/pay-method-choice",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["unknown"],
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/jsx/jsx.jsx"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "components/product-detail",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["unknown"],
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/jsx/jsx.jsx"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "products",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["unknown"],
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/jsx/jsx.jsx"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "react",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["unknown"],
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/jsx/jsx.jsx"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "tracking",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["unknown"],
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/jsx/jsx.jsx"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "utils",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["unknown"],
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/jsx/jsx.jsx"],
+      "orphan": false,
+      "valid": true
+    }
+  ],
+  "summary": {
+    "violations": [],
+    "error": 0,
+    "warn": 0,
+    "info": 0,
+    "ignore": 0,
+    "totalCruised": 8,
+    "totalDependenciesCruised": 7,
+    "optionsUsed": {
+      "baseDir": "",
+      "combinedDependencies": false,
+      "detectJSDocImports": false,
+      "detectProcessBuiltinModuleCalls": false,
+      "exoticRequireStrings": [],
+      "externalModuleResolutionStrategy": "node_modules",
+      "metrics": false,
+      "moduleSystems": ["es6", "cjs", "tsd", "amd"],
+      "preserveSymlinks": false,
+      "skipAnalysisNotInRules": false,
+      "tsPreCompilationDeps": false,
+      "args": "test/main/__mocks__/jsx"
+    },
+    "ruleSetUsed": {},
+    "environment": {
+      "version": "481",
+      "nodeVersionSupported": "^42",
+      "nodeVersionFound": "42.1.2",
+      "osVersionFound": "riscv pinecil@1.2.3",
+      "transpilersFound": [],
+      "extensionsFound": []
+    }
+  }
+}

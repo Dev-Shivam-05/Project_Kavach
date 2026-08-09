@@ -1,0 +1,207 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROJECT KAVACH — INCIDENT STATE MACHINE
+# ★ SINGLE SOURCE OF TRUTH ★
+#
+# This file generates BOTH implementations:
+#   tools/smgen.mjs → mobile/src/t0/stateMachine.generated.ts   (client, authoritative on-device)
+#   tools/smgen.mjs → backend/internal/incident/machine_gen.go  (server, for escalation)
+#
+# Divergence between the two implementations is a class of bug we cannot afford
+# (PRD §7.5). Never hand-edit the generated files.
+# ═══════════════════════════════════════════════════════════════════════════════
+version: 3
+
+states:
+  - IDLE
+  - WATCH
+  - SUSPECT
+  - PROBE
+  - PENDING
+  - FALSE_ALARM
+  - ACTIVE_L1
+  - ACTIVE_L1_SILENT
+  - ACTIVE_L2
+  - ACTIVE_L3
+  - OWNED
+  - RESOLVING
+  - RESOLVED
+  - DORMANT          # F-02: auto-quiesce; prevents permanent deploy freeze + battery drain
+
+terminal:
+  - FALSE_ALARM
+  - RESOLVED
+  - DORMANT
+
+# States in which the incident is considered "live" for the deploy-freeze check
+# and for escalation timer arming.
+active:
+  - PENDING
+  - ACTIVE_L1
+  - ACTIVE_L1_SILENT
+  - ACTIVE_L2
+  - ACTIVE_L3
+  - OWNED
+  - RESOLVING
+
+# Events. `guard` names map to functions the runtime must supply.
+events:
+  - CONTEXT_ELEVATED
+  - CONTEXT_ENDED
+  - SENSOR_ANOMALY
+  - CONFIDENCE
+  - USER_FINE
+  - MANUAL_TRIGGER
+  - PIN_CORRECT
+  - PIN_DURESS
+  - CANCEL_WINDOW_EXPIRED
+  - PROBE_TIMEOUT
+  - NO_ACK
+  - CLAIM
+  - RELEASE
+  - PROGRESS_WATCHDOG
+  - ON_SCENE
+  - TWO_PARTY_CONFIRM
+  - SELF_CLEAR_PIN
+  - AUTO_QUIESCE
+  - REESCALATE
+  - MOTION_RESUMED
+
+transitions:
+  # ── Ambient context ─────────────────────────────────────────────────────────
+  - { from: IDLE,    to: WATCH,   on: CONTEXT_ELEVATED }
+  - { from: WATCH,   to: IDLE,    on: CONTEXT_ENDED }
+
+  # ── Passive detection ───────────────────────────────────────────────────────
+  - { from: IDLE,    to: SUSPECT, on: SENSOR_ANOMALY }
+  - { from: WATCH,   to: SUSPECT, on: SENSOR_ANOMALY, guard: lowerThreshold }
+  - { from: SUSPECT, to: IDLE,    on: MOTION_RESUMED }
+  - { from: SUSPECT, to: PROBE,   on: CONFIDENCE, guard: confidenceMedium }   # 0.4 ≤ c < 0.7
+  - { from: SUSPECT, to: PENDING, on: CONFIDENCE, guard: confidenceHigh }     # c > 0.7
+
+  # ── PROBE: the cheapest possible intervention (PRD P-002) ───────────────────
+  - { from: PROBE,   to: IDLE,    on: USER_FINE }
+  - { from: PROBE,   to: PENDING, on: PROBE_TIMEOUT, afterS: 45 }
+
+  # ── Manual trigger ──────────────────────────────────────────────────────────
+  - { from: IDLE,    to: PENDING, on: MANUAL_TRIGGER }
+  - { from: WATCH,   to: PENDING, on: MANUAL_TRIGGER }
+
+  # ── The cancel window. These three MUST be constant-time siblings. ──────────
+  - { from: PENDING, to: FALSE_ALARM,      on: PIN_CORRECT }
+  - { from: PENDING, to: ACTIVE_L1_SILENT, on: PIN_DURESS }          # UI identical to FALSE_ALARM
+  - { from: PENDING, to: ACTIVE_L1,        on: CANCEL_WINDOW_EXPIRED }
+
+  # ── Escalation ladder ───────────────────────────────────────────────────────
+  - { from: ACTIVE_L1,        to: ACTIVE_L2, on: NO_ACK, afterS: 90 }
+  - { from: ACTIVE_L1_SILENT, to: ACTIVE_L2, on: NO_ACK, afterS: 90 }
+  - { from: ACTIVE_L2,        to: ACTIVE_L3, on: NO_ACK, afterS: 180 }
+
+  # ── Responsibility transfer (PRD P-003, P-030) ──────────────────────────────
+  - { from: ACTIVE_L1,        to: OWNED, on: CLAIM }
+  - { from: ACTIVE_L1_SILENT, to: OWNED, on: CLAIM }
+  - { from: ACTIVE_L2,        to: OWNED, on: CLAIM }
+  - { from: ACTIVE_L3,        to: OWNED, on: CLAIM }
+  - { from: OWNED, to: ACTIVE_L2, on: RELEASE }
+  - { from: OWNED, to: ACTIVE_L2, on: PROGRESS_WATCHDOG, afterS: 300 }
+
+  # ── Resolution ──────────────────────────────────────────────────────────────
+  - { from: OWNED,     to: RESOLVING, on: ON_SCENE }
+  - { from: RESOLVING, to: RESOLVED,  on: TWO_PARTY_CONFIRM }
+  - { from: ACTIVE_L1, to: RESOLVED,  on: SELF_CLEAR_PIN }
+  - { from: ACTIVE_L2, to: RESOLVED,  on: SELF_CLEAR_PIN }
+  - { from: ACTIVE_L3, to: RESOLVED,  on: SELF_CLEAR_PIN }
+
+  # ── F-02: auto-quiesce after 6 h ────────────────────────────────────────────
+  - { from: ACTIVE_L1,        to: DORMANT, on: AUTO_QUIESCE, afterS: 21600 }
+  - { from: ACTIVE_L1_SILENT, to: DORMANT, on: AUTO_QUIESCE, afterS: 21600 }
+  - { from: ACTIVE_L2,        to: DORMANT, on: AUTO_QUIESCE, afterS: 21600 }
+  - { from: ACTIVE_L3,        to: DORMANT, on: AUTO_QUIESCE, afterS: 21600 }
+  - { from: OWNED,            to: DORMANT, on: AUTO_QUIESCE, afterS: 21600 }
+
+  # ── PRD P-058: a second SOS during an active incident jumps the ladder ──────
+  - { from: ACTIVE_L1, to: ACTIVE_L2, on: REESCALATE }
+  - { from: ACTIVE_L2, to: ACTIVE_L3, on: REESCALATE }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONFORMANCE FIXTURES — both implementations MUST produce identical results.
+# ═══════════════════════════════════════════════════════════════════════════════
+fixtures:
+  - name: manual panic runs the full ladder to L3
+    from: IDLE
+    events: [MANUAL_TRIGGER, CANCEL_WINDOW_EXPIRED, NO_ACK, NO_ACK]
+    expect: ACTIVE_L3
+
+  - name: correct PIN cancels
+    from: IDLE
+    events: [MANUAL_TRIGGER, PIN_CORRECT]
+    expect: FALSE_ALARM
+
+  - name: duress PIN escalates silently
+    from: IDLE
+    events: [MANUAL_TRIGGER, PIN_DURESS]
+    expect: ACTIVE_L1_SILENT
+
+  - name: duress still climbs the ladder
+    from: IDLE
+    events: [MANUAL_TRIGGER, PIN_DURESS, NO_ACK, NO_ACK]
+    expect: ACTIVE_L3
+
+  - name: claim halts the ladder
+    from: IDLE
+    events: [MANUAL_TRIGGER, CANCEL_WINDOW_EXPIRED, CLAIM]
+    expect: OWNED
+
+  - name: release re-broadcasts at L2
+    from: IDLE
+    events: [MANUAL_TRIGGER, CANCEL_WINDOW_EXPIRED, CLAIM, RELEASE]
+    expect: ACTIVE_L2
+
+  - name: progress watchdog re-broadcasts
+    from: IDLE
+    events: [MANUAL_TRIGGER, CANCEL_WINDOW_EXPIRED, CLAIM, PROGRESS_WATCHDOG]
+    expect: ACTIVE_L2
+
+  - name: two-party resolution
+    from: IDLE
+    events: [MANUAL_TRIGGER, CANCEL_WINDOW_EXPIRED, CLAIM, ON_SCENE, TWO_PARTY_CONFIRM]
+    expect: RESOLVED
+
+  - name: PROBE absorbs a medium-confidence anomaly
+    from: IDLE
+    events: [SENSOR_ANOMALY, CONFIDENCE_MEDIUM, USER_FINE]
+    expect: IDLE
+
+  - name: PROBE timeout escalates
+    from: IDLE
+    events: [SENSOR_ANOMALY, CONFIDENCE_MEDIUM, PROBE_TIMEOUT]
+    expect: PENDING
+
+  - name: high confidence skips PROBE
+    from: IDLE
+    events: [SENSOR_ANOMALY, CONFIDENCE_HIGH]
+    expect: PENDING
+
+  - name: watch lowers the anomaly threshold
+    from: WATCH
+    events: [SENSOR_ANOMALY]
+    expect: SUSPECT
+
+  - name: motion resumed auto-resolves a suspect
+    from: IDLE
+    events: [SENSOR_ANOMALY, MOTION_RESUMED]
+    expect: IDLE
+
+  - name: auto-quiesce ends a forgotten incident
+    from: IDLE
+    events: [MANUAL_TRIGGER, CANCEL_WINDOW_EXPIRED, AUTO_QUIESCE]
+    expect: DORMANT
+
+  - name: reescalate jumps the ladder
+    from: IDLE
+    events: [MANUAL_TRIGGER, CANCEL_WINDOW_EXPIRED, REESCALATE]
+    expect: ACTIVE_L2
+
+  - name: unknown events are ignored, never crash
+    from: IDLE
+    events: [NO_ACK, CLAIM, RELEASE]
+    expect: IDLE

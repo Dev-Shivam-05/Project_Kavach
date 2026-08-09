@@ -1,0 +1,113 @@
+{
+  "modules": [
+    {
+      "source": "test/main/__mocks__/ts-precompilation-deps-on-es/also-used.ts",
+      "dependencies": [],
+      "dependents": [
+        "test/main/__mocks__/ts-precompilation-deps-on-es/index.ts"
+      ],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/ts-precompilation-deps-on-es/definitely-used.ts",
+      "dependencies": [],
+      "dependents": [
+        "test/main/__mocks__/ts-precompilation-deps-on-es/index.ts"
+      ],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/ts-precompilation-deps-on-es/imported-from-index-but-not-used.ts",
+      "dependencies": [],
+      "dependents": [
+        "test/main/__mocks__/ts-precompilation-deps-on-es/index.ts"
+      ],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/ts-precompilation-deps-on-es/index.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "./also-used",
+          "moduleSystem": "cjs",
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "require"],
+          "resolved": "test/main/__mocks__/ts-precompilation-deps-on-es/also-used.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "./definitely-used",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "import"],
+          "resolved": "test/main/__mocks__/ts-precompilation-deps-on-es/definitely-used.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "./imported-from-index-but-not-used",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "import"],
+          "resolved": "test/main/__mocks__/ts-precompilation-deps-on-es/imported-from-index-but-not-used.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    }
+  ],
+  "summary": {
+    "violations": [],
+    "error": 0,
+    "warn": 0,
+    "info": 0,
+    "ignore": 0,
+    "totalCruised": 4,
+    "totalDependenciesCruised": 3,
+    "optionsUsed": {
+      "baseDir": "",
+      "combinedDependencies": false,
+      "detectJSDocImports": false,
+      "detectProcessBuiltinModuleCalls": false,
+      "exoticRequireStrings": [],
+      "externalModuleResolutionStrategy": "node_modules",
+      "metrics": false,
+      "moduleSystems": ["es6", "cjs", "tsd", "amd"],
+      "preserveSymlinks": false,
+      "skipAnalysisNotInRules": false,
+      "tsConfig": { "fileName": "test/main/__mocks__/tsconfig.targetes.json" },
+      "tsPreCompilationDeps": true,
+      "args": "test/main/__mocks__/ts-precompilation-deps-on-es"
+    },
+    "environment": {
+      "version": "481",
+      "nodeVersionSupported": "^42",
+      "nodeVersionFound": "42.1.2",
+      "osVersionFound": "riscv pinecil@1.2.3",
+      "transpilersFound": [],
+      "extensionsFound": []
+    }
+  }
+}

@@ -1,0 +1,172 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      P-033: silent multi-SIM SMS is the only transport that works with the screen
+      locked and the app force-stopped. READ_PHONE_STATE is what makes
+      SubscriptionManager enumerate the SIMs; without it we can only reach the
+      system default subscription and lose the second SIM entirely.
+    -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+
+    <!-- P-035: the agent must be running again before the user reaches the lock screen. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- §4.4 L1 PEER_ONLY: shout over BLE when every IP transport is gone. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- STREAM_ALARM cannot be raised past the DND ceiling without policy access (P-021). -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!--
+      Held only so the app can *ask*. P-031 check 1 reads
+      PowerManager.isIgnoringBatteryOptimizations(); the OEM battery manager is
+      what actually kills T0, and no permission can prevent that — only Device
+      Owner (ADR-015) or the guided OEM walkthrough in Appendix B can.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- All optional: a phone with no SIM, no flash and no proximity sensor must still install. -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.proximity" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
+    <!--
+      Android 11 package visibility. Without these, resolveActivity() returns null
+      for every OEM battery screen in PRD Appendix B and `openOemSettings` would
+      report "unresolvable" on exactly the devices that need it most. Scoped to the
+      named settings packages rather than QUERY_ALL_PACKAGES (P-042 data minimisation).
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.settings.APPLICATION_DETAILS_SETTINGS" />
+        </intent>
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.miui.powerkeeper" />
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.coloros.oppoguardelf" />
+        <package android:name="com.oplus.battery" />
+        <package android:name="com.vivo.permissionmanager" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.oneplus.security" />
+        <package android:name="com.asus.mobilemanager" />
+        <package android:name="com.letv.android.letvsafe" />
+        <package android:name="com.transsion.phonemaster" />
+    </queries>
+
+    <application>
+
+        <!--
+          ★ android:process=":t0" — T0 gets its own OS process.
+
+          The React Native JS heap is the single most likely thing in this app to
+          be OOM-killed: it holds the map tiles, the incident timeline and every
+          screen the guardian opened today. If the agent shared that process, a JS
+          OOM would take the emergency plane down with the UI. In its own process
+          the agent survives with a ~15 MB footprint the LMK almost never targets.
+
+          ★ android:directBootAware="true" — the agent starts at
+          LOCKED_BOOT_COMPLETED, minutes before the user first unlocks. It reads
+          its configuration from createDeviceProtectedStorageContext() (P-035) and
+          must never touch credential-protected storage before ACTION_USER_UNLOCKED.
+
+          ★ foregroundServiceType="location|connectedDevice" is not a guess.
+          Android 15 forbids starting dataSync, camera, mediaPlayback,
+          mediaProjection, microphone and phoneCall foreground services from a
+          BOOT_COMPLETED broadcast. location and connectedDevice are both on the
+          permitted list, which is why the agent is modelled as those two and
+          nothing else. The service still narrows this set at runtime to the types
+          it actually holds permission for — declaring a type you cannot back
+          throws on Android 14+.
+
+          NOTE for whoever owns MainApplication: because this component lives in a
+          second process, Application.onCreate() runs there too. It must return
+          early for any process whose name ends in ":t0" instead of booting SoLoader
+          and the React host — the agent never touches the JS runtime.
+        -->
+        <service
+            android:name="expo.modules.kavacht0.KavachForegroundService"
+            android:process=":t0"
+            android:directBootAware="true"
+            android:exported="false"
+            android:foregroundServiceType="location|connectedDevice"
+            android:stopWithTask="false" />
+
+        <!--
+          LOCKED_BOOT_COMPLETED fires while the user data partition is still
+          encrypted; BOOT_COMPLETED fires after first unlock. We take both: the
+          first restores T0 in Direct Boot, the second is the fallback for OEMs
+          that never send the locked variant. MY_PACKAGE_REPLACED covers the
+          in-place update, which otherwise silently stops the agent until reboot.
+        -->
+        <receiver
+            android:name="expo.modules.kavacht0.BootReceiver"
+            android:process=":t0"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <!--
+              ACTION_USER_UNLOCKED is NOT listed here on purpose: it is only
+              reliably delivered to runtime-registered receivers, so the agent
+              registers for it itself once it is running.
+            -->
+        </receiver>
+
+        <!--
+          P-022, the Final Breath. ACTION_SHUTDOWN is the last broadcast the system
+          sends before the radios go down; it is the only chance to tell the family
+          that the phone was switched off rather than that its owner stopped moving.
+          QUICKBOOT_POWEROFF is the same event on several Chinese OEM builds.
+        -->
+        <receiver
+            android:name="expo.modules.kavacht0.ShutdownReceiver"
+            android:process=":t0"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.ACTION_SHUTDOWN" />
+                <action android:name="android.intent.action.QUICKBOOT_POWEROFF" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWEROFF" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          ADR-015. Runs in the MAIN process: DevicePolicyManager calls are made
+          from the provisioning UI and there is no reason to hand Device Owner
+          authority to the process that must survive an OOM.
+        -->
+        <receiver
+            android:name="expo.modules.kavacht0.KavachDeviceAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/kavach_device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

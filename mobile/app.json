@@ -1,0 +1,148 @@
+{
+  "expo": {
+    "name": "Kavach",
+    "slug": "kavach",
+    "version": "1.1.0",
+    "scheme": "kavach",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0F14",
+    "primaryColor": "#E5322E",
+    "icon": "./assets/icon.png",
+    "android": {
+      "package": "in.example.kavach",
+      "versionCode": 2,
+      "predictiveBackGestureEnabled": false,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B0F14"
+      },
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.SEND_SMS",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.USE_FULL_SCREEN_INTENT",
+        "android.permission.ACCESS_NOTIFICATION_POLICY",
+        "android.permission.USE_EXACT_ALARM",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
+        "android.permission.FOREGROUND_SERVICE_CAMERA",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_ADVERTISE",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BODY_SENSORS",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
+    },
+    "ios": {
+      "bundleIdentifier": "in.example.kavach",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "processing",
+          "audio"
+        ],
+        "NSMotionUsageDescription": "Kavach reads motion sensors to detect a fall or a crash when you cannot reach your phone.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Kavach shares your location with your family only during an emergency, or while a journey you started is running.",
+        "NSLocationWhenInUseUsageDescription": "Kavach shares your location with your family only during an emergency, or while a journey you started is running.",
+        "NSMicrophoneUsageDescription": "Kavach can record ambient audio into the incident black box so responders hear what happened.",
+        "NSCameraUsageDescription": "Kavach uses the camera for theft protection and home monitoring."
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-background-task",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Kavach can record ambient audio into the incident black box so responders hear what happened."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "backgroundColor": "#0B0F14",
+          "resizeMode": "contain"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#E5322E"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Kavach needs background location so an SOS still carries a position when the screen is off and the app is closed.",
+          "locationWhenInUsePermission": "Kavach shares your location with your family only during an emergency, or while a journey you started is running.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Kavach uses the camera for theft protection and home monitoring.",
+          "microphonePermission": "Kavach can record ambient audio into the incident black box so responders hear what happened.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "Kavach reads motion sensors to detect a fall or a crash when you cannot reach your phone."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26,
+            "buildArchs": [
+              "arm64-v8a",
+              "armeabi-v7a"
+            ],
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "useLegacyPackaging": true,
+            "enableBundleCompression": true,
+            "extraProguardRules": "# --- Kavach Tier-0 keep rules (ADR-015) -----------------------------------\n# R8 only runs on release builds, so whatever it strips is missing from the\n# one build users actually install. A stripped T0 class does not crash: the\n# OS simply never delivers LOCKED_BOOT_COMPLETED or ACTION_SHUTDOWN to a\n# class that is not there, so the emergency plane is silently absent. That\n# is the exact failure mode P-035 and P-022 exist to prevent, and no smoke\n# test would catch it. Certainty here costs a few KB of dex.\n#\n# modules/kavach-t0/android/build.gradle ships no consumerProguardFiles on\n# purpose, so the T0 classes reach R8 with no rules of their own. The four\n# components named in AndroidManifest.xml (KavachForegroundService,\n# BootReceiver, ShutdownReceiver, KavachDeviceAdminReceiver) are keep roots\n# via the merged manifest -- but that roots the CLASS, not its members, and\n# KavachT0Module is not in the manifest at all: it is reached only through\n# the generated ExpoModulesPackageList. Keep the whole package.\n-keep class expo.modules.kavacht0.** { *; }\n\n# Records are populated purely by reflection: RecordTypeConverter locates\n# @Field via kotlin.reflect findAnnotation(), then writes each value with\n# javaField.set() keyed on the Kotlin PROPERTY NAME. A renamed field does\n# not throw -- the value is dropped and the property keeps its default. On\n# ForegroundAgentOptions that silently discards the P-035 pre-unlock\n# payload (emergencyNumbers, peerFingerprints, guardianReleaseTokenSha256),\n# leaving T0 booted and configured with nothing. expo-modules-core ships\n# the 'implements' twin of this rule; keeping our own copy means a\n# dependency bump that drops its consumerProguardFiles cannot quietly take\n# the emergency plane with it.\n-keep class * extends expo.modules.kotlin.records.Record { *; }\n\n# The reflection above needs the metadata that carries it: @Field is\n# @Retention(RUNTIME), kotlin-reflect (pulled in by expo-modules-core)\n# resolves properties through @kotlin.Metadata, and Signature is what\n# preserves the element type of the List<String> fields on\n# ForegroundAgentOptions -- without it they arrive as a raw List and no\n# element converter can be chosen. R8 full mode is the AGP 8 default, so\n# none of this is inherited by accident; state it explicitly.\n-keepattributes RuntimeVisibleAnnotations,AnnotationDefault,Signature,InnerClasses,EnclosingMethod\n-keep class kotlin.Metadata { *; }"
+          }
+        }
+      ],
+      "./plugins/withKavachT0Process"
+    ],
+    "extra": {
+      "apiBase": "http://10.0.2.2:8081",
+      "apiDirect": "http://10.0.2.2:8081",
+      "wsBase": "ws://10.0.2.2:8082",
+      "demoMode": "true",
+      "eas": {
+        "projectId": "0329ef85-108d-443b-a3e1-9aeafc94e78f"
+      },
+      "router": {}
+    },
+    "owner": "dev-shivam-05"
+  }
+}

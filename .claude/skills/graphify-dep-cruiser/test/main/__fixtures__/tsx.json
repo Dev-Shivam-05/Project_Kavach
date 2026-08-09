@@ -1,0 +1,91 @@
+{
+  "modules": [
+    {
+      "source": "test/main/__mocks__/tsx/index.ts",
+      "dependencies": [
+        {
+          "module": "./sub/render",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "import"],
+          "resolved": "test/main/__mocks__/tsx/sub/render.tsx",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/tsx/sub/render.tsx",
+      "dependencies": [
+        {
+          "module": "react-dom",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["unknown"],
+          "resolved": "react-dom",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": ["test/main/__mocks__/tsx/index.ts"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "react-dom",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["unknown"],
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/tsx/sub/render.tsx"],
+      "orphan": false,
+      "valid": true
+    }
+  ],
+  "summary": {
+    "violations": [],
+    "error": 0,
+    "warn": 0,
+    "info": 0,
+    "ignore": 0,
+    "totalCruised": 3,
+    "totalDependenciesCruised": 2,
+    "optionsUsed": {
+      "baseDir": "",
+      "combinedDependencies": false,
+      "detectJSDocImports": false,
+      "detectProcessBuiltinModuleCalls": false,
+      "exoticRequireStrings": [],
+      "externalModuleResolutionStrategy": "node_modules",
+      "metrics": false,
+      "moduleSystems": ["es6", "cjs", "tsd", "amd"],
+      "preserveSymlinks": false,
+      "skipAnalysisNotInRules": false,
+      "tsPreCompilationDeps": false,
+      "args": "test/main/__mocks__/tsx"
+    },
+    "environment": {
+      "version": "481",
+      "nodeVersionSupported": "^42",
+      "nodeVersionFound": "42.1.2",
+      "osVersionFound": "riscv pinecil@1.2.3",
+      "transpilersFound": [],
+      "extensionsFound": []
+    }
+  }
+}

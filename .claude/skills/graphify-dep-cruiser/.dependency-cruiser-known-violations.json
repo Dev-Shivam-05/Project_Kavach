@@ -1,0 +1,328 @@
+[
+  {
+    "type": "dependency",
+    "from": "src/cli/init-config/get-user-input.mjs",
+    "to": "src/extract/tsc/parse.mjs",
+    "unresolvedTo": "#extract/tsc/parse.mjs",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-subpath-import",
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "cli-to-main-only"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "test/utl/try-import.spec.mjs",
+    "to": "test/utl/node_modules/beta/index.js",
+    "unresolvedTo": "beta",
+    "dependencyTypes": [
+      "npm-no-pkg",
+      "exotic-require"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-non-package-json"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "test/utl/try-import.spec.mjs",
+    "to": "test/utl/node_modules/no-default-export/main.mjs",
+    "unresolvedTo": "no-default-export",
+    "dependencyTypes": [
+      "npm-no-pkg",
+      "exotic-require"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-non-package-json"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "test/utl/try-import.spec.mjs",
+    "to": "test/utl/node_modules/rc/index.js",
+    "unresolvedTo": "rc",
+    "dependencyTypes": [
+      "npm-no-pkg",
+      "exotic-require"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-non-package-json"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "test/utl/try-require.spec.cjs",
+    "to": "test/utl/node_modules/beta/index.js",
+    "unresolvedTo": "beta",
+    "dependencyTypes": [
+      "npm-no-pkg",
+      "require"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-non-package-json"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "test/utl/try-require.spec.cjs",
+    "to": "test/utl/node_modules/rc/index.js",
+    "unresolvedTo": "rc",
+    "dependencyTypes": [
+      "npm-no-pkg",
+      "require"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-non-package-json"
+    }
+  },
+  {
+    "type": "module",
+    "from": "src/schema/baseline-violations.schema.mjs",
+    "to": "src/schema/baseline-violations.schema.mjs",
+    "rule": {
+      "severity": "error",
+      "name": "not-unreachable-from-cli"
+    }
+  },
+  {
+    "type": "module",
+    "from": "src/cli/assert-node-environment-suitable.mjs",
+    "to": "src/cli/assert-node-environment-suitable.mjs",
+    "rule": {
+      "severity": "info",
+      "name": "not-reachable-from-folder-index"
+    }
+  },
+  {
+    "type": "module",
+    "from": "src/cli/format.mjs",
+    "to": "src/cli/format.mjs",
+    "rule": {
+      "severity": "info",
+      "name": "not-reachable-from-folder-index"
+    }
+  },
+  {
+    "type": "module",
+    "from": "src/cli/tools/wrap-stream-in-html.mjs",
+    "to": "src/cli/tools/wrap-stream-in-html.mjs",
+    "rule": {
+      "severity": "info",
+      "name": "not-reachable-from-folder-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/analyze/derive/folders/aggregate-to-folders.mjs",
+    "to": "src/analyze/derive/circular.mjs",
+    "unresolvedTo": "../circular.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/analyze/derive/folders/aggregate-to-folders.mjs",
+    "to": "src/analyze/derive/module-utl.mjs",
+    "unresolvedTo": "../module-utl.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/analyze/derive/metrics/get-module-metrics.mjs",
+    "to": "src/analyze/derive/module-utl.mjs",
+    "unresolvedTo": "../module-utl.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/cli/init-config/environment-helpers.mjs",
+    "to": "src/cli/defaults.mjs",
+    "unresolvedTo": "../defaults.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/cli/init-config/index.mjs",
+    "to": "src/cli/defaults.mjs",
+    "unresolvedTo": "../defaults.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/cli/init-config/write-run-scripts-to-manifest.mjs",
+    "to": "src/cli/defaults.mjs",
+    "unresolvedTo": "../defaults.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/extract/resolve/resolve.mjs",
+    "to": "src/extract/helpers.mjs",
+    "unresolvedTo": "../helpers.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/extract/swc/extract.mjs",
+    "to": "src/extract/helpers.mjs",
+    "unresolvedTo": "../helpers.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/extract/tsc/extract.mjs",
+    "to": "src/extract/helpers.mjs",
+    "unresolvedTo": "../helpers.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/main/options/normalize.mjs",
+    "to": "src/main/helpers.mjs",
+    "unresolvedTo": "../helpers.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/main/rule-set/assert-validity.mjs",
+    "to": "src/main/helpers.mjs",
+    "unresolvedTo": "../helpers.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/main/rule-set/normalize.mjs",
+    "to": "src/main/helpers.mjs",
+    "unresolvedTo": "../helpers.mjs",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "info",
+      "name": "not-to-ancestor-folders"
+    }
+  },
+  {
+    "type": "module",
+    "from": "src/utl/extract-root-module-name.cjs",
+    "to": "src/utl/extract-root-module-name.cjs",
+    "rule": {
+      "severity": "info",
+      "name": "utl-module-not-shared-enough"
+    }
+  },
+  {
+    "type": "module",
+    "from": "src/utl/find-all-files.mjs",
+    "to": "src/utl/find-all-files.mjs",
+    "rule": {
+      "severity": "info",
+      "name": "utl-module-not-shared-enough"
+    }
+  },
+  {
+    "type": "module",
+    "from": "src/utl/try-require.cjs",
+    "to": "src/utl/try-require.cjs",
+    "rule": {
+      "severity": "info",
+      "name": "utl-module-not-shared-enough"
+    }
+  },
+  {
+    "type": "module",
+    "from": "src/utl/wrap-and-indent.mjs",
+    "to": "src/utl/wrap-and-indent.mjs",
+    "rule": {
+      "severity": "info",
+      "name": "utl-module-not-shared-enough"
+    }
+  }
+]

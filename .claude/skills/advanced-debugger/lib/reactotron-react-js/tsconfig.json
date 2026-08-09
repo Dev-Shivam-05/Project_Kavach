@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "allowJs": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "allowSyntheticDefaultImports": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "noImplicitAny": false,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noUnusedLocals": true,
+    "target": "es5",
+    "lib": ["dom", "es2017"],
+    "types": ["react", "jest"],
+    "esModuleInterop": true,
+  },
+  "exclude": ["node_modules"],
+  "include": ["src"],
+}

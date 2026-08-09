@@ -1,0 +1,201 @@
+{
+  "modules": [
+    {
+      "dependencies": [],
+      "rules": [],
+      "valid": true,
+      "source": "./processing",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["unknown"],
+      "dependents": ["test/main/__mocks__/collapse-after-cruise/src/index.js"],
+      "orphan": false,
+      "consolidated": false
+    },
+    {
+      "dependencies": [
+        {
+          "dependencyTypes": ["local", "require"],
+          "rules": [],
+          "valid": true,
+          "module": "./input",
+          "moduleSystem": "cjs",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "resolved": "test/main/__mocks__/collapse-after-cruise/src/input",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false
+        },
+        {
+          "dependencyTypes": ["local", "require"],
+          "rules": [],
+          "valid": true,
+          "module": "./output",
+          "moduleSystem": "cjs",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "resolved": "test/main/__mocks__/collapse-after-cruise/src/output",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false
+        },
+        {
+          "dependencyTypes": ["local", "require"],
+          "rules": [],
+          "valid": true,
+          "module": "./post-processing",
+          "moduleSystem": "cjs",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "resolved": "test/main/__mocks__/collapse-after-cruise/src/post-processing",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false
+        },
+        {
+          "dependencyTypes": ["local", "require"],
+          "rules": [],
+          "valid": true,
+          "module": "./pre-processing",
+          "moduleSystem": "cjs",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "resolved": "test/main/__mocks__/collapse-after-cruise/src/pre-processing",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false
+        },
+        {
+          "dependencyTypes": ["unknown"],
+          "rules": [],
+          "valid": true,
+          "module": "./processing",
+          "moduleSystem": "cjs",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "resolved": "./processing",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false
+        }
+      ],
+      "rules": [],
+      "valid": true,
+      "source": "test/main/__mocks__/collapse-after-cruise/src/index.js",
+      "dependents": [],
+      "orphan": false,
+      "consolidated": false
+    },
+    {
+      "dependencies": [
+        {
+          "dependencyTypes": ["local", "require"],
+          "rules": [],
+          "valid": true,
+          "module": "../utl/do-interesting-things",
+          "moduleSystem": "cjs",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "resolved": "test/main/__mocks__/collapse-after-cruise/src/utl",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false
+        }
+      ],
+      "rules": [],
+      "valid": true,
+      "source": "test/main/__mocks__/collapse-after-cruise/src/input",
+      "dependents": [
+        "test/main/__mocks__/collapse-after-cruise/src/input/index.js"
+      ],
+      "orphan": false,
+      "consolidated": true
+    },
+    {
+      "dependencies": [],
+      "rules": [],
+      "valid": true,
+      "source": "test/main/__mocks__/collapse-after-cruise/src/output",
+      "dependents": ["test/main/__mocks__/collapse-after-cruise/src/index.js"],
+      "orphan": false,
+      "consolidated": true
+    },
+    {
+      "dependencies": [],
+      "rules": [],
+      "valid": true,
+      "source": "test/main/__mocks__/collapse-after-cruise/src/post-processing",
+      "dependents": ["test/main/__mocks__/collapse-after-cruise/src/index.js"],
+      "orphan": false,
+      "consolidated": true
+    },
+    {
+      "dependencies": [],
+      "rules": [],
+      "valid": true,
+      "source": "test/main/__mocks__/collapse-after-cruise/src/pre-processing",
+      "dependents": ["test/main/__mocks__/collapse-after-cruise/src/index.js"],
+      "orphan": false,
+      "consolidated": true
+    },
+    {
+      "dependencies": [],
+      "rules": [],
+      "valid": true,
+      "source": "test/main/__mocks__/collapse-after-cruise/src/utl",
+      "dependents": [
+        "test/main/__mocks__/collapse-after-cruise/src/input/index.js"
+      ],
+      "orphan": false,
+      "consolidated": true
+    }
+  ],
+  "summary": {
+    "violations": [],
+    "error": 0,
+    "warn": 0,
+    "info": 0,
+    "ignore": 0,
+    "totalCruised": 7,
+    "totalDependenciesCruised": 6,
+    "optionsUsed": {
+      "baseDir": "",
+      "collapse": "^test/main/__mocks__/collapse-after-cruise/src/[^/]+",
+      "combinedDependencies": false,
+      "detectJSDocImports": false,
+      "detectProcessBuiltinModuleCalls": false,
+      "exoticRequireStrings": [],
+      "externalModuleResolutionStrategy": "node_modules",
+      "metrics": false,
+      "moduleSystems": ["es6", "cjs", "tsd", "amd"],
+      "preserveSymlinks": false,
+      "skipAnalysisNotInRules": false,
+      "tsPreCompilationDeps": false,
+      "args": "test/main/__mocks__/collapse-after-cruise"
+    },
+    "ruleSetUsed": {},
+    "environment": {
+      "version": "481",
+      "nodeVersionSupported": "^42",
+      "nodeVersionFound": "42.1.2",
+      "osVersionFound": "riscv pinecil@1.2.3",
+      "transpilersFound": [],
+      "extensionsFound": []
+    }
+  }
+}

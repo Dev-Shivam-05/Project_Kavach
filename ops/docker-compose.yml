@@ -1,0 +1,228 @@
+# Project Kavach — the whole backend, four binaries, one command.
+#
+#   docker compose -f ops/docker-compose.yml up --build -d
+#
+# Requires Docker Compose v2.17+ for `build.dockerfile_inline`. The Dockerfiles
+# live here rather than in ../backend on purpose: the Go module is stdlib-only
+# (`go.mod` has zero requires), so there is nothing to vendor, nothing to
+# `go mod download`, and no reason for a build file to drift out of sync with
+# the compose file that is the only thing that ever invokes it.
+#
+#   8081  sos-ingest      ★ the critical binary — see its block below
+#   8080  control-plane     family, incidents, consent, policy, drills, drill runs
+#   8082  realtime-gw       WebSocket, presence, priority backpressure (§2.5.2)
+#   9090  canary          ★ the only page-worthy alert in the system (§16.2)
+#
+# Ports are published on 0.0.0.0 because the device under test is a PHONE — a
+# different machine on the LAN. See ops/README.md for pointing the app at this
+# host's LAN address.
+
+name: kavach
+
+# ── the three non-critical binaries share one image ──────────────────────────
+#
+# They are the "allowed to be down" tier, so sharing a build and a rollback is
+# a feature: they version together and there is one artefact to reason about.
+# Each container then picks its binary with `entrypoint`.
+#
+# sos-ingest deliberately does NOT use this anchor. ADR-002 is not satisfied by
+# "different container, same pipeline": a shared build step is a shared blast
+# radius, and the whole point of the split is that a bad change to the control
+# plane cannot reach the binary that carries an SOS.
+#
+# No build ARG and no ${...} anywhere in this recipe — Compose interpolates
+# dockerfile_inline before Docker ever sees it, so a variable meant for the
+# Dockerfile silently expands to the empty string here and you get a build that
+# compiles the wrong package.
+x-go-build: &go-build
+  context: ../backend
+  dockerfile_inline: |
+    FROM golang:1.26-alpine AS build
+    WORKDIR /src
+    COPY . .
+    # CGO off: the module is stdlib-only (go.mod has zero requires), and a fully
+    # static binary is what makes the runtime layer a bare alpine with nothing
+    # in it to patch. `-o /out/` writes one binary per named package.
+    RUN CGO_ENABLED=0 GOFLAGS=-trimpath go build -o /out/ \
+          ./cmd/control-plane ./cmd/realtime-gw ./cmd/canary
+
+    FROM alpine:3.21
+    RUN adduser -D -u 10001 kavach && mkdir -p /var/lib/kavach && chown kavach /var/lib/kavach
+    COPY --from=build /out/ /usr/local/bin/
+    USER kavach
+    WORKDIR /var/lib/kavach
+
+x-common: &common
+  restart: unless-stopped
+  volumes:
+    - kavach-store:/var/lib/kavach
+  environment: &common-env
+    # The file-backed bus (internal/bus: stream.wal + cursors.json, tailed on a
+    # 250 ms poll) stands in for NATS JetStream. All four processes read and
+    # write ONE directory — that shared directory IS the seam between sos-ingest
+    # and everything downstream, and it is the only thing they share.
+    KAVACH_BUS_DIR: /var/lib/kavach/bus
+    # Structured dev logging. Set to 0 for the JSON production formatter.
+    KAVACH_DEV: "1"
+    # Empty token disables bearer auth on the control plane (see auth() in
+    # cmd/control-plane/main.go). Export KAVACH_API_TOKEN before `up` to turn it
+    # on; the canary picks up the SAME value so the two cannot drift apart.
+    KAVACH_API_TOKEN: "${KAVACH_API_TOKEN:-}"
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # ★ sos-ingest — THE ONE BINARY THAT MUST NEVER BREAK ★
+  #
+  # DEPLOYED SEPARATELY AND RARELY (ADR-002). Its own image, its own build, its
+  # own pipeline, its own rollback, ≤2 deploys per year. It shares no build
+  # step, no dependency and no lifecycle with the control plane, and it has NO
+  # `depends_on`: it must come up and accept an SOS with every other service in
+  # this file dead. If you find yourself editing this block to make a control-
+  # plane feature work, the feature is in the wrong binary.
+  #
+  # TestLOCBudget in cmd/sos-ingest/main_test.go fails the build if the source
+  # outgrows its ceiling. Do not route around it.
+  # ───────────────────────────────────────────────────────────────────────────
+  sos-ingest:
+    build:
+      context: ../backend
+      dockerfile_inline: |
+        FROM golang:1.26-alpine AS build
+        WORKDIR /src
+        COPY . .
+        # The LOC/dependency budget is a CI gate, not documentation. Running the
+        # test in the image build means an over-budget sos-ingest cannot be
+        # deployed even by someone who skipped CI.
+        RUN CGO_ENABLED=0 go test ./cmd/sos-ingest/...
+        RUN CGO_ENABLED=0 GOFLAGS=-trimpath go build -o /out/sos-ingest ./cmd/sos-ingest
+
+        FROM alpine:3.21
+        RUN adduser -D -u 10001 kavach && mkdir -p /var/lib/kavach && chown kavach /var/lib/kavach
+        COPY --from=build /out/sos-ingest /usr/local/bin/sos-ingest
+        USER kavach
+        WORKDIR /var/lib/kavach
+        ENTRYPOINT ["/usr/local/bin/sos-ingest"]
+    image: kavach/sos-ingest:local
+    container_name: kavach-sos-ingest
+    restart: unless-stopped
+    volumes:
+      - kavach-store:/var/lib/kavach
+    environment:
+      KAVACH_SOS_ADDR: ":8081"
+      # sos-ingest owns <data>/sos.wal, <data>/bus and <data>/store. Its bus is
+      # THE bus: the other services below are pointed at this exact directory.
+      KAVACH_SOS_DATA: /var/lib/kavach
+      KAVACH_DEV: "1"
+      # HMAC secret the SMS aggregator signs inbound webhooks with (F-09/§2.10.2).
+      # Unset in dev; the handler rejects unsigned callbacks once it is set.
+      KAVACH_SMS_GATEWAY_SECRET: "${KAVACH_SMS_GATEWAY_SECRET:-}"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      # NOT the same probe as the others by accident — this is the endpoint the
+      # canary's chain ultimately depends on, so it is checked twice as often.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  # ── control plane: allowed to be rich, allowed to be down ──────────────────
+  control-plane:
+    build: *go-build
+    image: kavach/backend:local
+    container_name: kavach-control-plane
+    entrypoint: ["/usr/local/bin/control-plane"]
+    <<: *common
+    environment:
+      <<: *common-env
+      KAVACH_CP_ADDR: ":8080"
+      KAVACH_DATA_DIR: /var/lib/kavach/control-plane
+      # F-13: no leader election. N escalation workers competing for timers is
+      # the design, so this number is a throughput knob and nothing else.
+      KAVACH_ESCALATION_WORKERS: "3"
+      # Readiness flips off on SIGTERM and drains before the listener closes, so
+      # the proxy moves traffic to the other colour first. Keep this shorter than
+      # the orchestrator's stop_grace_period below.
+      KAVACH_DRAIN: "3s"
+    stop_grace_period: 15s
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/readyz"]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+  # ── realtime gateway: hand-rolled RFC 6455 over net/http Hijack ────────────
+  realtime-gw:
+    build: *go-build
+    image: kavach/backend:local
+    container_name: kavach-realtime-gw
+    entrypoint: ["/usr/local/bin/realtime-gw"]
+    <<: *common
+    environment:
+      <<: *common-env
+      KAVACH_RT_ADDR: ":8082"
+      # F-16: connect tickets are single-use and 60 s lived, minted by
+      # POST /v1/rt/ticket on the control plane. Setting this to 1 accepts
+      # unauthenticated sockets — a debugging aid, never a deployment.
+      KAVACH_RT_ALLOW_NO_TICKET: "${KAVACH_RT_ALLOW_NO_TICKET:-0}"
+      KAVACH_RT_DEV_FAMILY: "${KAVACH_RT_DEV_FAMILY:-}"
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8082/healthz"]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+  # ── canary: fires a REAL incident through the REAL handler, forever ───────
+  #
+  # The only service here whose unhealthy state is worth waking someone for. A
+  # green CPU graph and a 200 on every endpoint are both perfectly compatible
+  # with an expired FCM key and a family that never gets woken up; this is the
+  # one thing that notices, and it notices inside one interval.
+  canary:
+    build: *go-build
+    image: kavach/backend:local
+    container_name: kavach-canary
+    entrypoint: ["/usr/local/bin/canary"]
+    <<: *common
+    environment:
+      <<: *common-env
+      KAVACH_CANARY_METRICS_ADDR: ":9090"
+      KAVACH_API_BASE: http://control-plane:8080
+      KAVACH_CANARY_INTERVAL: "${KAVACH_CANARY_INTERVAL:-15m}"
+      # Device that plays the responder in the synthetic incident. Leave unset to
+      # let the canary pick the family's first enrolled device.
+      KAVACH_CANARY_DEVICE_ID: "${KAVACH_CANARY_DEVICE_ID:-}"
+      # P0 page webhook (ntfy topic, Telegram bot, PagerDuty events URL). Unset
+      # means failures are logged and exposed on /metrics but page nobody, which
+      # is the correct default for a laptop and the wrong one for production.
+      KAVACH_PAGE_URL: "${KAVACH_PAGE_URL:-}"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    ports:
+      - "9090:9090"
+    healthcheck:
+      # The canary probes once immediately at boot, so /healthz turns green in
+      # seconds — but it reports 503 whenever the last success is older than
+      # 3× the interval, which is exactly the signal that matters. Do not paper
+      # over a red canary by loosening this.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:9090/healthz"]
+      interval: 60s
+      timeout: 5s
+      retries: 2
+      start_period: 90s
+
+volumes:
+  # The file store, the WALs and the bus. Named rather than a bind mount so an
+  # incident log survives `docker compose down` — an append-only log that a
+  # container teardown can erase is not an append-only log (§11.2). Wipe it
+  # deliberately with `docker compose down -v`.
+  kavach-store:
+    name: kavach-store

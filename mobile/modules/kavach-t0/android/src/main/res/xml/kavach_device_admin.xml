@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ADR-015 / PRD §5.3.
+
+  ★ <uses-policies> is deliberately EMPTY. ★
+
+  None of the powers Kavach actually needs — user restrictions, permission grant
+  policy, uninstall blocking, Factory Reset Protection — come from this file.
+  They come from being Device Owner. What this file *would* grant, if we listed
+  the usual boilerplate, is <wipe-data> and <reset-password>: the ability to
+  erase a family's phone and to change the lock screen credential.
+
+  A safety app that can wipe the device it is protecting is a hostage situation,
+  not a safety app (P-006). If a future feature genuinely needs one of these
+  policies, add exactly that one, and nothing else, in the same commit as the
+  guardian-facing consent screen that explains it.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android"
+    android:visible="false">
+    <uses-policies />
+</device-admin>

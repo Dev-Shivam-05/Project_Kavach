@@ -1,0 +1,65 @@
+{
+  "modules": [
+    {
+      "source": "src/use-maybe.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "graphql/tsutils/Maybe",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": ["npm-no-pkg", "import"],
+          "resolved": "node_modules/@types/graphql/tsutils/Maybe.d.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "license": "MIT",
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "node_modules/@types/graphql/tsutils/Maybe.d.ts",
+      "dependencies": [],
+      "dependents": ["src/use-maybe.ts"],
+      "orphan": false,
+      "valid": true
+    }
+  ],
+  "summary": {
+    "violations": [],
+    "error": 0,
+    "warn": 0,
+    "info": 0,
+    "ignore": 0,
+    "totalCruised": 2,
+    "totalDependenciesCruised": 1,
+    "optionsUsed": {
+      "baseDir": "/test/main/__mocks__/type-only-module-references",
+      "combinedDependencies": false,
+      "detectJSDocImports": false,
+      "detectProcessBuiltinModuleCalls": false,
+      "exoticRequireStrings": [],
+      "externalModuleResolutionStrategy": "node_modules",
+      "metrics": false,
+      "moduleSystems": ["es6", "cjs", "tsd", "amd"],
+      "preserveSymlinks": false,
+      "skipAnalysisNotInRules": false,
+      "tsPreCompilationDeps": true,
+      "args": "src"
+    },
+    "environment": {
+      "version": "481",
+      "nodeVersionSupported": "^42",
+      "nodeVersionFound": "42.1.2",
+      "osVersionFound": "riscv pinecil@1.2.3",
+      "transpilersFound": [],
+      "extensionsFound": []
+    }
+  }
+}

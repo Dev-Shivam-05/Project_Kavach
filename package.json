@@ -1,0 +1,14 @@
+{
+  "name": "kavach-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Project Kavach — family safety platform. Root workspace holding shared spec + codegen tooling.",
+  "type": "module",
+  "scripts": {
+    "gen": "node tools/smgen.mjs",
+    "gen:check": "node tools/smgen.mjs --check"
+  },
+  "devDependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

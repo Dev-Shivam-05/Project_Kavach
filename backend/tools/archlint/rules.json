@@ -1,0 +1,66 @@
+{
+  "module": "github.com/kavach/backend",
+  "kernel": {
+    "packages": [
+      "internal/bus",
+      "internal/envelope",
+      "internal/incident",
+      "internal/logx",
+      "internal/store",
+      "internal/wal"
+    ],
+    "why": "The kernel is what sos-ingest is allowed to carry, so nothing here may grow a dependency on a control-plane module. Every other package under internal/ is a control-plane module by default, which is what fences a package added tomorrow before anyone remembers this file exists."
+  },
+  "rules": [
+    {
+      "id": "sos-ingest-imports",
+      "kind": "allow_only",
+      "cite": "ADR-002, §2.5.1",
+      "from": "cmd/sos-ingest",
+      "allow": [
+        "internal/envelope",
+        "internal/wal",
+        "internal/bus",
+        "internal/store",
+        "internal/logx",
+        "internal/incident"
+      ],
+      "why": "sos-ingest is a separate binary so a bad control-plane deploy cannot take SOS with it. An import reaching into control-plane code rebuilds that coupling without changing anything observable: the binary still starts, still answers in under 50 ms, and now ships whenever the control plane does. The list is also the ≤5-direct-dependency half of the §2.5.1 budget."
+    },
+    {
+      "id": "no-internal-to-cmd",
+      "kind": "deny",
+      "cite": "I-12, §7.3",
+      "from": "internal/**",
+      "to": "cmd/**",
+      "why": "A library importing a binary inverts the dependency and drags main's flags, signal handling and process lifetime into every consumer. It also makes the binary untestable in isolation, which is the property sos-ingest's own pipeline depends on."
+    },
+    {
+      "id": "kernel-stays-below",
+      "kind": "deny",
+      "cite": "ADR-002, §2.5.3",
+      "from": "@kernel",
+      "to": "@module",
+      "why": "The kernel is shared with sos-ingest. One kernel package importing a control-plane module drags the whole control plane into the sacred binary through the back door, and the allow_only rule above would still pass because the offending import is not written in cmd/sos-ingest."
+    },
+    {
+      "id": "module-isolation",
+      "kind": "isolate",
+      "cite": "I-12, §2.5.3",
+      "set": "@module",
+      "allow_edges": [
+        {
+          "from": "internal/escalation",
+          "to": "internal/notify",
+          "why": "escalation declares the Fanouter interface itself and *notify.Notifier satisfies it — the consumer-defined-interface pattern §2.5.3 asks for. The import carries only the Step/Channel contract types the ladder names."
+        },
+        {
+          "from": "internal/consent",
+          "to": "internal/notify",
+          "why": "The surfacing job publishes an access-log disclosure onto the bus, and notify owns the Frame/Priority contract. consent calls no notify behaviour."
+        }
+      ],
+      "why": "One control-plane module may not import another; vault importing journey is the canonical example. This is what lets a module be extracted into its own binary in 2029 without a rewrite. Cross-module calls go through a consumer-defined interface or a bus event, and every exception is listed here with its reason."
+    }
+  ]
+}

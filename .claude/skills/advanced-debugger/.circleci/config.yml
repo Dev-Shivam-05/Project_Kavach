@@ -1,0 +1,513 @@
+---
+# Reactotron CircleCI Config
+
+version: 2.1
+
+# used to force publish to ir-docs
+parameters:
+  force-publish-docs:
+    type: boolean
+    default: false
+
+# Anchors define reusable sections of YAML
+# See: https://support.atlassian.com/bitbucket-cloud/docs/yaml-anchors/
+anchors:
+  ### Executors
+  node_executor: &node_executor
+    name: node/default
+    resource_class: large
+  # Default Settings
+  defaults: &defaults
+    working_directory: ~/repo
+  # Branch names used to trigger releases
+  release_branch_names: &release_branch_names
+    - master
+    - beta
+    - alpha
+  # All branches
+  release_branch_filter: &release_branch_filter
+    ignore: /.*/
+  # Filter to identify tags of releases
+  release_app_filter: &release_app_filter
+    - /^reactotron-app@.*/
+  # Shared ir-docs config
+  ir_docs_config: &ir_docs_config
+    description: >-
+      Reactotron - A desktop app for inspecting your React JS and React Native projects.
+    git_email: ci@infinite.red
+    git_username: Infinite Red
+    label: Reactotron
+    project_name: reactotron
+    source_docs_dir: docs
+    source_repo_directory: source
+    target_docs_dir: docs
+    target_repo: git@github.com:infinitered/ir-docs.git
+    target_repo_directory: ir-docs
+
+orbs:
+  node: circleci/node@5.2.0
+  publish-docs: infinitered/publish-docs@0.5
+
+commands:
+  install-packages:
+    description: Install and cache npm packages
+    parameters:
+      cache-key:
+        description: Key to bust install package cache
+        type: string
+        default: "cache-key-1681340799350"
+    steps:
+      - restore_cache:
+          name: Restore yarn package cache
+          keys:
+            - node-deps-<<parameters.cache-key>>-{{ arch }}-{{ checksum "yarn.lock" }}
+      - restore_cache:
+          name: Restore apps/reactotron-app/dist/
+          keys:
+            - apps/reactotron-app/dist/-<<parameters.cache-key>>-{{ arch }}-{{ checksum "apps/reactotron-app/package.json" }}
+      - restore_cache:
+          name: Restoring lib/reactotron-apisauce/dist/
+          keys:
+            - lib/reactotron-apisauce/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-apisauce/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-core-client/dist/
+          keys:
+            - lib/reactotron-core-client/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-core-client/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-core-contract/dist/
+          keys:
+            - lib/reactotron-core-contract/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-core-contract/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-core-server/dist/
+          keys:
+            - lib/reactotron-core-server/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-core-server/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-core-ui/dist/
+          keys:
+            - lib/reactotron-core-ui/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-core-ui/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-mst/dist/
+          keys:
+            - lib/reactotron-mst/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-mst/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-react-js/dist/
+          keys:
+            - lib/reactotron-react-js/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-react-js/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-react-native/dist/
+          keys:
+            - lib/reactotron-react-native/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-react-native/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-redux/dist/
+          keys:
+            - lib/reactotron-redux/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-redux/package.json" }}
+      - restore_cache:
+          name: Restore lib/reactotron-react-native-mmkv/dist/
+          keys:
+            - lib/reactotron-react-native-mmkv/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-react-native-mmkv/package.json" }}
+      - restore_cache:
+          name: Restore lib/eslint-plugin-reactotron/dist/
+          keys:
+            - lib/eslint-plugin-reactotron/dist/-<<parameters.cache-key>>-{{ checksum "lib/eslint-plugin-reactotron/package.json" }}
+      - run:
+          name: Install packages
+          command: yarn install --immutable
+      - run:
+          name: Build workspace packages
+          command: |
+            if [ "$SKIP_LIB_BUILD" != "1" ]; then
+              yarn build
+            else
+              echo "Skipping workspace build (SKIP_LIB_BUILD=1)"
+            fi
+      - save_cache:
+          paths:
+            - node_modules/
+            - .yarn/cache
+            - .yarn/install-state.gz
+          key: node-deps-<<parameters.cache-key>>-{{ arch }}-{{ checksum "yarn.lock" }}
+      - save_cache:
+          name: Saving lib/reactotron-app/dist/
+          paths:
+            - apps/reactotron-app/dist/
+          key: apps/reactotron-app/dist/-<<parameters.cache-key>>-{{ arch }}-{{ checksum "apps/reactotron-app/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-apisauce/dist/
+          paths:
+            - lib/reactotron-apisauce/dist/
+          key: lib/reactotron-apisauce/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-apisauce/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-core-client/dist/
+          paths:
+            - lib/reactotron-core-client/dist/
+          key: lib/reactotron-core-client/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-core-client/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-core-contract/dist/
+          paths:
+            - lib/reactotron-core-contract/dist/
+          key: lib/reactotron-core-contract/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-core-contract/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-core-server/dist/
+          paths:
+            - lib/reactotron-core-server/dist/
+          key: lib/reactotron-core-server/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-core-server/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-core-ui/dist/
+          paths:
+            - lib/reactotron-core-ui/dist/
+          key: lib/reactotron-core-ui/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-core-ui/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-mst/dist/
+          paths:
+            - lib/reactotron-mst/dist/
+          key: lib/reactotron-mst/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-mst/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-react-native/dist/
+          paths:
+            - lib/reactotron-react-native/dist/
+          key: lib/reactotron-react-native/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-react-native/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-react-js/dist/
+          paths:
+            - lib/reactotron-react-js/dist/
+          key: lib/reactotron-react-js/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-react-js/package.json" }}
+      - save_cache:
+          name: Saving lib/reactotron-redux/dist/
+          paths:
+            - lib/reactotron-redux/dist/
+          key: lib/reactotron-redux/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-redux/package.json" }}
+      - save_cache:
+          name: Saving reactotron-react-native-mmkv/dist/
+          paths:
+            - lib/reactotron-react-native-mmkv/dist/
+          key: lib/reactotron-react-native-mmkv/dist/-<<parameters.cache-key>>-{{ checksum "lib/reactotron-react-native-mmkv/package.json" }}
+      - save_cache:
+          name: Saving eslint-plugin-reactotron/dist/
+          paths:
+            - lib/eslint-plugin-reactotron/dist/
+          key: lib/eslint-plugin-reactotron/dist/-<<parameters.cache-key>>-{{ checksum "lib/eslint-plugin-reactotron/package.json" }}
+  release-reactotron-app:
+    description: Create release build of Reactotron app, upload to workspace
+    parameters:
+      os:
+        type: string
+    steps:
+      - run:
+          name: Build release <<parameters.os>> app
+          command: yarn workspace reactotron-app build:release
+      - run:
+          name: Remove release/builder-debug.yml and default._Reactotron-x.x.x.dmg file to prevent uploading identitical files between jobs
+          command: find apps/reactotron-app/release -type f \( -name "*.yml" -or -name "*.yaml" -or -name "default.*" \) -delete
+      - persist_to_workspace:
+          root: ~/repo/apps/reactotron-app
+          paths:
+            - release/*
+
+jobs:
+  build_and_test:
+    <<: *defaults
+    executor: *node_executor
+    steps:
+      - checkout
+      - install-packages
+      - run:
+          name: Build
+          command: yarn build
+      - run:
+          name: Package Validation
+          command: yarn package:validate
+      - run:
+          name: Lint
+          command: yarn lint
+      - run:
+          name: Format Check
+          command: yarn format:check
+      - run:
+          name: Tests
+          command: yarn ci:test
+      - run:
+          name: Typecheck
+          command: yarn typecheck
+      - persist_to_workspace:
+          root: ~/repo
+          paths:
+            - lib/*/dist
+  trust_check:
+    executor: *node_executor
+    steps:
+      - run:
+          name: Check if branch is trusted
+          command: |
+            if [ -n "$CIRCLE_PR_NUMBER" ]; then
+              if [[ $CIRCLE_BRANCH == temp-ci-trusted-fork-* ]]; then
+                echo "Branch is trusted"
+                exit 0
+              else
+                echo "Branch is not trusted. Please use the trust process before merging."
+                exit 1
+              fi
+            else
+              echo "Not a PR from a fork, skipping trust check"
+              exit 0
+            fi
+
+  release_tags:
+    <<: *defaults
+    executor: *node_executor
+    steps:
+      - checkout
+      - install-packages
+      - run:
+          name: Set Git Identity
+          command: |
+            git config --global user.email "ci@infinite.red"
+            git config --global user.name "Infinite Red"
+            git remote set-url origin https://$GITHUB_TOKEN@github.com/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME.git
+      - run:
+          name: Create git tags and commits for releases
+          command: yarn release:tags
+      - run:
+          name: Push new commits to release branch
+          command: git push origin $CIRCLE_BRANCH
+      - run:
+          name: Publish new tags from commits created on release branch
+          command: yarn release:tags:push
+
+  release_package:
+    <<: *defaults
+    executor: *node_executor
+    steps:
+      - checkout
+      - install-packages
+      - run:
+          name: Mint npm OIDC token
+          command: |
+            NPM_ID_TOKEN=$(circleci run oidc get --claims '{"aud":"npm:registry.npmjs.org"}')
+            echo "export NPM_ID_TOKEN=$NPM_ID_TOKEN" >> $BASH_ENV
+      - run:
+          name: Release to npm and github
+          command: yarn release:artifacts $CIRCLE_TAG
+
+  build_app_windows:
+    <<: *defaults
+    docker:
+      - image: electronuserland/builder:20-wine-07.24
+    resource_class: large
+    environment:
+      BUILD_TARGET: windows
+      SKIP_LIB_BUILD: "1"
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/repo
+      - install-packages
+      - release-reactotron-app:
+          os: Windows
+
+  build_app_linux:
+    <<: *defaults
+    executor: *node_executor
+    environment:
+      BUILD_TARGET: linux
+    steps:
+      - checkout
+      - install-packages
+      - run:
+          name: Update apt-get
+          command: sudo apt update
+      - run:
+          name: Install dependencies
+          command: sudo apt-get install --no-install-recommends -y libopenjp2-tools rpm
+      - release-reactotron-app:
+          os: Linux
+
+  build_app_macos:
+    <<: *defaults
+    macos:
+      xcode: "16.4.0"
+      resource_class: macos.m1.medium.gen1
+    environment:
+      BUILD_TARGET: macos
+    steps:
+      - checkout
+      - node/install:
+          node-version: "22"
+      - install-packages
+      - run:
+          name: Decode Certificates
+          command: echo "$ReactotronCerts" | base64 --decode > ~/repo/apps/reactotron-app/Certificates.p12
+      - run:
+          name: Install Bundler
+          command: gem install bundler
+      - run:
+          name: Install Gems
+          command: |
+            cd apps/reactotron-app
+            bundle install
+      - run:
+          name: Install Cert
+          command: |
+            cd apps/reactotron-app
+            bundle exec fastlane setup
+      - release-reactotron-app:
+          os: MacOS
+
+  release_app:
+    <<: *defaults
+    executor: *node_executor
+    steps:
+      - checkout
+      - install-packages
+      - attach_workspace:
+          at: ~/repo/apps/reactotron-app
+      - run:
+          name: Create git tags and commits for releases
+          command: yarn workspace reactotron-app release:artifacts $CIRCLE_TAG
+
+workflows:
+  pull_request: # prevents the workflow from running when `force-publish-docs` is true
+    when:
+      and:
+        - not: << pipeline.parameters.force-publish-docs >>
+        - true # Placeholder for correct YAML structure
+    jobs:
+      - trust_check:
+          filters:
+            branches:
+              ignore: *release_branch_names
+      - build_and_test:
+          requires:
+            - trust_check
+          filters:
+            branches:
+              ignore: *release_branch_names
+      - publish-docs/build_docs:
+          requires:
+            - trust_check
+          <<: *ir_docs_config
+          filters:
+            branches:
+              ignore: *release_branch_names
+      # Optional build jobs for testing - require manual approval
+      # - hold_for_app_builds:
+      #     type: approval
+      #     requires:
+      #       - build_and_test
+      #     filters:
+      #       branches:
+      #         ignore: *release_branch_names
+      # - build_app_windows:
+      #     context:
+      #       - reactotron-npm-context
+      #     requires:
+      #       - hold_for_app_builds
+      #     filters:
+      #       branches:
+      #         ignore: *release_branch_names
+      # - build_app_macos:
+      #     context:
+      #       - ReactotronCerts
+      #       - reactotron-npm-context
+      #     requires:
+      #       - hold_for_app_builds
+      #     filters:
+      #       branches:
+      #         ignore: *release_branch_names
+      # - build_app_linux:
+      #     context:
+      #       - reactotron-npm-context
+      #     requires:
+      #       - hold_for_app_builds
+      #     filters:
+      #       branches:
+      #         ignore: *release_branch_names
+
+  # Allows for manual publishing of docs independent of deployment
+  # Use the 'trigger pipeline' button in circle ci and set 'force-publish-docs' to 'true'
+  force_publish_docs:
+    when: << pipeline.parameters.force-publish-docs >>
+    jobs:
+      - publish-docs/publish_docs:
+          <<: *ir_docs_config
+
+  release: # prevents the workflow from running when `force-publish-docs` is true
+    when:
+      and:
+        - not: << pipeline.parameters.force-publish-docs >>
+        - true # Placeholder for correct YAML structure
+    jobs:
+      - build_and_test:
+          filters:
+            branches:
+              only: *release_branch_names
+            tags:
+              only: *release_app_filter
+      - release_tags:
+          context:
+            - reactotron-npm-context
+          filters:
+            branches:
+              only: *release_branch_names
+          requires:
+            - build_and_test
+      - publish-docs/build_docs:
+          <<: *ir_docs_config
+          filters:
+            branches:
+              only:
+                - beta
+                - alpha
+      - publish-docs/publish_docs:
+          <<: *ir_docs_config
+          filters:
+            branches:
+              only:
+                - master
+      - release_package:
+          context:
+            - reactotron-npm-context
+          filters:
+            branches: *release_branch_filter
+            tags:
+              only:
+                - /^(?!reactotron-app)(reactotron-.*|eslint-plugin-reactotron)@.*/ # matches 'reactotron-core-ui@2.0.1', 'eslint-plugin-reactotron@0.1.0' but not 'reactotron-app@3.0.0'
+      - build_app_windows:
+          context:
+            - reactotron-npm-context
+          filters:
+            branches: *release_branch_filter
+            tags:
+              only: *release_app_filter
+          requires:
+            - build_and_test
+      - build_app_macos:
+          context:
+            - ReactotronCerts
+            - reactotron-npm-context
+          filters:
+            branches: *release_branch_filter
+            tags:
+              only: *release_app_filter
+          requires:
+            - build_and_test
+      - build_app_linux:
+          context:
+            - reactotron-npm-context
+          filters:
+            branches: *release_branch_filter
+            tags:
+              only: *release_app_filter
+          requires:
+            - build_and_test
+      - release_app:
+          context:
+            - reactotron-npm-context
+          filters:
+            branches: *release_branch_filter
+            tags:
+              only: *release_app_filter
+          requires:
+            - build_app_windows
+            - build_app_macos
+            - build_app_linux
+# VS Code Extension Version: 1.5.1

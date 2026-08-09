@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+package kavach.v1;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// KAVACH — THE CRITICAL-PATH WIRE CONTRACT
+//
+// What ships today is canonical JSON inside a fixed-size padded envelope:
+//   mobile/src/t0/envelope.ts                    builds and signs it
+//   backend/internal/envelope/envelope.go        parses and verifies it
+//   backend/internal/envelope/crosslang_test.go  proves the two agree byte for byte
+//
+// This file describes THAT message and nothing else. Names, declaration order and
+// semantics come from those three files, so a client generated from here talks to
+// the ingest node that is running.
+//
+// ── 1. DECLARATION ORDER IS THE CANONICALISATION ORDER ───────────────────────
+// The Ed25519 signature covers the exact JSON bytes. Both implementations emit
+// keys in the order below (KEY_ORDER in envelope.ts, the call sequence in
+// Canonical()). Reordering these lines does not change the protobuf encoding — it
+// changes what a JSON emitter written from this file produces, and then every
+// signature fails. Ingest fails OPEN by ADR-018, so the symptom is 100% of real
+// emergencies silently flagged UNVERIFIED, with no error and no alert.
+//
+// ── 2. FIELD NUMBERS ARE FROZEN AT §2.9.1, NOT RENUMBERED TO MATCH ORDER ─────
+// Numbers 1–16 are the ones §2.9.1 assigned. Fields the shipped envelope has and
+// that sketch lacked (v, member_id) take new numbers, additively.
+// tools/protolint.mjs enforces this against proto/.incident.lock.json: P-060 —
+// grandma will not update — so a number that ever meant one thing means it
+// forever, and an old client stays readable.
+//
+// ── 3. JSON MAPPING ──────────────────────────────────────────────────────────
+// The shipped encoding is proto3 canonical JSON (lowerCamelCase keys, `bytes` as
+// base64, enum-valued strings) with two departures the signature depends on:
+//   · client_ts_ms is a JSON NUMBER. Proto3 JSON renders 64-bit integers as
+//     strings; the shipped envelope does not, and the shipped bytes are what is
+//     signed.
+//   · pad is a run of ASCII '.', not base64. See IncidentOpen.pad.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// IncidentOpen is the body of the SOS. It is the value of SignedEnvelope.body,
+// rendered as canonical JSON and padded to exactly 1024 bytes.
+//
+// P-007: the ingest endpoint takes NO bearer token. An expiring access token
+// returning 401 on the SOS path is a preventable bug that has killed people. The
+// only credential is the Ed25519 signature over these bytes, made with a
+// hardware-backed key that is deliberately not biometric-gated — an unconscious
+// person cannot present a fingerprint.
+message IncidentOpen {
+  // Envelope schema version, currently 1. Not the API version: /v1 is frozen and
+  // additive-only (§8.4), so this moves only if the canonical form itself does,
+  // which would invalidate every signature in flight.
+  uint32 v = 17;
+
+  // Client-generated UUIDv7, as text with dashes. Client-generated is what makes
+  // the endpoint idempotent: fire it over five transports, the server keeps one
+  // incident. §2.9.1 typed this `bytes`; the wire carries the text form and the
+  // dedupe key is that text.
+  string incident_id = 1;
+  string family_id = 2;
+  string device_id = 3;
+
+  // The subject. §2.9.1 resolved this server-side from device_id; the envelope
+  // carries it so an SMS-synthesised incident and an HTTP one name the same
+  // person without a device lookup the ingest node is not allowed to do (ADR-002).
+  string member_id = 18;
+
+  // Device wall clock, epoch ms. Ordering is decided by hlc, never by this:
+  // device clocks drift and lie (P-052).
+  uint64 client_ts_ms = 4;
+
+  // Hybrid logical clock, 24 lowercase hex characters = 12 bytes:
+  // 48-bit physical ‖ 16-bit logical ‖ 48-bit node. Hex rather than the raw bytes
+  // of §2.9.1 because (incident_id, hlc) is the cross-transport dedupe key
+  // (P-053) and it is compared in text form; re-encoding it forks the key and one
+  // emergency becomes two.
+  string hlc = 5;
+
+  // One of the Trigger names below, as a string — NOT the enum. A proto enum
+  // decoder rejects a name it does not know, and rejecting is dropping an
+  // emergency. envelope.go keeps the raw string; an unknown trigger arrives with
+  // the wrong label, which is survivable, instead of not arriving.
+  string trigger = 6;
+
+  // 0–100, rounded on the device.
+  uint32 confidence_pct = 7;
+
+  // 0–4, opaque integer. The server does not learn WHY the risk is elevated.
+  uint32 risk_context = 8;
+
+  // ★ F-01 — THE `optional` KEYWORD IS THE FIX, NOT DECORATION ★
+  // Plain proto3 omits a `false` bool from the wire entirely, so a duress
+  // envelope would be strictly larger before padding. Threat T4 is an attacker
+  // with physical access watching the network for exactly that size delta, and
+  // the PRD's "ALWAYS present, ALWAYS same wire size" claim was false as written.
+  // `optional` gives explicit field presence (protobuf ≥ 3.15): the field is
+  // emitted whenever it is set, including when set to false. The JSON form
+  // serialises both values unconditionally for the same reason.
+  optional bool duress = 12;
+
+  // Drills never enter the False Positive Ledger, NFR-008 accounting, or
+  // active_incident_v (F-02/F-03).
+  bool is_drill = 14;
+
+  // The escalation policy the DEVICE used. The server escalates against the same
+  // version or the ladder disagrees with what the person was shown.
+  uint32 policy_version = 13;
+
+  // ≈1 km cell, "c7:<lat.2dp>:<lon.2dp>". Server-readable, routing only, and
+  // deliberately too coarse to identify a home — the ONLY plaintext location the
+  // server is allowed to hold (§10.2). §2.9.1 called this coarse_h3_r7; the
+  // implemented value is the c7 form that core/ids.ts and envelope.go both emit.
+  string coarse_cell = 10;
+
+  uint32 battery_pct = 11;
+
+  // Class A ciphertext: scheme byte ‖ 24-byte nonce ‖ XChaCha20-Poly1305 output,
+  // base64 in the JSON form. Precise location, vitals and medical notes live in
+  // here. The server routes it and can never read it (§2.4).
+  // Empty on the minimal fallback envelope (KV-1004).
+  bytes sealed_payload = 9;
+
+  // Bitfield, values from Flag below.
+  uint32 flags = 15;
+
+  // ★ PAD TO A FIXED SIZE, AND FAIL CLOSED ★
+  //
+  //   1. set pad = "" and serialise
+  //   2. need = 1024 − byte length          (FIXED_ENVELOPE_SIZE / FixedEnvelopeSize;
+  //                                          1024, not the 512 §2.9.1 assumed —
+  //                                          the JSON form plus a sealed payload
+  //                                          does not fit in 512)
+  //   3. need < 0 → REFUSE. Drop sealed_payload and retry minimal (KV-1004).
+  //      Never emit a shorter or a longer envelope.
+  //   4. pad = '.' × need, re-serialise, assert the length is exactly 1024, and
+  //      refuse to send if it is not.
+  //
+  // Step 3 and step 4 are the fail-closed points. A silently mis-padded envelope
+  // leaks the duress bit to a network observer, and a leak is worse than falling
+  // back to a transport that does not carry the flag at all. The SERVER is the
+  // mirror image: it flags a wrong size and accepts anyway (ADR-018). The two
+  // postures are asymmetric on purpose.
+  //
+  // §2.9.1 sketched this as `bytes padding = 16`. The number is kept; the name
+  // and type follow what is implemented. `bytes` maps to base64 in proto3 JSON,
+  // and base64 expands 3 bytes to 4, which breaks the byte arithmetic the whole
+  // fixed size depends on. '.' is one byte in UTF-8 and needs no JSON escaping,
+  // so the count is exact.
+  string pad = 16;
+}
+
+// Trigger enumerates the permitted values of IncidentOpen.trigger. It is the
+// value list, not the field's type — see the comment on that field.
+enum Trigger {
+  TRIGGER_UNSPECIFIED = 0;
+  MANUAL = 1;
+  FALL = 2;
+  CRASH = 3;
+  NO_MOTION = 4;
+  DEADMAN = 5;
+  GEOFENCE = 6;
+  SENSOR_HOME = 7;
+  DEVICE_SILENCED = 8;
+  BLE_FOB = 9;
+  VOICE_PHRASE = 10;
+  RELAY = 11;
+  DRILL = 12;
+}
+
+// Flag bits for IncidentOpen.flags. Same positions as FLAG_* in envelope.ts and
+// envelope.go.
+enum Flag {
+  FLAG_UNSPECIFIED = 0;
+  // Signature did not verify. The incident is accepted anyway (ADR-018) and this
+  // bit is how the family is told the difference.
+  FLAG_UNVERIFIED = 1;
+  // Arrived via a family peer's BLE relay rather than from the subject's device.
+  FLAG_RELAY = 2;
+  // Synthesised from a K1 SMS.
+  FLAG_SMS_ORIGIN = 4;
+  // Unverified opens from one family exceeded the flood window (F-04). Bounds the
+  // cost of failing open without ever refusing an SOS.
+  FLAG_UNVERIFIED_FLOOD = 8;
+}
+
+// SignedEnvelope is the POST body. body is the canonical JSON of IncidentOpen —
+// the exact received bytes, never re-serialised before verification, because
+// re-serialising is how a verifier ends up checking a signature over bytes the
+// device never produced.
+message SignedEnvelope {
+  string body = 1;
+  // Base64 Ed25519 over the raw bytes of body.
+  string signature = 2;
+  // Duplicated out of body so the ingest node can pick a verifying key and a
+  // route without parsing a body it may not trust yet.
+  string device_id = 3;
+  string incident_id = 4;
+}
+
+// IncidentAck is the response. It is neither signed nor padded: it carries no
+// duress bit, so the constant-size rule does not apply to it.
+message IncidentAck {
+  string incident_id = 1;
+  uint64 server_ts_ms = 2;
+  // False means accepted-but-unverified, never rejected (KV-1002: the client
+  // retries with FLAG_UNVERIFIED rather than blocking the SOS).
+  bool verified = 3;
+  // Fields 4–7 are additive over §2.9.1 and match the ack that sos-ingest emits.
+  uint32 flags = 4;
+  // KV-1003: a duplicate is a SUCCESS. The client treats it as 200.
+  bool duplicate = 5;
+  // Set when an unverified flood was folded into the window's first incident.
+  string coalesced_into = 6;
+  // KV-1001 … KV-2003.
+  string code = 7;
+}

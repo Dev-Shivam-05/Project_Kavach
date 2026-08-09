@@ -1,0 +1,19 @@
+name: 'CodeQL config for javascript'
+
+paths:
+  - bin/
+  - src/
+  - tes
+  - tools/
+  - types/
+paths-ignore:
+  - '**/*.schema.mjs'
+  - '**/*.validate.mjs'
+  - 'test/integration/**'
+  - 'test/*/__fixtures__/**'
+  - 'test/*/*/__fixtures__/**'
+  - 'test/*/*/*/__fixtures__/**'
+  - 'test/*/__mocks__/**'
+  - 'test/*/*/__mocks__/**'
+queries:
+  - uses: security-and-quality

@@ -1,0 +1,137 @@
+# The eight day-one gates (§3.2). Each is a separate named step, so a red build
+# says which invariant broke without anyone opening a log.
+#
+# Every gate step carries `if: ${{ !cancelled() }}` deliberately: a gate failing
+# must not hide the state of the other seven. These are properties, not a
+# pipeline — knowing that three of them are red is worth more than knowing the
+# first one is.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: eight day-one gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          # The backend is stdlib-only and has no go.sum; setup-go's built-in
+          # cache keys on one and fails the step when it is missing. The module
+          # cache is still worth keeping — staticcheck's install populates it.
+          cache: false
+
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('backend/go.mod') }}
+          restore-keys: go-${{ runner.os }}-
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: npm ci
+
+      # ── Gate 1 ───────────────────────────────────────────────────────────────
+      - name: 'Gate 1a — go vet'
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        run: go vet ./...
+
+      - name: 'Gate 1b — staticcheck (SKIPPED, and said so, if it cannot be installed)'
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        # @latest rather than a pin: staticcheck releases track Go releases, and a
+        # pin here is a pin to a version that may not parse the language version
+        # we compile with. If the install fails the step reports a skip — it does
+        # not report a pass, and it does not disappear.
+        run: |
+          if ! go install honnef.co/go/tools/cmd/staticcheck@latest; then
+            echo "::warning title=Gate 1b staticcheck SKIPPED::staticcheck could not be installed, so it did NOT run. go vet (Gate 1a) still ran. Treat this gate as unverified, not as passed."
+            echo "GATE 1b: staticcheck SKIPPED — go install failed. NOT a pass."
+            exit 0
+          fi
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+      # ── Gate 2 ───────────────────────────────────────────────────────────────
+      - name: 'Gate 2 — go test -race'
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        env:
+          # -race needs cgo. ubuntu-latest defaults CGO_ENABLED=1, but a runner
+          # image that changes that default would silently turn the race detector
+          # off and the step would still pass.
+          CGO_ENABLED: '1'
+        run: go test ./... -race
+
+      # ── Gate 3 ───────────────────────────────────────────────────────────────
+      - name: 'Gate 3 — archlint: module boundaries (I-12, ADR-002)'
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        run: go run ./tools/archlint
+
+      # ── Gate 4 ───────────────────────────────────────────────────────────────
+      - name: 'Gate 4 — sos-ingest LOC budget (ADR-002, ≤1000)'
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        run: go test ./cmd/sos-ingest -run TestLOCBudget -v
+
+      # ── Gate 5 ───────────────────────────────────────────────────────────────
+      - name: 'Gate 5 — tsc --noEmit + mobile invariants (incl. I-2 ASCII SMS lint)'
+        if: ${{ !cancelled() }}
+        working-directory: mobile
+        run: |
+          npx tsc --noEmit
+          npm test
+
+      # ── Gate 6 ───────────────────────────────────────────────────────────────
+      - name: 'Gate 6 — generated state machines are not stale'
+        if: ${{ !cancelled() }}
+        run: node tools/smgen.mjs --check
+
+      # ── Gate 7 ───────────────────────────────────────────────────────────────
+      - name: 'Gate 7 — PII deny-list is intact (I-6)'
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        run: go test ./internal/logx -run 'TestDenyList|TestDevHandler|TestProdHandler' -v
+
+      # ── Gate 8 ───────────────────────────────────────────────────────────────
+      - name: 'Gate 8 — Class-A schema lint (I-3, A′ allowlist §2.4.6)'
+        if: ${{ !cancelled() }}
+        run: node tools/schema-lint.mjs
+
+      # ── Gate 9 ───────────────────────────────────────────────────────────────
+      # Not one of the eight; tools/protolint.mjs landed alongside them and a lint
+      # that never runs is the failure mode this workflow exists to end.
+      - name: 'Gate 9 — proto contract is additive-only (I-13, §8.4)'
+        if: ${{ !cancelled() }}
+        run: node tools/protolint.mjs

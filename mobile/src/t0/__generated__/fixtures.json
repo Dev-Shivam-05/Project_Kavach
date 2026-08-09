@@ -1,0 +1,405 @@
+[
+  {
+    "name": "manual panic runs the full ladder to L3",
+    "from": "IDLE",
+    "expect": "ACTIVE_L3",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CANCEL_WINDOW_EXPIRED",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "NO_ACK",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "NO_ACK",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "correct PIN cancels",
+    "from": "IDLE",
+    "expect": "FALSE_ALARM",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "PIN_CORRECT",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "duress PIN escalates silently",
+    "from": "IDLE",
+    "expect": "ACTIVE_L1_SILENT",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "PIN_DURESS",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "duress still climbs the ladder",
+    "from": "IDLE",
+    "expect": "ACTIVE_L3",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "PIN_DURESS",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "NO_ACK",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "NO_ACK",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "claim halts the ladder",
+    "from": "IDLE",
+    "expect": "OWNED",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CANCEL_WINDOW_EXPIRED",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CLAIM",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "release re-broadcasts at L2",
+    "from": "IDLE",
+    "expect": "ACTIVE_L2",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CANCEL_WINDOW_EXPIRED",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CLAIM",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "RELEASE",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "progress watchdog re-broadcasts",
+    "from": "IDLE",
+    "expect": "ACTIVE_L2",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CANCEL_WINDOW_EXPIRED",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CLAIM",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "PROGRESS_WATCHDOG",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "two-party resolution",
+    "from": "IDLE",
+    "expect": "RESOLVED",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CANCEL_WINDOW_EXPIRED",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CLAIM",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "ON_SCENE",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "TWO_PARTY_CONFIRM",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "PROBE absorbs a medium-confidence anomaly",
+    "from": "IDLE",
+    "expect": "IDLE",
+    "steps": [
+      {
+        "event": "SENSOR_ANOMALY",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CONFIDENCE",
+        "guards": [
+          "confidenceMedium",
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "USER_FINE",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "PROBE timeout escalates",
+    "from": "IDLE",
+    "expect": "PENDING",
+    "steps": [
+      {
+        "event": "SENSOR_ANOMALY",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CONFIDENCE",
+        "guards": [
+          "confidenceMedium",
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "PROBE_TIMEOUT",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "high confidence skips PROBE",
+    "from": "IDLE",
+    "expect": "PENDING",
+    "steps": [
+      {
+        "event": "SENSOR_ANOMALY",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CONFIDENCE",
+        "guards": [
+          "confidenceHigh",
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "watch lowers the anomaly threshold",
+    "from": "WATCH",
+    "expect": "SUSPECT",
+    "steps": [
+      {
+        "event": "SENSOR_ANOMALY",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "motion resumed auto-resolves a suspect",
+    "from": "IDLE",
+    "expect": "IDLE",
+    "steps": [
+      {
+        "event": "SENSOR_ANOMALY",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "MOTION_RESUMED",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "auto-quiesce ends a forgotten incident",
+    "from": "IDLE",
+    "expect": "DORMANT",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CANCEL_WINDOW_EXPIRED",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "AUTO_QUIESCE",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "reescalate jumps the ladder",
+    "from": "IDLE",
+    "expect": "ACTIVE_L2",
+    "steps": [
+      {
+        "event": "MANUAL_TRIGGER",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CANCEL_WINDOW_EXPIRED",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "REESCALATE",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "unknown events are ignored, never crash",
+    "from": "IDLE",
+    "expect": "IDLE",
+    "steps": [
+      {
+        "event": "NO_ACK",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "CLAIM",
+        "guards": [
+          "lowerThreshold"
+        ]
+      },
+      {
+        "event": "RELEASE",
+        "guards": [
+          "lowerThreshold"
+        ]
+      }
+    ]
+  }
+]

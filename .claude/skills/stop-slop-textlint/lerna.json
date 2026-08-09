@@ -1,0 +1,13 @@
+{
+  "version": "15.8.0",
+  "npmClient": "pnpm",
+  "packages": [
+    "packages/*",
+    "packages/@textlint/*"
+  ],
+  "includeMergedTags": true,
+  "ignoreChanges": [
+    "**/test/**",
+    "**/*.md"
+  ]
+}

@@ -1,0 +1,32 @@
+# ── Dependencies / build output ───────────────────────────────────────────────
+node_modules/
+.expo/
+dist/
+dist-check/
+bin/
+data/
+*.log
+.DS_Store
+
+# ── Generated native projects ─────────────────────────────────────────────────
+# ★ THE LEADING SLASH IS LOAD-BEARING ★
+# An unanchored `android/` also matches mobile/modules/kavach-t0/android/, which
+# is the ENTIRE Tier-0 native plane. EAS uploads the git tree, so the unanchored
+# rule silently ships an APK with no foreground service, no silent multi-SIM SMS
+# and no Direct Boot — and because the JS side uses requireOptionalNativeModule,
+# it degrades quietly instead of failing loudly. Anchor to the roots only.
+/android/
+/ios/
+/mobile/android/
+/mobile/ios/
+
+# ── Gradle output INSIDE a local module ───────────────────────────────────────
+# `mobile/modules/kavach-t0/android/` is SOURCE and must stay tracked (see above).
+# Only its build/ output is excluded — matched by directory name, never by the
+# `android/` segment, so the rule cannot creep back over the Kotlin. Kotlin's
+# generated lambda dex names also exceed the Windows path limit, so leaving these
+# untracked is a correctness issue for `git add`, not just hygiene.
+**/android/build/
+**/android/.cxx/
+**/.gradle/
+**/build/.transforms/

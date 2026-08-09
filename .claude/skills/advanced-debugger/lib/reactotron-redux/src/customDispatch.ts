@@ -1,0 +1,55 @@
+import diff from "microdiff"
+
+import { PluginConfig } from "./pluginConfig"
+
+export default function createCustomDispatch(
+  reactotron: any,
+  // eslint-disable-next-line @typescript-eslint/ban-types
+  store: { dispatch: Function; getState?: Function },
+  pluginConfig: PluginConfig
+) {
+  const exceptions = [pluginConfig.restoreActionType, ...(pluginConfig.except || [])]
+
+  return (action: any) => {
+    // start a timer
+    const elapsed = reactotron.startTimer()
+
+    // save the state before the action is dispatched to be used on "diff"
+    const oldState = store?.getState?.()
+
+    // call the original dispatch that actually does the real work
+    const result = store.dispatch(action)
+
+    // stop the timer
+    const ms = elapsed()
+
+    const unwrappedAction =
+      action.type === "PERFORM_ACTION" && action.action ? action.action : action
+
+    const isException = exceptions.some((exception) => {
+      if (typeof exception === "string") {
+        return unwrappedAction.type === exception
+      } else if (typeof exception === "function") {
+        return exception(unwrappedAction.type)
+      } else if (exception instanceof RegExp) {
+        return exception.test(unwrappedAction.type)
+      } else {
+        return false
+      }
+    })
+
+    // action not blacklisted?
+    // if matchException is true, action.type is matched with exception
+    if (!isException) {
+      // check if the app considers this important
+      let important = false
+      if (pluginConfig && typeof pluginConfig.isActionImportant === "function") {
+        important = !!pluginConfig.isActionImportant(unwrappedAction)
+      }
+      const state = store?.getState?.()
+      reactotron.reportReduxAction(unwrappedAction, ms, important, diff(oldState, state))
+    }
+
+    return result
+  }
+}

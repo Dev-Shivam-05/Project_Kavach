@@ -1,0 +1,37 @@
+// KavachT0 — the Tier-0 native plane (ADR-015).
+//
+// Autolinked because `expo-modules-autolinking` scans `<projectRoot>/modules` by
+// default; there is no package.json here on purpose — a local module must never
+// be resolvable from npm, or a stale published copy could shadow the real one.
+
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'in.example.kavach.t0'
+version = '1.0.0'
+
+expoModule {
+  // A local module is compiled from source into the app every build. Publishing
+  // it to mavenLocal would create a second, silently-stale T0 binary.
+  canBePublished false
+}
+
+android {
+  namespace "expo.modules.kavacht0"
+
+  defaultConfig {
+    // Direct Boot (`createDeviceProtectedStorageContext`), `AdvertisingSetCallback`
+    // and vector notification icons all land at API 26; the app already pins 26
+    // via expo-build-properties, so nothing here narrows the device base.
+    minSdkVersion 26
+    versionCode 1
+    versionName "1.0.0"
+  }
+
+  // No consumer ProGuard rules are needed: every T0 entry point (the service,
+  // both receivers and the DeviceAdminReceiver) is named in AndroidManifest.xml,
+  // which R8 treats as a keep root. A class the OS instantiates by name at 03:00
+  // must never depend on a hand-written -keep rule staying in sync.
+}

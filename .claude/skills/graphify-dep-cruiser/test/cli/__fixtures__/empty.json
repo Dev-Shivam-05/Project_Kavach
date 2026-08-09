@@ -1,0 +1,34 @@
+{
+  "modules": [],
+  "summary": {
+    "violations": [],
+    "error": 0,
+    "warn": 0,
+    "info": 0,
+    "ignore": 0,
+    "totalCruised": 0,
+    "totalDependenciesCruised": 0,
+    "optionsUsed": {
+      "args": "whatever",
+      "detectJSDocImports": false,
+      "detectProcessBuiltinModuleCalls": false,
+      "outputTo": "empty.json",
+      "metrics": false,
+      "moduleSystems": ["amd", "cjs", "es6"],
+      "outputType": "json",
+      "tsPreCompilationDeps": false,
+      "combinedDependencies": false,
+      "preserveSymlinks": false,
+      "skipAnalysisNotInRules": false,
+      "externalModuleResolutionStrategy": "node_modules"
+    },
+    "environment": {
+      "version": "481",
+      "nodeVersionSupported": "^42",
+      "nodeVersionFound": "42.1.2",
+      "osVersionFound": "riscv pinecil@1.2.3",
+      "transpilersFound": [],
+      "extensionsFound": []
+    }
+  }
+}

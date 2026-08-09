@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["expo.modules.kavacht0.KavachT0Module"]
+  }
+}

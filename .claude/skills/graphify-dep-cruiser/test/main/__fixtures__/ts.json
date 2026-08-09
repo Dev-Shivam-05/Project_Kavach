@@ -1,0 +1,171 @@
+{
+  "modules": [
+    {
+      "source": "test/main/__mocks__/ts/index.ts",
+      "dependencies": [
+        {
+          "module": "./javascriptThing",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "import"],
+          "resolved": "test/main/__mocks__/ts/javascriptThing.js",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "./sub",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "import"],
+          "resolved": "test/main/__mocks__/ts/sub/index.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "./sub/kaching",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "import"],
+          "resolved": "test/main/__mocks__/ts/sub/kaching.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "./sub/willBeReExported",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "export"],
+          "resolved": "test/main/__mocks__/ts/sub/willBeReExported.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "module": "path",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["core", "import"],
+          "resolved": "path",
+          "coreModule": true,
+          "followable": false,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "path",
+      "followable": false,
+      "coreModule": true,
+      "couldNotResolve": false,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": ["core", "import"],
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/ts/index.ts"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/ts/javascriptThing.js",
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/ts/index.ts"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/ts/sub/index.ts",
+      "dependencies": [
+        {
+          "module": "./willBeReExported",
+          "moduleSystem": "es6",
+          "dynamic": false,
+          "exoticallyRequired": false,
+          "dependencyTypes": ["local", "import"],
+          "resolved": "test/main/__mocks__/ts/sub/willBeReExported.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": ["test/main/__mocks__/ts/index.ts"],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/ts/sub/willBeReExported.ts",
+      "dependencies": [],
+      "dependents": [
+        "test/main/__mocks__/ts/index.ts",
+        "test/main/__mocks__/ts/sub/index.ts"
+      ],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "test/main/__mocks__/ts/sub/kaching.ts",
+      "dependencies": [],
+      "dependents": ["test/main/__mocks__/ts/index.ts"],
+      "orphan": false,
+      "valid": true
+    }
+  ],
+  "summary": {
+    "violations": [],
+    "error": 0,
+    "warn": 0,
+    "info": 0,
+    "ignore": 0,
+    "totalCruised": 6,
+    "totalDependenciesCruised": 6,
+    "optionsUsed": {
+      "baseDir": "",
+      "combinedDependencies": false,
+      "detectJSDocImports": false,
+      "detectProcessBuiltinModuleCalls": false,
+      "exoticRequireStrings": [],
+      "externalModuleResolutionStrategy": "node_modules",
+      "metrics": false,
+      "moduleSystems": ["es6", "cjs", "tsd", "amd"],
+      "preserveSymlinks": false,
+      "skipAnalysisNotInRules": false,
+      "tsPreCompilationDeps": false,
+      "args": "test/main/__mocks__/ts"
+    },
+    "environment": {
+      "version": "481",
+      "nodeVersionSupported": "^42",
+      "nodeVersionFound": "42.1.2",
+      "osVersionFound": "riscv pinecil@1.2.3",
+      "transpilersFound": [],
+      "extensionsFound": []
+    }
+  }
+}

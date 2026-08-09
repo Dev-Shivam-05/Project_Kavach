@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The persistent-notification small icon, owned by this module rather than the
+  app. A library must not reference @mipmap/ic_launcher: the app icon is an
+  adaptive icon, and passing an adaptive icon to Notification.setSmallIcon throws
+  "Bad notification: invalid small icon" on API 26+. That crash would happen
+  inside startForeground, in the :t0 process, during Direct Boot — the single
+  worst place in the codebase to take an exception.
+
+  Status bar icons are rendered as a monochrome silhouette, so only the alpha
+  channel of this path survives.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2L4,5.2v6.1c0,4.9 3.4,9.5 8,10.7c4.6,-1.2 8,-5.8 8,-10.7V5.2L12,2zM12,4.2l6,2.4v4.7c0,3.8 -2.5,7.4 -6,8.5c-3.5,-1.1 -6,-4.7 -6,-8.5V6.6L12,4.2z" />
+</vector>

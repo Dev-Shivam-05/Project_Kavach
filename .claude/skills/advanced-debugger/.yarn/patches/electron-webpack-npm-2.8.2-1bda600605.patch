@@ -1,0 +1,26 @@
+diff --git a/out/main.js b/out/main.js
+index 91a37868f883d36ccd2565eb32d1b50ef52b6266..983c1b324d34d89cb3033f09d0d3d5872963ed13 100644
+--- a/out/main.js
++++ b/out/main.js
+@@ -217,7 +217,7 @@ class WebpackConfigurator {
+     this.rules = [];
+     this.plugins = []; // js must be first - e.g. iView has two files loading-bar.js and loading-bar.vue - when we require "loading-bar", js file must be resolved and not vue
+ 
+-    this.extensions = [".js", ".json", ".node"];
++    this.extensions = [".ts", ".tsx", ".js", ".json", ".node"];
+     this._electronVersion = null;
+     this.entryFiles = [];
+ 
+diff --git a/out/targets/BaseTarget.js b/out/targets/BaseTarget.js
+index e4c6b00396be2326f03fe8d6dbe55bec55c77be3..3b485d5de154f86251b1a85514f4c25a26f36072 100644
+--- a/out/targets/BaseTarget.js
++++ b/out/targets/BaseTarget.js
+@@ -95,7 +95,7 @@ class BaseTarget {
+     }
+ 
+     rules.push({
+-      test: /\.js$/,
++      test: /\.[tj]sx?$/,
+       exclude: /(node_modules|bower_components)/,
+       use: babelLoader
+     }, {

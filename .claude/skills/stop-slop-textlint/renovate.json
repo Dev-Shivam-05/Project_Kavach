@@ -1,0 +1,3 @@
+{
+  "extends": ["github>azu/renovate-config:non-major"]
+}

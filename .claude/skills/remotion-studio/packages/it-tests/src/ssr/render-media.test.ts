@@ -1,0 +1,226 @@
+import {expect, test} from 'bun:test';
+import fs, {existsSync} from 'fs';
+import os from 'os';
+import path from 'path';
+import {
+	RenderInternals,
+	getCompositions,
+	openBrowser,
+	renderMedia,
+} from '@remotion/renderer';
+
+const exampleBuild = path.join(__dirname, '..', '..', '..', 'example', 'build');
+
+test(
+	'Render video with browser instance open',
+	async () => {
+		const puppeteerInstance = await openBrowser('chrome');
+		const compositions = await getCompositions({
+			serveUrl: exampleBuild,
+			puppeteerInstance,
+			inputProps: {},
+		});
+
+		const reactSvg = compositions.find((c) => c.id === 'react-svg');
+
+		if (!reactSvg) {
+			throw new Error('not found');
+		}
+
+		const tmpDir = os.tmpdir();
+
+		const outPath = path.join(tmpDir, 'out.mp4');
+
+		await renderMedia({
+			outputLocation: outPath,
+			codec: 'h264',
+			serveUrl: exampleBuild,
+			composition: reactSvg,
+			frameRange: [0, 2],
+			puppeteerInstance,
+			metadata: {Author: 'Lunar'},
+			logLevel: 'error',
+		});
+		await puppeteerInstance.close({silent: false});
+		expect(existsSync(outPath)).toBe(true);
+	},
+	{retry: 2},
+);
+
+test('Render video with browser instance not open', async () => {
+	const compositions = await getCompositions({
+		serveUrl: exampleBuild,
+		inputProps: {},
+	});
+
+	const reactSvg = compositions.find((c) => c.id === 'react-svg');
+
+	if (!reactSvg) {
+		throw new Error('not found');
+	}
+
+	const tmpDir = os.tmpdir();
+
+	const outPath = path.join(tmpDir, 'subdir', 'out.mp4');
+
+	await renderMedia({
+		outputLocation: outPath,
+		codec: 'h264',
+		serveUrl: exampleBuild,
+		composition: reactSvg,
+		frameRange: [0, 2],
+		metadata: {Author: 'Lunar'},
+		logLevel: 'error',
+	});
+	expect(existsSync(outPath)).toBe(true);
+});
+
+test('should fail on invalid CRF', async () => {
+	const tmpDir = os.tmpdir();
+
+	const outPath = path.join(tmpDir, 'out.mp4');
+	const browserInstance = await openBrowser('chrome');
+
+	try {
+		await renderMedia({
+			outputLocation: outPath,
+			codec: 'h264',
+			logLevel: 'error',
+			serveUrl: exampleBuild,
+			// @ts-expect-error
+			crf: 'wrong',
+			composition: {
+				durationInFrames: 10,
+				fps: 30,
+				height: 1080,
+				id: 'hitehre',
+				width: 1080,
+				defaultProps: {},
+				props: {},
+				defaultCodec: null,
+				defaultOutName: null,
+				defaultVideoImageFormat: null,
+				defaultPixelFormat: null,
+				defaultProResProfile: null,
+				defaultSampleRate: null,
+			},
+			frameRange: [0, 2],
+			puppeteerInstance: browserInstance,
+		});
+		throw new Error('render should have failed');
+	} catch (err) {
+		expect((err as Error).message).toMatch(
+			/Expected CRF to be a number, but is "wrong"/,
+		);
+	}
+
+	await browserInstance.close({silent: false});
+});
+
+test('Render video to a buffer', async () => {
+	const compositions = await getCompositions({
+		serveUrl: exampleBuild,
+		inputProps: {},
+	});
+
+	const reactSvg = compositions.find((c) => c.id === 'react-svg');
+
+	if (!reactSvg) {
+		throw new Error('not found');
+	}
+
+	const {buffer, contentType} = await renderMedia({
+		codec: 'h264',
+		serveUrl: exampleBuild,
+		composition: reactSvg,
+		frameRange: [0, 2],
+		logLevel: 'error',
+	});
+
+	expect(buffer?.length).toBeGreaterThan(2000);
+	expect(contentType).toBe('video/mp4');
+});
+
+test('Render multiple frame ranges to one video', async () => {
+	const compositions = await getCompositions({
+		serveUrl: exampleBuild,
+		inputProps: {},
+	});
+	const composition = compositions.find((c) => c.id === 'ten-frame-tester');
+	if (!composition) {
+		throw new Error('not found');
+	}
+
+	const outputLocation = path.join(os.tmpdir(), 'multiple-frame-ranges.mp4');
+	try {
+		await renderMedia({
+			codec: 'h264',
+			serveUrl: exampleBuild,
+			composition,
+			frameRange: [
+				[0, 2],
+				[6, 8],
+			],
+			outputLocation,
+			logLevel: 'error',
+		});
+
+		const probe = await RenderInternals.callFf({
+			bin: 'ffprobe',
+			args: [
+				'-v',
+				'error',
+				'-count_frames',
+				'-select_streams',
+				'v:0',
+				'-show_entries',
+				'stream=nb_read_frames',
+				'-of',
+				'default=noprint_wrappers=1:nokey=1',
+				outputLocation,
+			],
+			indent: false,
+			logLevel: 'error',
+			binariesDirectory: null,
+			cancelSignal: undefined,
+		});
+		expect(`${probe.stdout}${probe.stderr}`.trim()).toBe('6');
+	} finally {
+		await fs.promises.rm(outputLocation, {force: true});
+	}
+});
+
+test('Should fail invalid serve URL', async () => {
+	try {
+		await renderMedia({
+			codec: 'h264',
+			logLevel: 'error',
+			serveUrl:
+				'https://remotionlambda-gc1w0xbfzl.s3.eu-central-1.amazonaws.com/sites/Ignition-SessionResultStoryVideo/index.html',
+			composition: {
+				defaultProps: {},
+				durationInFrames: 10,
+				fps: 30,
+				height: 1080,
+				id: 'hitehre',
+				width: 1080,
+				props: {},
+				defaultCodec: null,
+				defaultOutName: null,
+				defaultVideoImageFormat: null,
+				defaultPixelFormat: null,
+				defaultProResProfile: null,
+				defaultSampleRate: null,
+			},
+		});
+	} catch (err) {
+		const message = (err as Error).message;
+		expect(
+			message.includes('Failed to load resource') ||
+				message.includes('Error while getting compositions'),
+		).toBe(true);
+		return;
+	}
+
+	throw new Error('should have failed');
+});

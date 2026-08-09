@@ -1,0 +1,18 @@
+{
+  "rules": {
+    "preset-jtf-style": true,
+    "max-ten": {
+      "max": 3
+    },
+    "spellcheck-tech-word": true,
+    "no-mix-dearu-desumasu": true,
+    "no-start-duplicated-conjunction": {
+      "interval": 2
+    },
+    "prh": {
+      "rulePaths": [
+        "prh.yml"
+      ]
+    }
+  }
+}

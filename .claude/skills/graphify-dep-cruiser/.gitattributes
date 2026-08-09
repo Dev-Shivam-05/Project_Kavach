@@ -1,0 +1,15 @@
+* text eol=lf
+
+*.jpg binary
+*.kra binary
+*.png binary
+*.wav binary
+*.mp3 binary
+*.ogg binary
+
+src/meta.cjs linguist-generated
+src/schema/**/*.validate.mjs linguist-generated
+src/schema/**/*.schema.mjs linguist-generated
+src/schema/**/*.json linguist-generated
+doc/** linguist-documentation
+docs/** linguist-documentation

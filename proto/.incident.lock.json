@@ -1,0 +1,196 @@
+{
+  "lockVersion": 1,
+  "source": "proto/incident.proto",
+  "messages": {
+    "IncidentAck": {
+      "fields": {
+        "incident_id": {
+          "number": 1,
+          "type": "string",
+          "label": "singular"
+        },
+        "server_ts_ms": {
+          "number": 2,
+          "type": "uint64",
+          "label": "singular"
+        },
+        "verified": {
+          "number": 3,
+          "type": "bool",
+          "label": "singular"
+        },
+        "flags": {
+          "number": 4,
+          "type": "uint32",
+          "label": "singular"
+        },
+        "duplicate": {
+          "number": 5,
+          "type": "bool",
+          "label": "singular"
+        },
+        "coalesced_into": {
+          "number": 6,
+          "type": "string",
+          "label": "singular"
+        },
+        "code": {
+          "number": 7,
+          "type": "string",
+          "label": "singular"
+        }
+      },
+      "reserved": []
+    },
+    "IncidentOpen": {
+      "fields": {
+        "incident_id": {
+          "number": 1,
+          "type": "string",
+          "label": "singular"
+        },
+        "family_id": {
+          "number": 2,
+          "type": "string",
+          "label": "singular"
+        },
+        "device_id": {
+          "number": 3,
+          "type": "string",
+          "label": "singular"
+        },
+        "client_ts_ms": {
+          "number": 4,
+          "type": "uint64",
+          "label": "singular"
+        },
+        "hlc": {
+          "number": 5,
+          "type": "string",
+          "label": "singular"
+        },
+        "trigger": {
+          "number": 6,
+          "type": "string",
+          "label": "singular"
+        },
+        "confidence_pct": {
+          "number": 7,
+          "type": "uint32",
+          "label": "singular"
+        },
+        "risk_context": {
+          "number": 8,
+          "type": "uint32",
+          "label": "singular"
+        },
+        "sealed_payload": {
+          "number": 9,
+          "type": "bytes",
+          "label": "singular"
+        },
+        "coarse_cell": {
+          "number": 10,
+          "type": "string",
+          "label": "singular"
+        },
+        "battery_pct": {
+          "number": 11,
+          "type": "uint32",
+          "label": "singular"
+        },
+        "duress": {
+          "number": 12,
+          "type": "bool",
+          "label": "optional"
+        },
+        "policy_version": {
+          "number": 13,
+          "type": "uint32",
+          "label": "singular"
+        },
+        "is_drill": {
+          "number": 14,
+          "type": "bool",
+          "label": "singular"
+        },
+        "flags": {
+          "number": 15,
+          "type": "uint32",
+          "label": "singular"
+        },
+        "pad": {
+          "number": 16,
+          "type": "string",
+          "label": "singular"
+        },
+        "v": {
+          "number": 17,
+          "type": "uint32",
+          "label": "singular"
+        },
+        "member_id": {
+          "number": 18,
+          "type": "string",
+          "label": "singular"
+        }
+      },
+      "reserved": []
+    },
+    "SignedEnvelope": {
+      "fields": {
+        "body": {
+          "number": 1,
+          "type": "string",
+          "label": "singular"
+        },
+        "signature": {
+          "number": 2,
+          "type": "string",
+          "label": "singular"
+        },
+        "device_id": {
+          "number": 3,
+          "type": "string",
+          "label": "singular"
+        },
+        "incident_id": {
+          "number": 4,
+          "type": "string",
+          "label": "singular"
+        }
+      },
+      "reserved": []
+    }
+  },
+  "enums": {
+    "Flag": {
+      "values": {
+        "FLAG_UNSPECIFIED": 0,
+        "FLAG_UNVERIFIED": 1,
+        "FLAG_RELAY": 2,
+        "FLAG_SMS_ORIGIN": 4,
+        "FLAG_UNVERIFIED_FLOOD": 8
+      },
+      "reserved": []
+    },
+    "Trigger": {
+      "values": {
+        "TRIGGER_UNSPECIFIED": 0,
+        "MANUAL": 1,
+        "FALL": 2,
+        "CRASH": 3,
+        "NO_MOTION": 4,
+        "DEADMAN": 5,
+        "GEOFENCE": 6,
+        "SENSOR_HOME": 7,
+        "DEVICE_SILENCED": 8,
+        "BLE_FOB": 9,
+        "VOICE_PHRASE": 10,
+        "RELAY": 11,
+        "DRILL": 12
+      },
+      "reserved": []
+    }
+  }
+}
