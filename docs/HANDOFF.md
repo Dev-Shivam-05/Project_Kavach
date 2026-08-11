@@ -1,9 +1,9 @@
 # HANDOFF — Kavach — Phase 1 (W10-d, CLAIM/RELEASE over push) — 2026-08-11
 
-Branch **`phase1-w10-remote-push`**, 3 new commits, **push failed — no network to github.com**
-(`Failed to connect to github.com port 443`, retried once). The commits are safe locally; the
-branch is `[ahead 3]` of `origin/phase1-w10-remote-push`. Run the push again when the network is
-back. Session W10-b's handoff is superseded by this one; its content is in commit `2a912d78`.
+Branch **`phase1-w10-remote-push`**, 4 new commits, **pushed** (`2a912d78..a74fa0d7`). The first two
+push attempts died on `Failed to connect to github.com port 443`; the third went through, so treat
+that error here as flaky network and retry rather than diagnose. Session W10-b's handoff is
+superseded by this one; its content is in commit `2a912d78`.
 
 **W10-c was not started, and that was the session's first decision.** Its entire output is Kotlin,
 this machine has no JDK and no Android SDK, and no CI gate here compiles Kotlin (D-021) — so
@@ -103,11 +103,11 @@ instead because it is the last piece of W10 that Go/TypeScript gates can actuall
 - **First command:**
 
   ```
-  git push origin phase1-w10-remote-push
+  git checkout phase1-w10-remote-push && cd mobile && npm run verify
   ```
 
-  It failed on a network error at the end of this session and nothing else is outstanding. Then:
-  `cd mobile && npm run verify`. Before writing a line of W10-c, confirm the blockers:
+  Nothing is outstanding — the branch is pushed. Before writing a line of W10-c, confirm the
+  blockers:
   `echo $env:KAVACH_FCM_CREDENTIALS` · `Test-Path mobile/google-services.json` ·
   `Select-String -Path mobile/app.json -Pattern googleServicesFile` · `java -version`.
 - **Watch out for:** **the board's next three items are all Kotlin.** W10-c, the hardware triggers
