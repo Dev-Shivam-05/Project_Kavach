@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -275,6 +276,11 @@ type Deps struct {
 	Drills DrillResolver
 	Now    func() time.Time
 	NewID  func() string
+	// Push is optional and nil is the current normal: this deployment holds no
+	// FCM credentials. Nil does NOT degrade the push leg into a modelled one —
+	// it records KV-NOPUSHCFG, because a green delivery row for a leg that does
+	// not exist is the system lying about the one property W10 establishes.
+	Push PushSender
 }
 
 type Notifier struct {
@@ -283,6 +289,7 @@ type Notifier struct {
 	log    *slog.Logger
 	budget BudgetLedger
 	drills DrillResolver
+	push   PushSender
 	now    func() time.Time
 	newID  func() string
 
@@ -311,7 +318,7 @@ func New(d Deps) (*Notifier, error) {
 	}
 	return &Notifier{
 		st: d.Store, bus: d.Bus, log: d.Log, budget: d.Budget, drills: d.Drills,
-		now: d.Now, newID: d.NewID,
+		push: d.Push, now: d.Now, newID: d.NewID,
 		rnd: rand.New(rand.NewPCG(uint64(d.Now().UnixNano()), 0x5eed)),
 	}, nil
 }
@@ -510,6 +517,22 @@ func (n *Notifier) dispatch(ctx context.Context, inc store.Incident, note store.
 			n.recordDelivery(inc, note, dev, ch, "failed", 0, "KV-AGENT-DEAD", reduced)
 			continue
 		}
+		// ★ W10 ★ Two different absences, two different rows, because they call
+		// for two different fixes and a single "push failed" would hide which.
+		// KV-NOTOKEN is one handset that never registered — the family should
+		// open the app on it. KV-NOPUSHCFG is the whole deployment holding no
+		// credentials — no phone in the family can be reached with its app
+		// closed, which is a far larger fact and belongs on the operator's desk.
+		if ch == ChannelFCM {
+			if strings.TrimSpace(dev.PushTokenFCM) == "" {
+				n.recordDelivery(inc, note, dev, ch, "failed", 0, "KV-NOTOKEN", reduced)
+				continue
+			}
+			if n.push == nil {
+				n.recordDelivery(inc, note, dev, ch, "failed", 0, "KV-NOPUSHCFG", reduced)
+				continue
+			}
+		}
 		n.startLeg(ctx, inc, note, dev, ch, p, reduced)
 	}
 	return suppressed
@@ -521,6 +544,13 @@ func (n *Notifier) dispatch(ctx context.Context, inc store.Incident, note store.
 func (n *Notifier) startLeg(ctx context.Context, inc store.Incident, note store.Notification, dev store.Device, ch Channel, p channelProfile, reduced bool) {
 	if ch == ChannelWS {
 		n.recordDelivery(inc, note, dev, ch, "delivered", 0, "", reduced)
+		return
+	}
+	// ★ W10 — the FCM leg is no longer modelled. ★ Its latency is now measured
+	// off a real request instead of drawn from profiles[ChannelFCM], so the t3
+	// clock stops averaging in a number the process invented about itself.
+	if ch == ChannelFCM {
+		n.sendPush(ctx, inc, note, dev, reduced)
 		return
 	}
 	delay := n.jitter(p.minLatency, p.maxLatency)
@@ -557,6 +587,78 @@ func (n *Notifier) startLeg(ctx context.Context, inc store.Incident, note store.
 		}
 		if err := n.bus.Publish(subject, receipt.Encode()); err != nil {
 			n.log.Warn("receipt_publish_failed", "incident", inc.ID, "channel", ch, "err", err)
+		}
+	}()
+}
+
+// pushPayload is the entire contract with the lock screen (F-21): five Class B/C
+// strings, composed here and rendered into human language on the DEVICE. The
+// duress bit is deliberately absent (F-01) and fcm.go asserts that independently
+// — this function being correct is not allowed to be the only thing standing
+// between an attacker and the one flag the whole duress design depends on.
+func pushPayload(inc store.Incident, tier int, subjectShortName string) map[string]string {
+	return map[string]string{
+		"incidentId":       inc.ID,
+		"familyId":         inc.FamilyID,
+		"trigger":          inc.Trigger,
+		"tier":             strconv.Itoa(tier),
+		"subjectShortName": subjectShortName,
+	}
+}
+
+// sendPush performs the real FCM send off the fan-out goroutine.
+//
+// The "sent" row is written BEFORE the request, synchronously, so that a process
+// killed mid-fan-out leaves evidence that the attempt was owed. Without it, a
+// crash between the decision to notify and the receipt is indistinguishable from
+// never having tried — and an after-action report that cannot tell those apart
+// cannot answer the only question it exists to answer.
+func (n *Notifier) sendPush(ctx context.Context, inc store.Incident, note store.Notification, dev store.Device, reduced bool) {
+	payload := pushPayload(inc, note.Tier, n.shortNames(inc.FamilyID)[inc.SubjectMemberID])
+	token := dev.PushTokenFCM
+	started := n.now()
+	n.recordDelivery(inc, note, dev, ChannelFCM, "sent", 0, "", reduced)
+
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		err := n.push.Send(ctx, token, payload)
+		latency := n.now().Sub(started).Milliseconds()
+
+		if err != nil {
+			code := "KV-PUSHFAIL"
+			if errors.Is(err, ErrPushUnregistered) {
+				// T-218. The handset is gone: uninstalled, wiped, or the token
+				// rolled. This is the one push failure that will not fix itself,
+				// and the delivery matrix is where the family sees it.
+				code = "KV-UNREGISTERED"
+				n.log.Warn("push_token_unregistered",
+					"incident", inc.ID, "device", dev.ID, "member", dev.MemberID)
+			} else {
+				n.log.Warn("push_send_failed", "incident", inc.ID, "device", dev.ID, "err", err)
+			}
+			n.recordDelivery(inc, note, dev, ChannelFCM, "failed", latency, code, reduced)
+			return
+		}
+
+		n.recordDelivery(inc, note, dev, ChannelFCM, "delivered", latency, "", reduced)
+		receipt := Frame{
+			V: FrameVersion, Type: "notify.delivered", Priority: PriorityHigh,
+			FamilyID: inc.FamilyID, IncidentID: inc.ID, At: n.now().UnixMilli(),
+			Reduced: reduced,
+			Data: map[string]any{
+				"notificationId": note.ID,
+				"deviceId":       dev.ID,
+				"channel":        string(ChannelFCM),
+				"latencyMs":      latency,
+			},
+		}
+		subject := StreamSubject(inc.FamilyID)
+		if reduced {
+			subject = ReducedSubject(inc.FamilyID)
+		}
+		if err := n.bus.Publish(subject, receipt.Encode()); err != nil {
+			n.log.Warn("receipt_publish_failed", "incident", inc.ID, "channel", ChannelFCM, "err", err)
 		}
 	}()
 }

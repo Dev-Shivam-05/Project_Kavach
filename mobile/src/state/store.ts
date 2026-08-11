@@ -162,6 +162,7 @@ import {
   postJourney,
   postRelease,
   postResolve,
+  putDevicePushToken,
   setAuthToken,
   setIdentity,
   type CheckInInput,
@@ -208,6 +209,7 @@ import {
   type DemoResponderEvent,
 } from '../domain/demo';
 import {
+  acquireDevicePushToken,
   clearIncident as clearIncidentNotification,
   initNotifications,
   notifyAgentSilent,
@@ -215,6 +217,7 @@ import {
   notifyIncident,
   notifyProbe,
   subscribeNotificationResponses,
+  subscribePushTokenChanges,
 } from './notifications';
 import { getLocale, setLocale, t } from '../i18n';
 
@@ -1034,6 +1037,11 @@ async function doBootstrap(): Promise<void> {
     void pullFromServer('boot');
 
     void safe(() => initNotifications(), false);
+    // ★ W10 · 1.35 — the call site that makes a closed phone reachable. ★
+    // Ordered after initNotifications() because POST_NOTIFICATIONS must be
+    // granted before FCM will issue a token, and fire-and-forget because a
+    // Play-Services round trip must never sit between the user and `ready`.
+    void registerForRemotePush(ids.deviceId);
     void sweepSilentAgents();
     void sweepAutoQuiesce();
 
@@ -2257,6 +2265,38 @@ async function handleDemoEvent(e: DemoResponderEvent): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Sync + sweeps
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * ★ W10 · 1.35 — hand the server this phone's push address, and keep it fresh. ★
+ *
+ * Two halves, and the second is the one that rots silently:
+ *   · acquire the current FCM token and register it, every boot;
+ *   · stay subscribed, because FCM rolls tokens with no symptom other than
+ *     delivery quietly stopping.
+ *
+ * `degradation` is deliberately NOT touched here. A phone with no push token is
+ * not degraded in the P-046 sense — the socket, the alarm and SMS all still
+ * work. What it is, is unreachable while its app is closed, and the place that
+ * fact belongs is the family's delivery matrix on the server, which is exactly
+ * where an empty token puts it (KV-NOTOKEN).
+ */
+async function registerForRemotePush(deviceId: UUID): Promise<void> {
+  if (!deviceId) return;
+  const token = await safe(() => acquireDevicePushToken(), null);
+
+  // The empty string is sent on purpose when there is no token. Staying silent
+  // would leave the server addressing a handset that can no longer be reached —
+  // and a delivery matrix that says "sent" for an alert nobody could receive is
+  // worse than one that says "unreachable".
+  await safe(() => putDevicePushToken(deviceId, token ?? ''), null);
+
+  pushTokenUnsubscribe?.();
+  pushTokenUnsubscribe = subscribePushTokenChanges((rolled) => {
+    void safe(() => putDevicePushToken(deviceId, rolled), null);
+  });
+}
+
+let pushTokenUnsubscribe: (() => void) | null = null;
 
 async function sendHeartbeat(): Promise<void> {
   const s = useKavach.getState();

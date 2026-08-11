@@ -20,6 +20,8 @@ const STUBS = new Set([
   'expo-secure-store',
   'expo-file-system',
   'expo-sqlite',
+  'expo-notifications',
+  'expo-router',
 ]);
 
 const STUB_SOURCE = {
@@ -49,6 +51,45 @@ const STUB_SOURCE = {
         withTransactionAsync: async (fn) => fn(),
       };
     }
+  `,
+  /**
+   * The push-token half of notifications.ts is pure decision logic — which
+   * shapes count as a usable FCM token and which are treated as "no token" —
+   * and that logic is what stands between a family phone being addressable and
+   * silently not. It is worth testing off-device, so the stub is CONTROLLABLE:
+   * __pushToken sets what the next getDevicePushTokenAsync() resolves to, and an
+   * Error value is thrown instead (the missing-Firebase-config case).
+   */
+  'expo-notifications': `
+    export const __state = { token: null, listeners: [] };
+    export function __setDevicePushToken(v) { __state.token = v; }
+    export function __emitPushToken(v) { for (const l of __state.listeners) l(v); }
+    export function __listenerCount() { return __state.listeners.length; }
+    export async function getDevicePushTokenAsync() {
+      if (__state.token instanceof Error) throw __state.token;
+      return __state.token;
+    }
+    export function addPushTokenListener(listener) {
+      __state.listeners.push(listener);
+      return { remove() { __state.listeners = __state.listeners.filter((l) => l !== listener); } };
+    }
+    export function setNotificationHandler() {}
+    export async function setNotificationChannelAsync() {}
+    export async function setNotificationCategoryAsync() {}
+    export async function getPermissionsAsync() { return { granted: true, canAskAgain: true }; }
+    export async function requestPermissionsAsync() { return { granted: true }; }
+    export async function scheduleNotificationAsync() {}
+    export async function dismissNotificationAsync() {}
+    export async function cancelScheduledNotificationAsync() {}
+    export async function getLastNotificationResponseAsync() { return null; }
+    export function addNotificationResponseReceivedListener() { return { remove() {} }; }
+    export const AndroidAudioContentType = { SONIFICATION: 4 };
+    export const AndroidAudioUsage = { ALARM: 4 };
+    export const AndroidImportance = { MAX: 5, DEFAULT: 3, LOW: 2 };
+    export const AndroidNotificationVisibility = { PUBLIC: 1, PRIVATE: 0 };
+  `,
+  'expo-router': `
+    export const router = { push() {}, replace() {}, back() {} };
   `,
 };
 

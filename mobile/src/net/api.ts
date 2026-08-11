@@ -211,7 +211,7 @@ function stripClassA<T>(value: T): T {
 }
 
 interface ControlOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   /** Mutating endpoints all take one (§2.9.2 conventions). */
   idempotencyKey?: string;
@@ -631,6 +631,38 @@ export async function postHeartbeat(
     method: 'POST',
     body: input,
     idempotencyKey: `hb:${input.deviceId}:${input.at}`,
+    timeoutMs: 8000,
+  });
+}
+
+/**
+ * ★ W10 · 1.35 — the one call that makes this phone reachable with the app closed. ★
+ *
+ * Until it existed, the server had no address for this handset: an incident
+ * reached it only while its WebSocket was alive, so with the app killed the last
+ * working leg to another human was SMS.
+ *
+ * `token` is the FCM registration token — an opaque routing address issued by
+ * Google, not a secret and not Class A. The empty string is a MEANINGFUL value,
+ * not a skipped call: it is what this device sends when notification permission
+ * is revoked, and recording it is what makes the family's delivery matrix say
+ * "unreachable by push" instead of the server retrying a dead address forever.
+ *
+ * Sent on every boot rather than once at enrolment, because FCM rolls tokens on
+ * reinstall, restore-from-backup and (rarely) at runtime. A stale token is
+ * indistinguishable from a working one until the night it matters.
+ */
+export async function putDevicePushToken(
+  deviceId: UUID,
+  token: string,
+): Promise<ApiResponse<Device>> {
+  if (CONFIG.demoMode) return ok(null as unknown as Device, 'local', 200);
+  return control<Device>(`/v1/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'PATCH',
+    body: { pushTokenFcm: token },
+    // Keyed on the token, so re-sending an unchanged token on every boot is one
+    // logical write rather than a new one each time.
+    idempotencyKey: `push:${deviceId}:${token}`,
     timeoutMs: 8000,
   });
 }

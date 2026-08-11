@@ -91,9 +91,22 @@ type Device struct {
 	// SigningPubkey is the base64 Ed25519 EMERGENCY key: deliberately not
 	// biometric-gated, because an unconscious person cannot present a
 	// fingerprint. This is the key sos-ingest verifies T0 envelopes against.
-	SigningPubkey   string `json:"signing_pubkey"`
-	IdentityPubkey  string `json:"identity_pubkey"`
-	IsDeviceOwner   bool   `json:"is_device_owner"`
+	SigningPubkey  string `json:"signing_pubkey"`
+	IdentityPubkey string `json:"identity_pubkey"`
+	IsDeviceOwner  bool   `json:"is_device_owner"`
+	// PushTokenFCM is the device's FCM registration token — an opaque routing
+	// address issued by Google, not a secret and not a capability: possessing it
+	// lets you address this handset only if you also hold the family's FCM
+	// service-account key. It is the ONLY thing that lets a phone learn about an
+	// incident while the app is closed and the WebSocket is gone; without it the
+	// last working leg to another human is SMS (W10).
+	//
+	// Class B. What travels on this channel is constrained by F-21 to the
+	// lock-screen-safe five (incidentId, familyId, trigger, tier,
+	// subjectShortName) — the token decides WHERE the alert goes, never WHAT it
+	// says. Empty is the honest normal state: an iOS device, a node phone, or an
+	// Android that has not yet been granted POST_NOTIFICATIONS.
+	PushTokenFCM    string `json:"push_token_fcm"`
 	LastHeartbeatAt int64  `json:"last_heartbeat_at"`
 	BatteryPct      int    `json:"battery_pct"`
 	AgentHealthy    bool   `json:"agent_healthy"`

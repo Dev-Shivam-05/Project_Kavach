@@ -207,6 +207,69 @@ export async function initNotifications(): Promise<boolean> {
   }
 }
 
+// ── Remote push registration (W10 · 1.35) ────────────────────────────────────
+
+/**
+ * ★ THE ADDRESS THAT LETS A CLOSED PHONE RING. ★
+ *
+ * Everything above this line is LOCAL presentation — it composes and shows text
+ * on a phone that already knows about the incident. Learning about the incident
+ * at all, with the app killed and the socket gone, requires the server to hold
+ * this token. Until it did, the only leg left to another human was SMS.
+ *
+ * `getDevicePushTokenAsync` returns the NATIVE FCM token, deliberately not
+ * `getExpoPushTokenAsync`. The Expo push service is a relay: it would put a
+ * third party between an emergency and a family phone, and it needs network to
+ * this app's Expo project at the exact moment the alert matters. The native
+ * token addresses Google's fabric directly with our own credentials (ADR-015
+ * scopes this to Android; iOS is not in scope, and this returns null there
+ * rather than pretending).
+ *
+ * Fails soft, like everything else in this module: no permission, no Play
+ * Services, no google-services.json in the build, or Expo Go — all return null.
+ * A null is reported honestly up the chain and the alarm, the screen and the SMS
+ * legs are unaffected.
+ */
+export async function acquireDevicePushToken(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+  try {
+    const token = await Notifications.getDevicePushTokenAsync();
+    if (token?.type !== 'android') return null;
+    const data = token.data;
+    return typeof data === 'string' && data.length > 0 ? data : null;
+  } catch {
+    // Missing Firebase config is the expected failure here, and it is the
+    // deployment's problem to fix, not this call's to survive loudly.
+    return null;
+  }
+}
+
+/**
+ * FCM rolls a token on reinstall, on restore-from-backup, and occasionally at
+ * runtime with the app in the foreground. A rolled token is not an error and
+ * produces no symptom — the old address simply stops delivering — so the only
+ * defence is to notice the change and re-register immediately.
+ */
+export function subscribePushTokenChanges(onToken: (token: string) => void): () => void {
+  if (Platform.OS !== 'android') return () => {};
+  try {
+    const sub = Notifications.addPushTokenListener((token) => {
+      if (token?.type === 'android' && typeof token.data === 'string' && token.data.length > 0) {
+        onToken(token.data);
+      }
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {
+        /* already removed */
+      }
+    };
+  } catch {
+    return () => {};
+  }
+}
+
 // ── Responses (the half that makes the buttons real) ─────────────────────────
 
 /**

@@ -82,12 +82,31 @@ func main() {
 	proj := newProjections()
 	proj.restore(b, log)
 
+	// ★ W10 — the push leg. ★ Absent credentials are NOT a startup failure: SMS
+	// and the socket still work, and a control plane that refuses to boot rings
+	// nobody at all. But it is logged at WARN with the variable to set, because
+	// "no phone in this family can be reached with its app closed" is the single
+	// most consequential fact about a running deployment and must never be
+	// something an operator has to infer from silence.
+	var push notify.PushSender
+	if fcm, ferr := notify.NewFCMFromEnv(time.Now); ferr == nil {
+		push = fcm
+		log.Info("push_configured", "provider", "fcm")
+	} else if errors.Is(ferr, notify.ErrPushNotConfigured) {
+		log.Warn("push_not_configured",
+			"impact", "a closed app cannot be alerted; SMS is the last leg to a human",
+			"set", notify.EnvFCMCredentials)
+	} else {
+		log.Error("push_init_failed", "set", notify.EnvFCMCredentials, "err", ferr)
+	}
+
 	notifier, err := notify.New(notify.Deps{
 		Store:  st,
 		Bus:    b,
 		Log:    log.With("mod", "notify"),
 		Budget: notify.NewMemoryBudget(envInt("KAVACH_SMS_CEILING", notify.DefaultSMSCeiling), time.Now),
 		Drills: &drillResolver{st: st, proj: proj},
+		Push:   push,
 		NewID:  newID,
 	})
 	if err != nil {
@@ -531,6 +550,11 @@ type deviceReq struct {
 	BatteryPct     int    `json:"batteryPct"`
 	AgentHealthy   *bool  `json:"agentHealthy"`
 	Revoked        bool   `json:"revoked"`
+	// PushTokenFCM is a POINTER so that "the client did not mention the token"
+	// and "the client is telling me the token is gone" are different requests.
+	// A plain string would make every PATCH that omits it silently erase the one
+	// address the family can be reached at with the app closed (W10).
+	PushTokenFCM *string `json:"pushTokenFcm"`
 }
 
 func (s *server) enrolDevice(w http.ResponseWriter, r *http.Request) {
@@ -551,6 +575,9 @@ func (s *server) enrolDevice(w http.ResponseWriter, r *http.Request) {
 		SigningPubkey: in.SigningPubkey, IdentityPubkey: in.IdentityPubkey,
 		IsDeviceOwner: in.IsDeviceOwner, AgentHealthy: true,
 		LastHeartbeatAt: time.Now().UnixMilli(),
+	}
+	if in.PushTokenFCM != nil {
+		d.PushTokenFCM = strings.TrimSpace(*in.PushTokenFCM)
 	}
 	if err := s.st.PutDevice(d); err != nil {
 		problem(w, http.StatusBadRequest, "KV-1006", err.Error(), d.FamilyID)
@@ -590,8 +617,22 @@ func (s *server) patchDevice(w http.ResponseWriter, r *http.Request) {
 	if in.AgentHealthy != nil {
 		d.AgentHealthy = *in.AgentHealthy
 	}
+	// ★ W10 — this is how a phone becomes reachable with the app closed. ★
+	// The client re-PATCHes on every boot and whenever FCM rolls the token, so
+	// this is the hot path for push reachability, not a one-off enrolment step.
+	// An empty string is an accepted value: it is what a device sends when the
+	// user revokes POST_NOTIFICATIONS, and recording that honestly is what makes
+	// the delivery matrix say "unreachable by push" instead of silently trying a
+	// dead address.
+	if in.PushTokenFCM != nil {
+		d.PushTokenFCM = strings.TrimSpace(*in.PushTokenFCM)
+	}
 	if in.Revoked {
 		d.RevokedAt = time.Now().UnixMilli()
+		// A revoked device is a lost phone or a member who left. Its push address
+		// goes with it: leaving the token behind would keep a stranger's handset
+		// on the family's alert fan-out (§2.4 device revocation).
+		d.PushTokenFCM = ""
 	}
 	if err := s.st.PutDevice(d); err != nil {
 		problem(w, http.StatusServiceUnavailable, "KV-5001", err.Error(), "")
