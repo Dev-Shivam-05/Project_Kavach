@@ -21,9 +21,11 @@
 //     what reaches expo-notifications' background task, which is what lets the
 //     device compose and present the alert itself.
 //
-// The payload is the lock-screen-safe five and nothing else: incidentId,
-// familyId, trigger, tier, subjectShortName. `assertPushSafe` enforces that as a
-// fail-closed assertion rather than a code-review convention, because — F-01 —
+// The payload is the lock-screen-safe set and nothing else: incidentId,
+// familyId, trigger, tier, subjectShortName, and — since W10-d · 1.32 — kind and
+// ownerShortName, which are what a CLAIM broadcast is made of (§2.6.4; see
+// pushPayload for why the five could not carry one). `assertPushSafe` enforces
+// that as a fail-closed assertion rather than a code-review convention, because — F-01 —
 // the duress bit must not be inferable from anything that leaves the device, and
 // a push payload is a side channel like any other. A frame that acquired a
 // forbidden key is not degraded, it is a privacy breach, and dropping it is
@@ -108,6 +110,9 @@ type PushSender interface {
 var pushSafeKeys = map[string]bool{
 	"incidentId": true, "familyId": true, "trigger": true,
 	"tier": true, "subjectShortName": true,
+	// W10-d · 1.32. `kind` is a three-valued enum and `ownerShortName` is the
+	// same ASCII short name as the subject's, already permitted above.
+	"kind": true, "ownerShortName": true,
 }
 
 // assertPushSafe fails closed. Note what is not on the list and would be caught

@@ -115,6 +115,42 @@ const (
 	ChannelVoice   Channel = "voice"   // TTS call, billable by the second
 )
 
+// ── What a fan-out is ABOUT (W10-d · 1.32) ───────────────────────────────────
+
+// Kind separates "somebody needs help" from "somebody is going". Both travel the
+// same channels to the same audience, and until W10-d the wire could not tell
+// them apart — so a CLAIM could only be delivered over the socket, because a push
+// carrying it would have been presented as a second emergency.
+//
+// ★ Why this is a wire field and not something the device infers. ★ The receiving
+// phone is asleep. It holds the payload and nothing else: no socket, no database
+// read on the wake path (D-020), and possibly no memory of the incident at all.
+// Whether to ring the alarm stream or replace a siren with a quiet banner is the
+// entire decision it must make, so the sender has to state it.
+type Kind string
+
+const (
+	// KindAlert is the zero value ON PURPOSE. Every rung of the ladder that
+	// predates this type keeps its meaning without being edited, and a Step
+	// built by a caller that has never heard of Kind rings — which is the
+	// fail-safe direction: a claim presented as an alert costs one wasted
+	// siren, an alert presented as a claim costs the alert.
+	KindAlert    Kind = ""
+	KindClaimed  Kind = "claimed"
+	KindReleased Kind = "released"
+)
+
+// wire renders a Kind for the push payload. Unknown values collapse to "alert"
+// for the reason above.
+func (k Kind) wire() string {
+	switch k {
+	case KindClaimed, KindReleased:
+		return string(k)
+	default:
+		return "alert"
+	}
+}
+
 type channelProfile struct {
 	minLatency time.Duration
 	maxLatency time.Duration
@@ -336,6 +372,8 @@ type Step struct {
 	Channels []Channel
 	// Repeat marks the 30 s re-blast: same audience, louder, different tone.
 	Repeat bool
+	// Kind says what this fan-out is about. Zero value = an alert (see Kind).
+	Kind Kind
 }
 
 type Result struct {
@@ -431,8 +469,10 @@ func (n *Notifier) Fanout(ctx context.Context, inc store.Incident, step Step) (R
 		// Neighbours never get SMS or voice: those channels would carry a
 		// human-readable location into a phone outside the family's crypto
 		// group. Their feed is metadata + a 112 button, nothing more (F-20).
+		// Kind must be carried across: a neighbour whose phone reads a claim as a
+		// fresh alert is a neighbour woken to be told that nothing is needed.
 		suppressed := n.dispatch(ctx, inc, note, dev, Step{
-			Tier: step.Tier, Label: step.Label, Repeat: step.Repeat,
+			Tier: step.Tier, Label: step.Label, Repeat: step.Repeat, Kind: step.Kind,
 			Channels: intersect(step.Channels, []Channel{ChannelWS, ChannelFCM, ChannelAPNs}),
 		}, true)
 		res.Suppressed = append(res.Suppressed, suppressed...)
@@ -533,7 +573,7 @@ func (n *Notifier) dispatch(ctx context.Context, inc store.Incident, note store.
 				continue
 			}
 		}
-		n.startLeg(ctx, inc, note, dev, ch, p, reduced)
+		n.startLeg(ctx, inc, note, dev, ch, p, step.Kind, reduced)
 	}
 	return suppressed
 }
@@ -541,7 +581,7 @@ func (n *Notifier) dispatch(ctx context.Context, inc store.Incident, note store.
 // startLeg models one channel's wire time and records the receipt when it
 // lands. The WS leg is settled immediately because the frame really has been
 // published to the bus by the time we get here.
-func (n *Notifier) startLeg(ctx context.Context, inc store.Incident, note store.Notification, dev store.Device, ch Channel, p channelProfile, reduced bool) {
+func (n *Notifier) startLeg(ctx context.Context, inc store.Incident, note store.Notification, dev store.Device, ch Channel, p channelProfile, kind Kind, reduced bool) {
 	if ch == ChannelWS {
 		n.recordDelivery(inc, note, dev, ch, "delivered", 0, "", reduced)
 		return
@@ -550,7 +590,7 @@ func (n *Notifier) startLeg(ctx context.Context, inc store.Incident, note store.
 	// off a real request instead of drawn from profiles[ChannelFCM], so the t3
 	// clock stops averaging in a number the process invented about itself.
 	if ch == ChannelFCM {
-		n.sendPush(ctx, inc, note, dev, reduced)
+		n.sendPush(ctx, inc, note, dev, kind, reduced)
 		return
 	}
 	delay := n.jitter(p.minLatency, p.maxLatency)
@@ -591,19 +631,36 @@ func (n *Notifier) startLeg(ctx context.Context, inc store.Incident, note store.
 	}()
 }
 
-// pushPayload is the entire contract with the lock screen (F-21): five Class B/C
-// strings, composed here and rendered into human language on the DEVICE. The
+// pushPayload is the entire contract with the lock screen (F-21): seven Class
+// B/C strings, composed here and rendered into human language on the DEVICE. The
 // duress bit is deliberately absent (F-01) and fcm.go asserts that independently
 // — this function being correct is not allowed to be the only thing standing
 // between an attacker and the one flag the whole duress design depends on.
-func pushPayload(inc store.Incident, tier int, subjectShortName string) map[string]string {
-	return map[string]string{
+//
+// ★ W10-d · 1.32 — why the five became seven. ★ §2.6.4 requires CLAIM to fan out
+// over push as well as the socket, and the original five could not express "this
+// is a claim": a claim push would have been read as a second emergency and rung
+// the alarm stream at the exact moment the design says to STOP ringing. `kind`
+// and `ownerShortName` are what "Rohan is responding. Stand by." is made of, and
+// both are the same class as the fields already here — an ASCII short name and a
+// three-valued enum. Neither is inferable from duress: claims happen identically
+// on duress and non-duress incidents.
+//
+// `ownerShortName` is emitted only on a claim. A field carried on rungs that do
+// not use it is a name put on a stranger's lock screen for nothing.
+func pushPayload(inc store.Incident, tier int, kind Kind, subjectShortName, ownerShortName string) map[string]string {
+	data := map[string]string{
 		"incidentId":       inc.ID,
 		"familyId":         inc.FamilyID,
 		"trigger":          inc.Trigger,
 		"tier":             strconv.Itoa(tier),
 		"subjectShortName": subjectShortName,
+		"kind":             kind.wire(),
 	}
+	if kind == KindClaimed {
+		data["ownerShortName"] = ownerShortName
+	}
+	return data
 }
 
 // sendPush performs the real FCM send off the fan-out goroutine.
@@ -613,8 +670,9 @@ func pushPayload(inc store.Incident, tier int, subjectShortName string) map[stri
 // crash between the decision to notify and the receipt is indistinguishable from
 // never having tried — and an after-action report that cannot tell those apart
 // cannot answer the only question it exists to answer.
-func (n *Notifier) sendPush(ctx context.Context, inc store.Incident, note store.Notification, dev store.Device, reduced bool) {
-	payload := pushPayload(inc, note.Tier, n.shortNames(inc.FamilyID)[inc.SubjectMemberID])
+func (n *Notifier) sendPush(ctx context.Context, inc store.Incident, note store.Notification, dev store.Device, kind Kind, reduced bool) {
+	names := n.shortNames(inc.FamilyID)
+	payload := pushPayload(inc, note.Tier, kind, names[inc.SubjectMemberID], names[inc.OwnerMemberID])
 	token := dev.PushTokenFCM
 	started := n.now()
 	n.recordDelivery(inc, note, dev, ChannelFCM, "sent", 0, "", reduced)

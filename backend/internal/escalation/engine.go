@@ -784,7 +784,21 @@ func (e *Engine) Claim(ctx context.Context, incidentID, memberID string) (store.
 		"ownerMemberId": memberID,
 		"firstAckAt":    next.FirstAckAt,
 	})
-	return next, nil
+
+	// ★ W10-d · 1.32 ★ …and over push, because the bus only reaches sockets that
+	// are open. §2.6.4: "Fan-out of CLAIM goes over BOTH channels simultaneously.
+	// Never rely on only one; a backgrounded device may have no WS." The phone
+	// with no socket is the phone still sirening for an incident somebody is
+	// already driving to, and it is the one that most needs telling.
+	//
+	// Tier 1 because the ladder has STOPPED — this rung must not read as an
+	// escalation in the after-action matrix — and no SMS or voice: spending the
+	// family's notify budget to announce that nothing further is needed is how a
+	// budget runs out before the incident that needs it.
+	return next, e.notifyStep(ctx, next, notify.Step{
+		Tier: 1, Label: "claim-broadcast", Kind: notify.KindClaimed,
+		Channels: []notify.Channel{notify.ChannelWS, notify.ChannelFCM, notify.ChannelAPNs, notify.ChannelPushKit},
+	})
 }
 
 // Release gives ownership back and re-broadcasts, urgently.
@@ -807,7 +821,7 @@ func (e *Engine) Release(ctx context.Context, incidentID, memberID string) (stor
 		"previousOwnerMemberId": memberID,
 	})
 	return next, e.notifyStep(ctx, next, notify.Step{
-		Tier: 2, Label: "released-rebroadcast",
+		Tier: 2, Label: "released-rebroadcast", Kind: notify.KindReleased,
 		Channels: []notify.Channel{notify.ChannelWS, notify.ChannelFCM, notify.ChannelAPNs, notify.ChannelPushKit},
 	})
 }

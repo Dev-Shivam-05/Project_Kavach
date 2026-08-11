@@ -264,7 +264,10 @@ func TestFCMLegIsAttemptedAndDeliveredWhenTheSendSucceeds(t *testing.T) {
 // ★ THE F-21 / F-01 ASSERTION ★ The duress flag rides the sealed WS frame, where
 // only the family's crypto group can read it. It must not be inferable from the
 // push payload, which transits Google and lands on a lock screen.
-func TestFCMPayloadCarriesOnlyTheLockScreenSafeFive(t *testing.T) {
+//
+// W10-d added `kind`; an ALERT is still exactly the original five plus the word
+// "alert", and in particular still carries no owner name.
+func TestFCMPayloadForAnAlertCarriesOnlyTheLockScreenSafeSet(t *testing.T) {
 	sender := &recordingSender{}
 	n, _, _ := harness(t, sender, "tok-guardian")
 
@@ -285,6 +288,7 @@ func TestFCMPayloadCarriesOnlyTheLockScreenSafeFive(t *testing.T) {
 		"trigger":          "MANUAL",
 		"tier":             "1",
 		"subjectShortName": "Asha",
+		"kind":             "alert",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("push payload has %d keys, want exactly %d\n got: %v\nwant: %v",
@@ -297,6 +301,121 @@ func TestFCMPayloadCarriesOnlyTheLockScreenSafeFive(t *testing.T) {
 	}
 	if _, leaked := got["duress"]; leaked {
 		t.Fatal("★ F-01 VIOLATED ★ the duress bit is inferable from the push payload")
+	}
+}
+
+// ── W10-d · 1.32 — responsibility transfer on the push leg ───────────────────
+
+// ★ §2.6.4 ★ "Rohan is responding. Stand by." is composed on the device, but it
+// needs two facts the original five could not carry.
+func TestClaimPushSaysItIsAClaimAndWhoIsResponding(t *testing.T) {
+	sender := &recordingSender{}
+	n, _, _ := harness(t, sender, "tok-guardian")
+
+	inc := incident()
+	inc.State = "OWNED"
+	inc.OwnerMemberID = "mem-guardian"
+	step := Step{Tier: 1, Label: "claim-broadcast", Kind: KindClaimed,
+		Channels: []Channel{ChannelFCM}}
+	if _, err := n.Fanout(context.Background(), inc, step); err != nil {
+		t.Fatalf("Fanout: %v", err)
+	}
+	n.Close()
+
+	if sender.calls() != 1 {
+		t.Fatalf("sender called %d times, want 1", sender.calls())
+	}
+	got := sender.sent[0]
+	if got["kind"] != "claimed" {
+		t.Fatalf("kind = %q, want \"claimed\" — a device that cannot tell a claim "+
+			"from an alert rings the alarm stream for somebody who is already responding", got["kind"])
+	}
+	if got["ownerShortName"] != "Ravi" {
+		t.Fatalf("ownerShortName = %q, want \"Ravi\" — without a name the banner "+
+			"says \"someone is responding\", which is the diffusion of responsibility P-003 exists to prevent",
+			got["ownerShortName"])
+	}
+	if _, leaked := got["duress"]; leaked {
+		t.Fatal("★ F-01 VIOLATED ★ the duress bit rode the claim payload")
+	}
+}
+
+// An owner name on a rung that is not a claim is a family member's name on a
+// stranger's lock screen for no reason.
+func TestOwnerNameIsOmittedFromEveryRungThatIsNotAClaim(t *testing.T) {
+	for _, kind := range []Kind{KindAlert, KindReleased} {
+		sender := &recordingSender{}
+		n, _, _ := harness(t, sender, "tok-guardian")
+
+		inc := incident()
+		inc.OwnerMemberID = "mem-guardian" // an owner exists and is still irrelevant
+		step := Step{Tier: 2, Label: "rung", Kind: kind, Channels: []Channel{ChannelFCM}}
+		if _, err := n.Fanout(context.Background(), inc, step); err != nil {
+			t.Fatalf("Fanout: %v", err)
+		}
+		n.Close()
+
+		if sender.calls() != 1 {
+			t.Fatalf("kind %q: sender called %d times, want 1", kind, sender.calls())
+		}
+		if name, present := sender.sent[0]["ownerShortName"]; present {
+			t.Fatalf("kind %q carried ownerShortName=%q", kind, name)
+		}
+	}
+}
+
+// The neighbour feed is built by RECONSTRUCTING the Step with a narrower channel
+// list (F-20). Every field not copied there is silently lost, which for Kind
+// would mean a neighbour woken on the alarm stream to be told nothing is needed.
+func TestTheNeighbourLegKeepsTheKindItWasSentWith(t *testing.T) {
+	sender := &recordingSender{}
+	n, _, _ := harness(t, sender, "tok-guardian")
+	st := n.st.(*fakeStore)
+	st.members = append(st.members, store.Member{
+		ID: "mem-neighbour", FamilyID: famID, Role: "neighbour", ASCIIShortName: "Meena",
+	})
+	st.devices = append(st.devices, store.Device{
+		ID: "dev-neighbour", FamilyID: famID, MemberID: "mem-neighbour",
+		Platform: "android", AgentHealthy: true, PushTokenFCM: "tok-neighbour",
+	})
+
+	inc := incident()
+	inc.OwnerMemberID = "mem-guardian"
+	step := Step{Tier: 2, Label: "released-rebroadcast", Kind: KindReleased,
+		Channels: []Channel{ChannelFCM}}
+	if _, err := n.Fanout(context.Background(), inc, step); err != nil {
+		t.Fatalf("Fanout: %v", err)
+	}
+	n.Close()
+
+	if sender.calls() != 2 {
+		t.Fatalf("sender called %d times, want 2 (guardian + neighbour)", sender.calls())
+	}
+	for i, tok := range sender.toks {
+		if got := sender.sent[i]["kind"]; got != "released" {
+			t.Fatalf("push to %s carried kind %q, want \"released\"", tok, got)
+		}
+	}
+}
+
+// A Kind this build does not recognise must ring, not fall silent. The cost of a
+// vague alarm is confusion; the cost of a dropped one is the product.
+func TestAnUnknownKindDegradesToAnAlert(t *testing.T) {
+	sender := &recordingSender{}
+	n, _, _ := harness(t, sender, "tok-guardian")
+
+	step := Step{Tier: 1, Label: "L1", Kind: Kind("resolved-by-a-newer-server"),
+		Channels: []Channel{ChannelFCM}}
+	if _, err := n.Fanout(context.Background(), incident(), step); err != nil {
+		t.Fatalf("Fanout: %v", err)
+	}
+	n.Close()
+
+	if sender.calls() != 1 {
+		t.Fatalf("sender called %d times, want 1", sender.calls())
+	}
+	if got := sender.sent[0]["kind"]; got != "alert" {
+		t.Fatalf("kind = %q, want \"alert\"", got)
 	}
 }
 
@@ -473,13 +592,14 @@ func TestNewFCMRejectsAnIncompleteServiceAccount(t *testing.T) {
 	}
 }
 
-func TestAssertPushSafeRejectsEverythingOutsideTheFive(t *testing.T) {
+func TestAssertPushSafeRejectsEverythingOutsideTheAllowlist(t *testing.T) {
 	ok := map[string]string{
 		"incidentId": "i", "familyId": "f", "trigger": "MANUAL",
 		"tier": "1", "subjectShortName": "Asha",
+		"kind": "claimed", "ownerShortName": "Ravi",
 	}
 	if err := assertPushSafe(ok); err != nil {
-		t.Fatalf("the permitted five were rejected: %v", err)
+		t.Fatalf("the permitted set was rejected: %v", err)
 	}
 	for _, forbidden := range []string{"duress", "sealed", "lat", "lon", "note", "medical", "phoneE164"} {
 		bad := map[string]string{"incidentId": "i", forbidden: "x"}
