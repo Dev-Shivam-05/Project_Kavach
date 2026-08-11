@@ -492,7 +492,15 @@ func (e *Engine) execute(ctx context.Context, t store.Timer) error {
 		})
 
 	case ActionSMSTier:
-		if !incident.IsActive(inc.State) || inc.State == incident.StatePending || inc.State == incident.StateOwned {
+		// RESOLVING is in the guard for the same reason OWNED is: cancelTimers
+		// only touches rows still marked pending, so a rung a worker had already
+		// claimed when the owner arrived is cancelled by nothing, and a billable
+		// A2P message would go out to escalate an incident somebody is standing
+		// over (1.49 · the family's notify budget).
+		if !incident.IsActive(inc.State) ||
+			inc.State == incident.StatePending ||
+			inc.State == incident.StateOwned ||
+			inc.State == incident.StateResolving {
 			return nil
 		}
 		return e.notifyStep(ctx, inc, notify.Step{
