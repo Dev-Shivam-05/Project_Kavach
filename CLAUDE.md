@@ -18,8 +18,21 @@ no gcc here — `go test -race` fails with `cgo: C compiler "gcc" not found`, wh
 gap, not a test failure. CI gate 3 is the only place the race detector has ever run. Do not report
 `-race` as passing locally; say it was not run.
 
+**There is no JDK and no Android SDK on this machine either** (`java` is not on PATH, `ANDROID_HOME`
+and `JAVA_HOME` are unset). The Kotlin under `mobile/modules/kavach-t0/android/` therefore cannot be
+compiled here, and **no CI gate compiles it either** — the nine gates are Go, TypeScript and Node.
+Changes to the native Tier-0 plane are unverifiable from this checkout; say so rather than reporting
+Kotlin as done (D-021).
+
 Windows: `go test ./...` may fail once with *"An Application Control policy has blocked this
 file"* — that is the OS, not the code. Re-run.
+
+**`// @ts-expect-error` must sit on the line the import specifiers are on.** The tempting shape —
+a trailing comment inside the braces of a multi-line `import { … } from 'expo-notifications'` —
+suppresses **nothing**: `tsc` reports one TS2305 per specifier line, and the directive then applies
+to the `} from …` line and reports itself unused. That shape shipped in `test/push-token.test.ts`
+and left `tsc --noEmit` red while a handoff recorded it green. Use a single-line import with the
+directive above it, and read the actual `npm run typecheck` output before claiming a gate passed.
 
 ## The conventions this codebase actually follows
 
