@@ -24,11 +24,17 @@ var. F-02 exists to stop a deploy during a live incident; anyone who can reach t
 
 ## S2 — will make a change unverifiable
 
-**4. ~6,000 LOC of backend has no direct tests.**
-`internal/{store,bus,wal,escalation,notify,consent}` and all of `control-plane`, `realtime-gw`,
-`canary` — the durable record, the append-only log, the escalation ladder that decides whether a
-human is woken, and a hand-written WebSocket frame codec. **Characterize before you change**: write
-a test asserting current behaviour, then change it and watch the test fail deliberately.
+**4. ~5,400 LOC of backend has no direct tests.**
+`internal/{bus,wal,escalation,consent}` and all of `control-plane`, `realtime-gw`, `canary` — the
+append-only log, the escalation ladder that decides whether a human is woken, and a hand-written
+WebSocket frame codec. **Characterize before you change**: write a test asserting current behaviour,
+then change it and watch the test fail deliberately.
+
+`internal/store` and `internal/notify` came off this list on 11 Aug (W10-a): `store_test.go` pins
+the device table's disk contract against `migrations/0001_init.sql`, tenancy-on-write and
+by-value row copies; `fcm_test.go` pins fan-out's audience rules and every FCM delivery outcome.
+Both were written **before** the change they guarded and shown failing first. Neither package is
+comprehensively covered — only the paths W10 touched are.
 
 **5. The project has no linter and no static analysis.**
 No ESLint, Prettier, semgrep or textlint config exists. `tsc --noEmit`, `go vet` and staticcheck are
@@ -47,7 +53,7 @@ It audits commit `20a5fdf` and asserts `docs/adr/`, `.github/`, `proto/incident.
 | `connectWs()` never called | **closed** — `store.ts:1073`, `onFrame` at `:1559` |
 | no live location acquisition | **closed** — `Location.watchPositionAsync` at `presenceService.ts:174` |
 | `sealTo()` never called / no second device | **closed** — `enrolment.ts:451` + `app/enrol.tsx` |
-| no push token ever requested | **still true** |
+| no push token ever requested | **closed** (11 Aug, W10-a) — `acquireDevicePushToken()` at `notifications.ts`, wired at `store.ts` bootstrap. The *receive* half is still absent |
 | no hardware trigger (power/volume) | **still true** |
 | dead-man / missed-arrival escalation | **still true** — no `sweepJourneys` |
 

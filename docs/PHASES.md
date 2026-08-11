@@ -95,18 +95,28 @@ Soak is W13–16: **four weeks, write no new features.**
 | 1.29 | Durable timer rows, N workers, atomic claim, no leader | ✅ | `internal/escalation/engine.go` — the header refuses `time.AfterFunc` explicitly |
 | 1.30 | LISTEN/NOTIFY + adaptive poll | 🔨 | In-process bus wake + polling. Semantics hold; the Postgres mechanism does not exist |
 | 1.31 | Ladder L1→L2→L3 as data | ✅ | `engine.go` + `src/core/policy.ts` |
-| 1.32 | CLAIM / RELEASE broadcast over **both** WS and push | 🔨 | WS leg is now live (`store.ts:1073`, `onFrame` at `:1559`). **Push does not exist** — see W10 |
+| 1.32 | CLAIM / RELEASE broadcast over **both** WS and push | 🔨 | WS leg is now live (`store.ts:1073`, `onFrame` at `:1559`). The push **send** leg exists as of W10-a; a claim still does not fan out over it, and no device consumes a push yet — see W10 |
 | 1.33–1.34 | Progress watchdog 5 min, auto-quiesce 6 h, `/internal/active-incidents` excludes drills | ✅ | `afterS: 300` / `afterS: 21600` in the YAML; F-02 honoured |
 
 ### W10 — Notification orchestrator 🔨 **the weakest week in the project**
-| 1.35 | **FCM data-only, high priority** | 🔨 | **Absent.** Zero hits repo-wide for `getDevicePushTokenAsync` / `getExpoPushTokenAsync`. No push token is ever requested |
+
+Split into **W10-a (send)** and **W10-b (receive + present)** on 11 Aug. W10-a landed on branch
+`phase1-w10-remote-push`; W10-b has not started.
+
+| 1.35a | **FCM data-only, high priority — send side** | ✅ | `backend/internal/notify/fcm.go` — FCM HTTP v1, stdlib only (RS256 service-account JWT, cached access token). Data-only always; `assertPushSafe` fails closed on anything outside the lock-screen-safe five, so the duress bit cannot ride the push side channel (F-01/F-21). TTL read off the generated machine's `AUTO_QUIESCE` transition, not hardcoded. 20 tests |
+| 1.35b | **Device push token registration** | ✅ | `acquireDevicePushToken()` (`notifications.ts`) uses the **native** FCM token, not the Expo relay — no third party between an emergency and a family phone. Wired at `store.ts` bootstrap; rolled tokens re-register via `addPushTokenListener`. Server side: `Device.push_token_fcm` + `PATCH /v1/devices/{id}` |
+| 1.35c | **Delivery rows now tell the truth** | ✅ | The FCM leg used to record `delivered` for a push it never sent. It now records `KV-NOTOKEN` (this handset never registered), `KV-NOPUSHCFG` (no credentials in this deployment), `KV-UNREGISTERED` (T-218), `KV-PUSHFAIL`. The four clocks stop averaging in a number the process invented about itself |
+| 1.35d | **⛔ FCM credentials** | ⛔ | **Blocked on a Firebase project, which is yours to create** — a project, `google-services.json` in the Android build, and a service-account key at `KAVACH_FCM_CREDENTIALS`. Free, ~15 min. Until then `NewFCMFromEnv` returns `ErrPushNotConfigured`, the control plane logs `push_not_configured` at WARN with the variable name, and **every push leg records KV-NOPUSHCFG**. No push has ever reached a handset |
+| 1.35e | **Receive side — W10-b** | 🔨 | **Absent, and this is what makes 1.35 still incomplete.** A data-only message needs `TaskManager.defineTask` + `Notifications.registerTaskAsync` registered in an early module (`index.ts`) to wake a killed app; without it the server sends into the void. `expo-task-manager` is already a dependency |
 | 1.36 | Bypass-DND channel, USAGE_ALARM | ✅ | `src/state/notifications.ts` — `AndroidImportance.MAX`, alarm usage, locally-composed text (F-21) |
-| 1.37 | Full-screen intent | 🔨 | `USE_FULL_SCREEN_INTENT` declared in `app.json:27` and **never requested or presented** |
+| 1.37 | Full-screen intent — W10-b | 🔨 | `USE_FULL_SCREEN_INTENT` declared in `app.json:27` and **never requested or presented** |
 | 1.38–1.42 | APNs Critical Alert · PushKit→CallKit · iOS NSE · Live Activity · Wear/watchOS | 🔨 | Absent. iOS is out of scope by ADR-015; the Android ongoing notification exists |
 
-> **Stated plainly:** a phone now hears an incident **only while its WebSocket is alive**. With the
-> app closed or the socket dropped, the only working leg to another human is SMS. The incident
-> reaches the server correctly and escalates correctly; nobody's phone rings.
+> **Stated plainly, 11 Aug:** the server can now address a phone and really sends to it. Nothing on
+> the device consumes the message yet, and no deployment holds FCM credentials — so **nobody's phone
+> has rung, and none will until W10-b lands and a Firebase project exists.** With the app closed the
+> only working leg to another human is still SMS. What changed is that the system now *says so*
+> instead of recording a delivery it never made.
 
 ### W11 — SMS and voice tiers ✅ (two gaps)
 | 1.43 | Multi-SIM enumeration, send on ALL | ✅ | `KavachT0Module.kt` — `SubscriptionManager`, per-subscription `SmsManager` |
@@ -138,8 +148,14 @@ Then: **"stop and use it for a month."** §3.4 calls that the most important pro
 directive in the document.
 
 ### 🔨 To close Phase 1 — in dependency order
-1. **Remote push (1.35, 1.37).** Nothing else in this phase matters if no phone rings. Device token
-   registration → server token store → data-only FCM send → full-screen intent.
+1. **Remote push — W10-b (1.35e, 1.37).** Nothing else in this phase matters if no phone rings.
+   Token registration → server token store → data-only FCM send are **done** (W10-a, 11 Aug). What
+   remains is the receive half, and it is one session: a `TaskManager` background task registered in
+   `index.ts` that composes the alert from the five push fields through the existing
+   `notifyIncident()`, then a `showWhenLocked` full-screen-intent Activity to present it. Pair it
+   with 1.28, which needs the same Activity work.
+   **Do the Firebase project first** (1.35d) — without it W10-b cannot be verified on a device, and
+   verification on a device is the whole exit criterion for this week.
 2. **Hardware trigger (1.16, 1.17).** A panic button you must unlock the phone and open an app to
    reach is not a panic button.
 3. **`showWhenLocked` medical card (1.28)** and the **exact-alarm Kotlin watchdog (1.13)** — both

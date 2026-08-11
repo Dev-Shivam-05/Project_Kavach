@@ -16,9 +16,11 @@ Status board: [PHASES.md](PHASES.md) · Risks: [RISK.md](RISK.md) · History: [h
 | run stack | `docker compose -f ops/docker-compose.yml up --build -d` | root |
 | release APK | `npx eas build --platform android --profile preview` | `mobile/` |
 
-**Verified green 2026-08-11:** `go build` ✅ · `go test ./...` ✅ · `tsc --noEmit` ✅ ·
-`npm test` **139/139** ✅ · `gen:check` in sync (14 states · 20 events · 35 transitions · 16 fixtures) ·
-`TestLOCBudget` **963/1000**.
+**Verified green 2026-08-11 (after W10-a):** `go build` ✅ · `go vet ./...` ✅ · `go test ./...` ✅ ·
+`tsc --noEmit` ✅ · `npm test` **144/144** ✅ · `gen:check` in sync (14 states · 20 events ·
+35 transitions · 16 fixtures) · `schema-lint` ✅ · `protolint` ✅ · `TestLOCBudget` **963/1000**.
+`go test -race` needs `CGO_ENABLED=1` **and a C compiler**; there is no gcc on this machine, so the
+race gate runs in CI only.
 
 Env vars: full table in [ops/README.md](../ops/README.md) §5. External services: **none** — no
 Postgres, no Redis, no NATS, no cloud account. `backend/go.mod` has zero `require` lines.
@@ -116,15 +118,20 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 | File | Why |
 |---|---|
 | `cmd/control-plane/main.go` (1667) | biggest file, ~30 routes, **zero tests** |
-| `internal/store/store.go` (1158) | the durable record for everything, **zero direct tests** |
+| `internal/store/store.go` (1170) | the durable record for everything; only the **device** table has tests (`store_test.go`, W10-a) |
 | `internal/escalation/engine.go` (1125) | decides whether a human is woken, **zero tests** |
 | `cmd/realtime-gw/main.go` (1034) | hand-written WebSocket framing + backpressure, **zero tests** |
 | `cmd/sos-ingest/main.go` | **963/1000 LOC** — CI Gate 4 fails past 1000 (ADR-002) |
 | `src/state/store.ts` (2606) | consumed by 21 files; owns bootstrap and the L0 floor |
 | `src/t0/triggerRouter.ts` (999) | cancel window, PIN compare, 500 ms budget — only the *generated* table is tested |
 
-`internal/{store,bus,wal,escalation,notify,consent}` plus all three of `control-plane`,
-`realtime-gw`, `canary` — roughly **6,000 LOC with no direct tests**.
+`internal/{bus,wal,escalation,consent}` plus all three of `control-plane`, `realtime-gw`, `canary`
+— roughly **5,400 LOC with no direct tests**. `store` and `notify` are now partially covered
+(W10-a); everything they do outside the device table and the FCM fan-out path is still unpinned.
+
+**Env vars added by W10-a:** `KAVACH_FCM_CREDENTIALS` — path to a Google service-account JSON key
+with FCM enabled. Unset is the current normal: the control plane logs `push_not_configured` at WARN
+and every push leg records `KV-NOPUSHCFG`.
 
 ## Known broken
 
