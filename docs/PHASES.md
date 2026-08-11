@@ -19,6 +19,10 @@ CLAIM now fans out over push as well as the socket, and the receiving phone pres
 banner naming the responder instead of a second alarm. What is left is **1.37** (full-screen intent)
 and **1.28** (`showWhenLocked` medical card) — one `Activity` in `modules/kavach-t0/android/`, since
 both are the same native work and `expo-notifications` has no `fullScreenIntent` surface at all.
+**W10-e** followed W10-d on the same day and wrote no feature at all: with W10-c unreachable on this
+machine it spent the session on the coverage debt underneath W9 instead, pinning the escalation
+ladder (1.31) and the timer wheel (1.29) with 40 characterization tests and closing the one gap they
+found (**D-024**, the SMS rung was still billable at `RESOLVING`).
 
 > ⛔ **Two independent blockers, both outside code.**
 > 1. **No Firebase project.** `google-services.json`, an `android.googleServicesFile` line in
@@ -43,12 +47,12 @@ both are the same native work and `expo-notifications` has no `fullScreenIntent`
    ever *scheduled*, so on a force-stopped app on an aggressive OEM nothing resurrects the agent.
    §4.12 names OEM battery managers as risk #3.
 
-**On a machine with no JDK, do these instead** — both fully covered by the nine gates:
-`internal/escalation` is 1,140 lines that decide whether a human is woken and `claim_test.go`
-(W10-d) covers only CLAIM and RELEASE — the ladder, the timer wheel, `FireTimer` claiming and
-two-party resolution are unpinned. Then Phase 2's `policyRepo.byVersion()`: one repo method, and
-without it a six-month-old incident renders under today's rules while labelled with yesterday's
-version.
+**On a machine with no JDK, do these instead** — fully covered by the nine gates. **W10-e did the
+first of them on 11 Aug**: the escalation ladder and the timer wheel are now pinned by 40 new tests
+(`ladder_test.go` 24, `timer_test.go` 16), which found and closed D-024. What is still unpinned in that
+package: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, and the HLC. Then
+Phase 2's `policyRepo.byVersion()`: one repo method, and without it a six-month-old incident
+renders under today's rules while labelled with yesterday's version.
 
 Then the measurement work: T-213 statistically, NFR instrumentation, drills, the four-week soak.
 
@@ -138,9 +142,9 @@ Soak is W13–16: **four weeks, write no new features.**
 | 1.28 | **MedicalCardActivity, `showWhenLocked`** | 🔨 | `app/medical-card.tsx` is a complete card — 21:1 contrast, tap-to-call ICE, keep-awake. But it is a **React route inside the app**, so a stranger holding a locked phone cannot reach it. The single most important property of this screen is the missing one |
 
 ### W9 — Escalation engine ✅ (two gaps)
-| 1.29 | Durable timer rows, N workers, atomic claim, no leader | ✅ | `internal/escalation/engine.go` — the header refuses `time.AfterFunc` explicitly |
+| 1.29 | Durable timer rows, N workers, atomic claim, no leader | ✅ | `internal/escalation/engine.go` — the header refuses `time.AfterFunc` explicitly. **Pinned by `timer_test.go` (W10-e, 11 Aug):** claim exclusivity on both the transactional and the optimistic path, fire order, batch limit, the 60 s overdue P0 page (§2.11.5), re-arm-then-abandon, adaptive poll |
 | 1.30 | LISTEN/NOTIFY + adaptive poll | 🔨 | In-process bus wake + polling. Semantics hold; the Postgres mechanism does not exist |
-| 1.31 | Ladder L1→L2→L3 as data | ✅ | `engine.go` + `src/core/policy.ts` |
+| 1.31 | Ladder L1→L2→L3 as data | ✅ | `engine.go` + `src/core/policy.ts`. **Pinned by `ladder_test.go` (W10-e):** what `OnIncidentOpen` arms per entry state, every rung's tier/channels/state guard, `Ladder()` matching the timers actually armed, L3 anchored at L1 entry, terminal-and-merged disarm, F-02 auto-quiesce, the P-030 watchdog reclaim, t3 stamped once. Found **D-024** — the SMS rung was still billable at `RESOLVING` |
 | 1.32 | CLAIM / RELEASE broadcast over **both** WS and push | ⛔ | **Code complete both ends, exit criterion unmeetable.** Landed 11 Aug (W10-d). `Claim()` now calls `notifyStep` with WS+FCM+APNs+PushKit and no billable channel, so §2.6.4's "both channels simultaneously" is built rather than described. F-21 grew by two fields to make it expressible — `kind` and `ownerShortName` (D-022) — and the device presents `claimed` as a persistent quiet banner on a fourth channel (D-023) instead of a second alarm. Both the socket and push paths compose through one `notifyOwnership()`. `internal/escalation` got its first tests: `claim_test.go`, 6 characterization + 4 requirement. ⛔ for the same reason as 1.35e — no handset has received one (1.35d) |
 | 1.33–1.34 | Progress watchdog 5 min, auto-quiesce 6 h, `/internal/active-incidents` excludes drills | ✅ | `afterS: 300` / `afterS: 21600` in the YAML; F-02 honoured |
 
@@ -384,6 +388,8 @@ Building them means writing ADRs that overturn prior ones, not just adding scree
 - One phase per session. Past ~8 files, split the row.
 - 🔨 → ✅ requires the demoable outcome demonstrated, not the code compiling — plus §3.8's nine-point
   Definition of Done, of which items 2–5 are a **physical-device checklist** no CI can fake.
-- Anything touching `internal/{store,bus,wal,escalation}` or `cmd/{control-plane,realtime-gw}` needs
-  a characterization test first — ~6,000 lines there have no direct tests ([RISK.md](RISK.md) §4).
+- Anything touching `internal/{bus,wal,consent}` or `cmd/{control-plane,realtime-gw,canary}` needs
+  a characterization test first — ~4,300 lines there still have no direct tests
+  ([RISK.md](RISK.md) §4). `store`, `notify` and `escalation` are partially pinned; the rule applies
+  to the parts of them that are not.
 - `sos-ingest` has **37 lines of headroom** (963/1000). Budget removals before additions.

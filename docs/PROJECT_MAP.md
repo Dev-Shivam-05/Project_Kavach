@@ -16,10 +16,11 @@ Status board: [PHASES.md](PHASES.md) · Risks: [RISK.md](RISK.md) · History: [h
 | run stack | `docker compose -f ops/docker-compose.yml up --build -d` | root |
 | release APK | `npx eas build --platform android --profile preview` | `mobile/` |
 
-**Verified green 2026-08-11 (after W10-d):** `go build` ✅ · `go vet ./...` ✅ · `go test ./...` ✅ ·
-`archlint` ✅ (14 packages, 36 edges) · `tsc --noEmit` ✅ · `npm test` **165/165** ✅ · `gen:check` in
-sync (14 states · 20 events · 35 transitions · 16 fixtures) · `schema-lint` ✅ · `protolint` ✅ ·
-`TestLOCBudget` **963/1000**.
+**Verified green 2026-08-11 (after W10-e):** `go build` ✅ · `go vet ./...` ✅ · `go test ./...` ✅
+(`internal/escalation` **68 cases**) · `archlint` ✅ (14 packages, 42 edges — it counts test files
+too, so the 36 recorded after W10-d became 42 when W10-e added two) · `tsc --noEmit` ✅ ·
+`npm test` **165/165** ✅ · `gen:check` in sync (14 states · 20 events · 35 transitions · 16
+fixtures) · `schema-lint` ✅ · `protolint` ✅ · `logx` deny-list ✅ · `TestLOCBudget` **963/1000**.
 `go test -race` needs `CGO_ENABLED=1` **and a C compiler**; there is no gcc on this machine, so the
 race gate runs in CI only.
 
@@ -126,16 +127,17 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 |---|---|
 | `cmd/control-plane/main.go` (1667) | biggest file, ~30 routes, **zero tests** |
 | `internal/store/store.go` (1170) | the durable record for everything; only the **device** table has tests (`store_test.go`, W10-a) |
-| `internal/escalation/engine.go` (1140) | decides whether a human is woken. Only CLAIM and RELEASE are covered (`claim_test.go`, W10-d); the ladder, the timer wheel and the two-party resolution are still unpinned |
+| `internal/escalation/engine.go` (1140) | decides whether a human is woken. CLAIM/RELEASE (`claim_test.go`, W10-d), the ladder and the timer wheel (`ladder_test.go` + `timer_test.go`, W10-e) are covered. Still unpinned: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, the HLC |
 | `cmd/realtime-gw/main.go` (1034) | hand-written WebSocket framing + backpressure, **zero tests** |
 | `cmd/sos-ingest/main.go` | **963/1000 LOC** — CI Gate 4 fails past 1000 (ADR-002) |
 | `src/state/store.ts` (2606) | consumed by 21 files; owns bootstrap and the L0 floor |
 | `src/t0/triggerRouter.ts` (999) | cancel window, PIN compare, 500 ms budget — only the *generated* table is tested |
 
 `internal/{bus,wal,consent}` plus all three of `control-plane`, `realtime-gw`, `canary` — roughly
-**5,400 LOC with no direct tests**. `store` and `notify` are partially covered (W10-a) and
-`escalation` got its first tests in W10-d; everything those three do outside the device table, the
-FCM fan-out path and the CLAIM/RELEASE transitions is still unpinned.
+**4,300 LOC with no direct tests**. `store` and `notify` are partially covered (W10-a) and
+`escalation` is now the best-covered package in the backend (W10-d + W10-e, 68 cases); everything
+those three do outside the device table, the FCM fan-out path, and the ladder / wheel / ownership
+transitions is still unpinned.
 
 **Env vars added by W10-a:** `KAVACH_FCM_CREDENTIALS` — path to a Google service-account JSON key
 with FCM enabled. Unset is the current normal: the control plane logs `push_not_configured` at WARN

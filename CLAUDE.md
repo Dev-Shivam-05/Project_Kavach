@@ -67,11 +67,19 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 - **`notify.Fanout` rebuilds `Step` by hand for the neighbour feed** (the `reduced` loop in
   `notify.go`). A field you add to `Step` and do not name there is silently dropped — for neighbours
   only, so every test on the main path still passes. Add the field *and* a neighbour-leg test.
-- `internal/{bus,wal}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**;
-  `internal/{store,escalation}` have one test file each covering one seam (device table, W10-a ·
-  CLAIM/RELEASE, W10-d) and nothing else. Characterize current behaviour in a test *before*
-  changing any of them. The shape that works: pin what the code already does, run it green, then
-  add the new expectation and show it red before you make it pass.
+- `internal/{bus,wal,consent}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**;
+  `internal/store` has one test file covering one seam (the device table, W10-a). `internal/notify`
+  and `internal/escalation` are the covered ones — escalation has 68 cases over CLAIM/RELEASE
+  (W10-d), the ladder and the timer wheel (W10-e), and still nothing on `Cancel`, `Ack`, `OnScene`,
+  `Resolve` or the HLC. Characterize current behaviour in a test *before* changing any of it. The
+  shape that works: pin what the code already does, run it green, then add the new expectation and
+  show it red before you make it pass. It is also how gaps get found — W10-e's characterization
+  pass is what surfaced D-024.
+- **`cancelTimers` cannot cancel a timer a worker already holds.** It only rewrites rows still
+  marked `pending`, and a claimed row is `fired`. The state guard at the top of each `execute`
+  branch is the *only* thing standing between an in-flight rung and a family woken (or billed) for
+  an incident that has already moved on. Add a state to the machine, and every one of those guards
+  is a place you must decide about.
 
 ## Do not "fix" these
 

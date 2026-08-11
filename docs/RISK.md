@@ -36,17 +36,22 @@ sufficient on its own — see PHASES 1.35d for all four steps.
 
 ## S2 — will make a change unverifiable
 
-**4. ~5,400 LOC of backend has no direct tests.**
-`internal/{bus,wal,escalation,consent}` and all of `control-plane`, `realtime-gw`, `canary` — the
-append-only log, the escalation ladder that decides whether a human is woken, and a hand-written
-WebSocket frame codec. **Characterize before you change**: write a test asserting current behaviour,
-then change it and watch the test fail deliberately.
+**4. ~4,300 LOC of backend has no direct tests.**
+`internal/{bus,wal,consent}` and all of `control-plane`, `realtime-gw`, `canary` — the append-only
+log, the durable stream every plane hangs off, and a hand-written WebSocket frame codec.
+**Characterize before you change**: write a test asserting current behaviour, then change it and
+watch the test fail deliberately.
 
 `internal/store` and `internal/notify` came off this list on 11 Aug (W10-a): `store_test.go` pins
 the device table's disk contract against `migrations/0001_init.sql`, tenancy-on-write and
 by-value row copies; `fcm_test.go` pins fan-out's audience rules and every FCM delivery outcome.
-Both were written **before** the change they guarded and shown failing first. Neither package is
-comprehensively covered — only the paths W10 touched are.
+`internal/escalation` came off it the same day: `claim_test.go` (W10-d) pins CLAIM and RELEASE,
+and `ladder_test.go` + `timer_test.go` (W10-e) pin the rungs and the timer wheel — 68 tests over
+the 1,140 lines that decide whether a human is woken. All were written **before** the change they
+guarded and shown failing first. No package here is comprehensively covered — `escalation`'s
+`Cancel` (including the duress twin), `Ack`, `OnScene`, two-party `Resolve` and the HLC still have
+nothing, and `Reescalate` is touched by exactly one assertion about its `Kind`. The recipe above is
+what found D-024, in the part of the file that *was* being read closely.
 
 **5. The project has no linter and no static analysis.**
 No ESLint, Prettier, semgrep or textlint config exists. `tsc --noEmit`, `go vet` and staticcheck are

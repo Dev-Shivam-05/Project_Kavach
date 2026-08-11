@@ -325,3 +325,24 @@ which cannot be verified from this checkout — and its failure mode is a phone 
 Two calls, no assumptions.
 **Cost.** The family can mute this channel independently in Android settings. That is the correct
 trade: it is the one Kavach channel that carries no emergency.
+
+## D-024 — The SMS rung's state guard covers RESOLVING too
+
+**Decision.** `execute`'s `ActionSMSTier` branch now skips `RESOLVING` alongside `PENDING` and
+`OWNED`. One line in `internal/escalation/engine.go`, found by writing the characterization tests
+for the ladder (W10-e) rather than by reading the code.
+**Why it was reachable at all.** `cancelTimers` only touches rows still marked `pending`. A rung a
+worker has already claimed is marked `fired`, so CLAIM and ON_SCENE cancel everything *except* the
+timer that is in a worker's hands at that instant. The state guard at the top of each branch is the
+second line of defence, and it is the only one that applies to a rung already in flight.
+**Why it matters.** `RESOLVING` means the owner has physically arrived and only the second party's
+confirmation is outstanding — further along than `OWNED`, which was already guarded. The rung would
+have spent a billable A2P message, out of a per-family budget (1.49, `DefaultSMSCeiling`), to
+escalate an incident somebody is standing over. That is the same trade `Claim()` already refuses
+when it declines to broadcast ownership over SMS.
+**Scope, stated honestly.** The window is narrow: the timer must have been claimed in the seconds
+between the ladder running and the owner arriving. It is not a bug anyone would have hit this month.
+It is in a file that decides whether a human is woken, so it is fixed with a test that was shown
+failing first, not left as a comment.
+**Evidence.** `internal/escalation/ladder_test.go` —
+`TestAnInFlightSMSRungIsNotBilledOnceTheOwnerIsOnScene`, red at `187d3110`, green at `d3e7751b`.
