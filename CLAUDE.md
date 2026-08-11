@@ -64,8 +64,11 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 - The four generated files (`stateMachine.generated.ts`, `machine_gen.go`, `machine_gen_test.go`,
   `__generated__/fixtures.json`) — **never hand-edit.** Change `spec/state-machine.yaml`, `npm run gen`.
 - `proto/incident.proto` — additive only; field numbers are frozen (`tools/protolint.mjs`, Gate 9).
-- `internal/{store,bus,wal,escalation}` and `cmd/{control-plane,realtime-gw,canary}` have **zero
-  tests**. Characterize current behaviour in a test *before* changing them.
+- `internal/{bus,wal}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**;
+  `internal/{store,escalation}` have one test file each covering one seam (device table, W10-a ·
+  CLAIM/RELEASE, W10-d) and nothing else. Characterize current behaviour in a test *before*
+  changing any of them. The shape that works: pin what the code already does, run it green, then
+  add the new expectation and show it red before you make it pass.
 
 ## Do not "fix" these
 

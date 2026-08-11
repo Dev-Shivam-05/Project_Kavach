@@ -281,3 +281,47 @@ including a wiring test that fails if `defineTask` ever moves out of module scop
 of what could honestly be finished without hardware.
 **Blocker owner: the user.** W10-c needs a workstation that can build the app, and 1.35d still needs
 the Firebase project.
+
+## D-022 — F-21's five lock-screen-safe fields become seven
+
+**Decision.** The data-only push payload gains `kind` (`alert | claimed | released`) and
+`ownerShortName`. `docs/02` §2.6.3 is updated; `assertPushSafe` and `readPushFields` are both
+widened by exactly these two names and nothing else.
+**Why.** §2.6.4 has always said "fan-out of CLAIM goes over BOTH channels simultaneously — never
+rely on only one; a backgrounded device may have no WS." That requirement was unbuildable against
+the original five, because the payload could not say *what it was about*: a CLAIM delivered over
+push would have been parsed as a fresh emergency and rung the MAX/bypassDnd alarm channel at the
+exact moment the design says to stop ringing. The alternative — leave CLAIM socket-only — abandons
+the requirement for the one device it exists to serve, the one with its app closed.
+**Why `ownerShortName` and not just `kind`.** §2.6.4 writes the copy: "Rohan is responding. Stand
+by." Without a name the banner reads "Someone is responding", which is precisely the diffusion of
+responsibility P-003 exists to convert into a person. It is the same class of string as
+`subjectShortName`, gets the same ASCII ≤8 clamp, and is emitted **only** on a claim — a family
+member's name on a stranger's lock screen for a rung that does not use it is a leak with no benefit.
+**Why this does not weaken F-01.** A claim happens identically on duress and non-duress incidents,
+so neither field narrows what an observer can infer about the duress bit. `duress` remains outside
+the allowlist and remains asserted on both sides of the wire.
+**Fail-safe direction, stated.** Unknown `kind` ⇒ `alert` on the server (`Kind.wire()`) and again on
+the device (`asKind`). A claim mistakenly presented as an alert costs one wasted siren; an alert
+mistakenly presented as a quiet banner costs the alert.
+**Evidence.** `backend/internal/notify/fcm_test.go` — an alert payload is still exactly the five
+plus `kind: "alert"` and carries no owner name; `mobile/test/push-receive.test.ts` — a claim with
+`duress`/`lat`/`note` attached presents none of them.
+
+## D-023 — The ownership banner gets its own Android channel
+
+**Decision.** A fourth channel, `kavach-ownership`: DEFAULT importance, `sound: null`, no vibration,
+`bypassDnd: false`, `lockscreenVisibility: PUBLIC`, posted sticky under `kavach.ownership.<id>`
+after the emergency notification is dismissed.
+**Why not an existing channel.** P-030 correction 1 asks for three things at once — quiet,
+persistent, and readable on a lock screen. `kavach-emergency` is MAX + bypassDnd + alarm stream, so
+it rings; that is its entire purpose and must not be softened. `kavach-health` is `PRIVATE`, so
+"Rohan is responding" renders as "Notification" to the person deciding whether to grab their keys.
+Android does not allow an existing channel's importance or lock-screen visibility to be changed
+after creation, so retuning one is not an option on any handset that already has it.
+**Why dismiss-then-post rather than replace in place.** Re-posting the same identifier on a
+different channel to get "siren → banner" depends on Android's cross-channel replacement behaviour,
+which cannot be verified from this checkout — and its failure mode is a phone that keeps screaming.
+Two calls, no assumptions.
+**Cost.** The family can mute this channel independently in Android settings. That is the correct
+trade: it is the one Kavach channel that carries no emergency.

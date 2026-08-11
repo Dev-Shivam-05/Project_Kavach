@@ -8,12 +8,19 @@
  * to both companies and to anyone standing near the phone. So the remote push
  * this app expects is DATA-ONLY, Class B/C exclusively:
  *
- *     { incidentId, familyId, trigger, tier, subjectShortName }
+ *     { incidentId, familyId, trigger, tier, subjectShortName,
+ *       kind, ownerShortName }
  *
  * Nothing else. No location, no note, no medical detail, no name beyond the
- * ASCII short name, and — deliberately — NO DURESS FLAG (F-01: the duress bit
+ * ASCII short names, and — deliberately — NO DURESS FLAG (F-01: the duress bit
  * must not be inferable from anything that leaves the device, and a push payload
  * is a side channel like any other).
+ *
+ * The last two arrived with W10-d · 1.32, when CLAIM began fanning out over push
+ * as §2.6.4 requires. They are what "Rohan is responding. Stand by." is made of,
+ * and without them a claim would be indistinguishable from a fresh emergency —
+ * the receiving phone would ring at the exact moment the design says to stop.
+ * A claim is not inferable from duress either: it happens identically on both.
  *
  * ★ THIS FILE IS WHERE THE HUMAN-READABLE TEXT IS BORN. ★ Every string below is
  * composed on-device from group-decrypted state and presented as a LOCAL
@@ -438,14 +445,14 @@ function scenarioLabel(trigger: TriggerType): string {
 }
 
 /**
- * ★ THE ALERT CONTRACT — the five lock-screen-safe fields and nothing else. ★
+ * ★ THE ALERT CONTRACT — the lock-screen-safe fields and nothing else. ★
  *
- * Exactly what a remote data-only push is permitted to carry (F-21), which is
- * why both paths into `presentIncidentAlert` below take THIS and not an
- * `Incident`: the socket path holds a full decrypted incident and the push path
- * holds five strings, and the alert a family sees must not depend on which one
- * woke the phone. Anything the push cannot carry is therefore something the
- * alert must not use.
+ * The subset of the F-21 payload an ALERT is composed from, which is why both
+ * paths into `presentIncidentAlert` below take THIS and not an `Incident`: the
+ * socket path holds a full decrypted incident and the push path holds a handful
+ * of strings, and the alert a family sees must not depend on which one woke the
+ * phone. Anything the push cannot carry is therefore something the alert must
+ * not use. (`OwnershipAlertFields` is the same arrangement for a CLAIM.)
  *
  * Note what is absent and stays absent: location, the sealed note, the medical
  * card, and the duress flag (F-01).

@@ -16,9 +16,10 @@ Status board: [PHASES.md](PHASES.md) · Risks: [RISK.md](RISK.md) · History: [h
 | run stack | `docker compose -f ops/docker-compose.yml up --build -d` | root |
 | release APK | `npx eas build --platform android --profile preview` | `mobile/` |
 
-**Verified green 2026-08-11 (after W10-b):** `go build` ✅ · `go vet ./...` ✅ · `go test ./...` ✅ ·
-`tsc --noEmit` ✅ · `npm test` **158/158** ✅ · `gen:check` in sync (14 states · 20 events ·
-35 transitions · 16 fixtures) · `schema-lint` ✅ · `protolint` ✅ · `TestLOCBudget` **963/1000**.
+**Verified green 2026-08-11 (after W10-d):** `go build` ✅ · `go vet ./...` ✅ · `go test ./...` ✅ ·
+`archlint` ✅ (14 packages, 36 edges) · `tsc --noEmit` ✅ · `npm test` **165/165** ✅ · `gen:check` in
+sync (14 states · 20 events · 35 transitions · 16 fixtures) · `schema-lint` ✅ · `protolint` ✅ ·
+`TestLOCBudget` **963/1000**.
 `go test -race` needs `CGO_ENABLED=1` **and a C compiler**; there is no gcc on this machine, so the
 race gate runs in CI only.
 
@@ -125,27 +126,39 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 |---|---|
 | `cmd/control-plane/main.go` (1667) | biggest file, ~30 routes, **zero tests** |
 | `internal/store/store.go` (1170) | the durable record for everything; only the **device** table has tests (`store_test.go`, W10-a) |
-| `internal/escalation/engine.go` (1125) | decides whether a human is woken, **zero tests** |
+| `internal/escalation/engine.go` (1140) | decides whether a human is woken. Only CLAIM and RELEASE are covered (`claim_test.go`, W10-d); the ladder, the timer wheel and the two-party resolution are still unpinned |
 | `cmd/realtime-gw/main.go` (1034) | hand-written WebSocket framing + backpressure, **zero tests** |
 | `cmd/sos-ingest/main.go` | **963/1000 LOC** — CI Gate 4 fails past 1000 (ADR-002) |
 | `src/state/store.ts` (2606) | consumed by 21 files; owns bootstrap and the L0 floor |
 | `src/t0/triggerRouter.ts` (999) | cancel window, PIN compare, 500 ms budget — only the *generated* table is tested |
 
-`internal/{bus,wal,escalation,consent}` plus all three of `control-plane`, `realtime-gw`, `canary`
-— roughly **5,400 LOC with no direct tests**. `store` and `notify` are now partially covered
-(W10-a); everything they do outside the device table and the FCM fan-out path is still unpinned.
+`internal/{bus,wal,consent}` plus all three of `control-plane`, `realtime-gw`, `canary` — roughly
+**5,400 LOC with no direct tests**. `store` and `notify` are partially covered (W10-a) and
+`escalation` got its first tests in W10-d; everything those three do outside the device table, the
+FCM fan-out path and the CLAIM/RELEASE transitions is still unpinned.
 
 **Env vars added by W10-a:** `KAVACH_FCM_CREDENTIALS` — path to a Google service-account JSON key
 with FCM enabled. Unset is the current normal: the control plane logs `push_not_configured` at WARN
 and every push leg records `KV-NOPUSHCFG`.
 
-**The push path, end to end (W10-a + W10-b).** Server: `internal/notify/fcm.go` (FCM HTTP v1,
-stdlib only) ← `notify.go pushPayload()` (the safe five) ← `Device.push_token_fcm`. Device:
+**The push path, end to end (W10-a + W10-b + W10-d).** Server: `internal/notify/fcm.go` (FCM HTTP v1,
+stdlib only) ← `notify.go pushPayload()` (the F-21 safe set) ← `Device.push_token_fcm`. Device:
 `src/state/notifications.ts acquireDevicePushToken()` registers the **native** FCM token, and
 `src/state/pushReceive.ts` defines the `kavach.push.incident` background task **in module scope**,
 imported by `mobile/index.ts` *before* `expo-router/entry` — order is load-bearing, see the file
 header. Both `notifyIncident()` (socket) and `notifyIncidentFromPush()` (FCM) compose through one
 `presentIncidentAlert()`, so the two paths cannot tell the family different stories.
+
+**What a push says (F-21, seven fields since W10-d).** `incidentId · familyId · trigger · tier ·
+subjectShortName · kind · ownerShortName`. `kind` is `alert | claimed | released`; anything
+unrecognised degrades to `alert` on **both** sides (`Kind.wire()` in `notify.go`, `asKind()` in
+`pushReceive.ts`) because a claim shown as an alert costs a wasted siren and the reverse costs the
+alert. `ownerShortName` rides claims only. The allowlist is enforced twice, fail-closed:
+`assertPushSafe` (server) and `readPushFields` (device). Adding a field means editing `docs/02`
+§2.6.3, both allowlists, and D-022 — not just the sender. **A CLAIM presents through
+`notifyOwnership()` / `presentOwnershipBanner()` on a fourth channel, `kavach-ownership`** (quiet,
+sticky, PUBLIC on the lock screen — D-023), and the socket path at `store.ts reactToOwnState` /
+`reactToRemoteState` routes through the same composer.
 
 ## Known broken
 

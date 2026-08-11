@@ -102,9 +102,10 @@ type Device struct {
 	// last working leg to another human is SMS (W10).
 	//
 	// Class B. What travels on this channel is constrained by F-21 to the
-	// lock-screen-safe five (incidentId, familyId, trigger, tier,
-	// subjectShortName) — the token decides WHERE the alert goes, never WHAT it
-	// says. Empty is the honest normal state: an iOS device, a node phone, or an
+	// lock-screen-safe set (incidentId, familyId, trigger, tier,
+	// subjectShortName, kind, ownerShortName) — the token decides WHERE the alert
+	// goes, never WHAT it says. Empty is the honest normal state: an iOS device,
+	// a node phone, or an
 	// Android that has not yet been granted POST_NOTIFICATIONS.
 	PushTokenFCM    string `json:"push_token_fcm"`
 	LastHeartbeatAt int64  `json:"last_heartbeat_at"`
