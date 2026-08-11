@@ -528,16 +528,18 @@ func TestTimerRowsCrossTheBoundaryByValue(t *testing.T) {
 // flips pending → cancelled and writes it straight back, so a guard here would
 // have to allow that edge. And it is dangerous in the other: `sos-ingest`'s
 // `armTimers` (main.go:1019) builds its IDs deterministically as
-// `incident|state|action` and is called from `projectOpen`, which the
-// at-least-once bus (1.4) may run more than once for the same record, and which
-// F-04 coalescing routes a second SOS into as well. Each such re-run rewrites
-// that incident's rungs for its CURRENT state back to pending with the ORIGINAL
-// fire_at — already in the past — and attempts back to 0.
+// `incident|state|action`, and `projectOpen` calls it for an incident that
+// ALREADY EXISTS without advancing its state. Bus redelivery is not the way in —
+// `project()` dedupes on (incident, hlc) at main.go:882 — but F-04 coalescing
+// is: the 4th unverified open from a family inside 60 s is rewritten onto the
+// FIRST incident's id carrying its own fresh hlc, so it passes both dedupes and
+// re-arms that incident's current rungs, with `base` taken from a
+// `ServerReceivedAt` that line 942 has just moved forward.
 //
 // This test does not claim that path fires; it pins the store half that would
 // let it, so the day somebody guards PutTimer they find out here which caller
-// they broke. The sos-ingest half is unproven and belongs in a test of its own
-// (cmd/sos-ingest has zero tests, RISK.md §4).
+// they broke. The sos-ingest half is read, not proven, and belongs in a test of
+// its own (cmd/sos-ingest has zero tests, RISK.md §4).
 func TestPutTimerHasNoStateGuardAndOverwritesAClaimedRow(t *testing.T) {
 	s := openWithTimers(t)
 	mustPut(t, s, sampleTimer("t-1"))

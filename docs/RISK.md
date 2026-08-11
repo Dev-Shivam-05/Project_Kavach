@@ -34,17 +34,39 @@ delivery matrix says "unreachable by push" and nothing else complains, so a buil
 gate, install cleanly, and never be addressable. Dropping the JSON file into the repo is not
 sufficient on its own — see PHASES 1.35d for all four steps.
 
+**15. A repeated SOS can re-arm an escalation ladder that has already climbed.** *(added 11 Aug,
+W10-f. Numbered 15 for the same reason 14 was.)*
+`sos-ingest.armTimers` (`main.go:1019`) builds each rung's id as `incident|state|action`, and
+`projectOpen` calls it for an incident that **already exists** without advancing its state. `PutTimer`
+is a blind upsert with no state guard, so a second open record on a live incident rewrites the rungs
+armed for its current state back to `pending`, zeroes `fired_at` and `attempts`, and recomputes
+`fire_at` from the `ServerReceivedAt` that `main.go:942` has just moved forward. Two consequences,
+opposite in direction: **a rung that already fired can fire again**, and **a rung still pending has
+its deadline pushed out**, so pressing SOS repeatedly *delays* the ladder. The way in is F-04
+coalescing — past `floodThreshold` an unverified open is rewritten onto the first incident's id while
+keeping its own HLC, which passes both the request-path (`markSeen`) and projector (`projSeen`)
+dedupes. ADR-018 makes "unverified" the likely state during a stale key cache.
+**Confidence, stated plainly:** the store half is pinned by a passing test
+(`internal/store/timer_test.go` — `TestPutTimerHasNoStateGuardAndOverwritesAClaimedRow`); **the
+sos-ingest half is read, not executed.** Nothing in this repo demonstrates the double-fire end to
+end. Fix location and the reason it was not done in W10-f: [DECISIONS.md](DECISIONS.md) D-025.
+
 ## S2 — will make a change unverifiable
 
 **4. ~4,300 LOC of backend has no direct tests.**
 `internal/{bus,wal,consent}` and all of `control-plane`, `realtime-gw`, `canary` — the append-only
 log, the durable stream every plane hangs off, and a hand-written WebSocket frame codec.
+`cmd/sos-ingest` belongs on this list too: its only test file asserts the **LOC budget**, not a line
+of its behaviour, and item 15 above is what that costs.
 **Characterize before you change**: write a test asserting current behaviour, then change it and
 watch the test fail deliberately.
 
 `internal/store` and `internal/notify` came off this list on 11 Aug (W10-a): `store_test.go` pins
 the device table's disk contract against `migrations/0001_init.sql`, tenancy-on-write and
 by-value row copies; `fcm_test.go` pins fan-out's audience rules and every FCM delivery outcome.
+`store` gained its second seam the same day (W10-f): `timer_test.go` pins the escalation_timer row
+and `FireTimer` — the atomic claim `engine.claim()` is one line of, and which until then was
+exercised only against a double in the escalation package.
 `internal/escalation` came off it the same day: `claim_test.go` (W10-d) pins CLAIM and RELEASE,
 and `ladder_test.go` + `timer_test.go` (W10-e) pin the rungs and the timer wheel — 68 tests over
 the 1,140 lines that decide whether a human is woken. All were written **before** the change they

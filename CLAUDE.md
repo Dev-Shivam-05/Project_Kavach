@@ -67,8 +67,10 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 - **`notify.Fanout` rebuilds `Step` by hand for the neighbour feed** (the `reduced` loop in
   `notify.go`). A field you add to `Step` and do not name there is silently dropped — for neighbours
   only, so every test on the main path still passes. Add the field *and* a neighbour-leg test.
-- `internal/{bus,wal,consent}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**;
-  `internal/store` has one test file covering one seam (the device table, W10-a). `internal/notify`
+- `internal/{bus,wal,consent}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**, and
+  `cmd/sos-ingest` has one that asserts its LOC budget and no behaviour;
+  `internal/store` covers two seams (the device table, W10-a; the escalation_timer row and
+  `FireTimer`, W10-f) out of eleven tables. `internal/notify`
   and `internal/escalation` are the covered ones — escalation has 68 cases over CLAIM/RELEASE
   (W10-d), the ladder and the timer wheel (W10-e), and still nothing on `Cancel`, `Ack`, `OnScene`,
   `Resolve` or the HLC. Characterize current behaviour in a test *before* changing any of it. The
@@ -80,6 +82,11 @@ directive above it, and read the actual `npm run typecheck` output before claimi
   branch is the *only* thing standing between an in-flight rung and a family woken (or billed) for
   an incident that has already moved on. Add a state to the machine, and every one of those guards
   is a place you must decide about.
+- **`store.PutTimer` is a blind upsert — `*old = t`, no guard on the row's current state.** Writing
+  a timer id that already exists resets `state` to `pending` and zeroes `fired_at` and `attempts`.
+  `engine.cancelTimers` depends on that (read, flip, write back); `sos-ingest.armTimers` is bitten
+  by it, because its ids are `incident|state|action` and `projectOpen` re-arms an incident that
+  already exists (D-025, RISK 15). Do not add a guard here without reading both callers.
 
 ## Do not "fix" these
 

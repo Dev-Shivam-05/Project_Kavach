@@ -346,3 +346,34 @@ It is in a file that decides whether a human is woken, so it is fixed with a tes
 failing first, not left as a comment.
 **Evidence.** `internal/escalation/ladder_test.go` —
 `TestAnInFlightSMSRungIsNotBilledOnceTheOwnerIsOnScene`, red at `187d3110`, green at `d3e7751b`.
+
+## D-025 — `PutTimer` stays a blind upsert; the ladder-reset hole is recorded, not patched
+
+**Decision.** W10-f pinned `store.PutTimer`'s current behaviour — `*old = t`, every column, no guard
+on the row's current state — in
+`TestPutTimerHasNoStateGuardAndOverwritesAClaimedRow`, and **did not change it**. The related
+finding in `sos-ingest.armTimers` is written down (RISK item 15, PHASES) and left unfixed.
+**What the hole is.** `armTimers` (`cmd/sos-ingest/main.go:1019`) derives each rung's id
+deterministically as `incident|state|action`, and `projectOpen` calls it for an incident that
+**already exists** without advancing that incident's state. So a second open record on an existing
+incident rewrites the rungs already armed for its current state: `state` back to `pending`,
+`fired_at` and `attempts` back to 0, and `fire_at` recomputed from a `ServerReceivedAt` that
+`main.go:942` has just moved forward. A rung that already fired can fire again; a rung still pending
+has its deadline pushed out — a repeated SOS **delays** the ladder.
+**How it is reachable.** Not by bus redelivery — `project()` dedupes on `(incident, hlc)` at
+`main.go:882`, and `markSeen` does the same on the request path. The way in is **F-04 coalescing**:
+past `floodThreshold` the 4th unverified open from a family inside 60 s is rewritten onto the *first*
+incident's id while carrying its **own** fresh HLC, so it passes both dedupes and lands in
+`projectOpen` with `exists == true`. ADR-018 makes unverified the *likely* case during a stale key
+cache, and pressing SOS repeatedly is what a frightened person actually does.
+**Why not fixed here.** Three reasons, in order. (1) The fix does not belong in the store: a state
+guard on `PutTimer` would also have to keep `engine.cancelTimers`' read-flip-write working, which
+means encoding escalation's state rules in the persistence layer. It belongs in `armTimers` — arm
+only what is not already on disk for that `(incident, state)`. (2) That file is
+**963/1000 lines** (ADR-002, Gate 4) and `cmd/sos-ingest` has **no behavioural tests at all**; the
+house rule for this repo is the characterization test first, and there is no rig there to hang one
+on. (3) W10-f is a store phase. Absorbing an ingest fix would make it two.
+**Stated honestly.** The store half is proven by a passing test. **The sos-ingest half is read, not
+executed** — no test in this repo demonstrates the double-fire end to end, and the severity above is
+an inference from four call sites, not a measurement. Proving or disproving it is the next phase,
+and it is the first behavioural test `cmd/sos-ingest` would ever have.
