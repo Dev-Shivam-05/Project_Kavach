@@ -49,6 +49,18 @@ import type { Incident, Member, TriggerType, UUID } from '../core/types';
 export const CHANNEL_EMERGENCY = 'kavach-emergency';
 export const CHANNEL_PROBE = 'kavach-probe';
 export const CHANNEL_HEALTH = 'kavach-health';
+/**
+ * ★ W10-d · 1.32 — the channel a CLAIM lands on. ★
+ * P-030 correction 1: when somebody claims, every other phone goes siren →
+ * *persistent quiet banner*, and explicitly NOT silence. That is three
+ * requirements no existing channel meets at once — the emergency channel would
+ * ring (it is MAX + bypassDnd + alarm stream, which is its whole point), and the
+ * health channel is PRIVATE on a lock screen, so "Rohan is responding" would
+ * render as "Notification" to the person deciding whether to grab their keys.
+ * On Android an existing channel's importance and visibility cannot be edited
+ * after creation, so this has to be its own id.
+ */
+export const CHANNEL_OWNERSHIP = 'kavach-ownership';
 
 export const CATEGORY_INCIDENT = 'kavach.incident';
 export const CATEGORY_PROBE = 'kavach.probe';
@@ -61,6 +73,7 @@ export const ACTION_PROBE_HELP = 'KAVACH_PROBE_HELP';
 /** Stable, derivable identifiers so a notification can be cleared without a map. */
 const incidentNotificationId = (id: UUID) => `kavach.incident.${id}`;
 const probeNotificationId = (id: UUID) => `kavach.probe.${id}`;
+const ownershipNotificationId = (id: UUID) => `kavach.ownership.${id}`;
 const agentSilentNotificationId = (memberId: UUID) => `kavach.health.agent.${memberId}`;
 const DEGRADED_NOTIFICATION_ID = 'kavach.health.degraded';
 
@@ -76,9 +89,12 @@ export function installNotificationHandler(): void {
   Notifications.setNotificationHandler({
     handleNotification: async (notification) => {
       const id = notification.request.identifier ?? '';
-      const isHealth = id.startsWith('kavach.health.');
+      // Health notices are informational; an ownership banner is the sound
+      // STOPPING (P-030). Neither may make a noise of its own.
+      const isQuiet =
+        id.startsWith('kavach.health.') || id.startsWith('kavach.ownership.');
       return {
-        shouldPlaySound: !isHealth, // health notices are informational, not alarms
+        shouldPlaySound: !isQuiet,
         shouldSetBadge: false, // badges imply an inbox; this is not one
         shouldShowBanner: true,
         shouldShowList: true,
@@ -135,6 +151,24 @@ export async function ensureNotificationChannels(): Promise<void> {
     lockscreenVisibility: AndroidNotificationVisibility.PRIVATE,
     enableVibrate: true,
     vibrationPattern: [0, 120],
+    showBadge: false,
+  });
+
+  await Notifications.setNotificationChannelAsync(CHANNEL_OWNERSHIP, {
+    name: 'Someone is responding',
+    description: 'Quiet updates when a family member takes charge of an emergency.',
+    // DEFAULT, not HIGH: this must appear on the lock screen and in the shade
+    // without taking over the screen. The alert it replaces already did that.
+    importance: AndroidImportance.DEFAULT,
+    bypassDnd: false,
+    sound: null,
+    // PUBLIC for the same reason the emergency channel is: the content is
+    // lock-screen-safe by F-21 (a short name and a trigger class), and the whole
+    // value of this banner is being readable by someone who is deciding right
+    // now whether to pick up their keys.
+    lockscreenVisibility: AndroidNotificationVisibility.PUBLIC,
+    // No vibration. The siren has just stopped; buzzing undoes the message.
+    enableVibrate: false,
     showBadge: false,
   });
 
@@ -518,6 +552,81 @@ export async function notifyIncident(
 }
 
 /**
+ * ★ W10-d · 1.32 — THE OTHER HALF OF THE LADDER: SOMEBODY IS GOING. ★
+ *
+ * §2.6.4 / P-030 correction 1. A CLAIM is the transition this whole coordination
+ * design exists for — it converts "somebody should do something", which is how a
+ * group of people all do nothing, into "Rohan is responding". On every phone
+ * except the owner's it means: stop the siren, and say who.
+ *
+ * ★ Why this DISMISSES the alert instead of re-posting over it. ★ Replacing a
+ * notification with one on a different Android channel is not a behaviour worth
+ * betting a siren on — it cannot be verified from this checkout, and the failure
+ * mode is a phone that keeps screaming. Dismiss, then post: two calls, no
+ * assumptions, and the shade never holds both at once.
+ *
+ * `ownerShortName` empty is a real case, not a bug — a claim can arrive from a
+ * member this device has no name for. `state.OWNED` covers it. It is weaker
+ * copy on purpose rather than a guess at a name.
+ */
+export async function presentOwnershipBanner(f: OwnershipAlertFields): Promise<void> {
+  const short = f.subjectShortName || 'Family';
+  await clearIncident(f.incidentId);
+  await present(ownershipNotificationId(f.incidentId), CHANNEL_OWNERSHIP, {
+    title: `${short}: ${scenarioLabel(f.trigger)}`,
+    body: f.ownerShortName
+      ? t('panic.responding', { name: f.ownerShortName })
+      : t('state.OWNED'),
+    data: {
+      incidentId: f.incidentId,
+      familyId: f.familyId,
+      trigger: f.trigger,
+      // Tapping the banner opens the incident; there is no "I am responding"
+      // action on it, because somebody already is.
+      ownerShortName: f.ownerShortName,
+    },
+    sound: false,
+    interruptionLevel: 'passive',
+    color: '#FF3B30',
+    // Persistent, NOT silence. It stays until the incident resolves and
+    // `clearIncident` takes it down.
+    sticky: true,
+    autoDismiss: false,
+  });
+}
+
+/**
+ * The fields an ownership banner is composed from: the incident's own identity
+ * plus the one name that matters. Same F-21 class as `IncidentAlertFields` —
+ * everything here survives a lock screen.
+ */
+export interface OwnershipAlertFields {
+  incidentId: UUID;
+  familyId: UUID;
+  trigger: TriggerType;
+  subjectShortName: string;
+  ownerShortName: string;
+}
+
+/**
+ * The socket path's ownership banner. Takes the decrypted incident and the two
+ * members, and lands in the same composer the push path uses.
+ */
+export async function notifyOwnership(
+  incident: Incident,
+  subject?: Member | null,
+  owner?: Member | null,
+): Promise<void> {
+  await presentOwnershipBanner({
+    incidentId: incident.id,
+    familyId: incident.familyId,
+    trigger: incident.trigger,
+    subjectShortName: subject?.asciiShortName ?? 'Family',
+    ownerShortName: owner?.asciiShortName ?? '',
+  });
+}
+
+/**
  * ★ W10-b · 1.35e — THE SAME ALERT, WOKEN BY A PUSH INSTEAD OF A SOCKET. ★
  *
  * Called from the headless background task in `pushReceive.ts` when a data-only
@@ -535,6 +644,18 @@ export async function notifyIncidentFromPush(
   fields: Omit<IncidentAlertFields, 'isDrill'>,
 ): Promise<void> {
   await presentIncidentAlert({ ...fields, isDrill: false });
+}
+
+/**
+ * ★ W10-d · 1.32 — a CLAIM that arrived over FCM on a phone with no socket. ★
+ *
+ * This is the case the whole push transport exists for. The device that most
+ * needs to hear "somebody is going" is the one whose app is closed, because it
+ * is the one that cannot be told any other way — and until W10-d the server had
+ * no way to say it, so that phone kept ringing.
+ */
+export async function notifyOwnershipFromPush(f: OwnershipAlertFields): Promise<void> {
+  await presentOwnershipBanner(f);
 }
 
 /**
@@ -595,12 +716,22 @@ export async function notifyDegraded(reason: string): Promise<void> {
 }
 
 /**
- * Clear everything posted for an incident — the alert and any PROBE that
- * preceded it. Called when the incident resolves, is cancelled, or turns out to
- * be a false alarm; a stale emergency banner is its own small betrayal of trust.
+ * Clear everything posted for an incident — the alert, any PROBE that preceded
+ * it, and the ownership banner. Called when the incident resolves, is cancelled,
+ * or turns out to be a false alarm; a stale emergency banner is its own small
+ * betrayal of trust, and "Rohan is responding" left up after Rohan got there is
+ * the same betrayal in a quieter voice.
+ *
+ * Note that `presentOwnershipBanner` calls this too, to take the siren down
+ * before it posts. Clearing an id that is not presented is a no-op, so the
+ * banner's own id being in this list costs nothing on that path.
  */
 export async function clearIncident(id: UUID): Promise<void> {
-  const ids = [incidentNotificationId(id), probeNotificationId(id)];
+  const ids = [
+    incidentNotificationId(id),
+    probeNotificationId(id),
+    ownershipNotificationId(id),
+  ];
   for (const identifier of ids) {
     try {
       await Notifications.dismissNotificationAsync(identifier);

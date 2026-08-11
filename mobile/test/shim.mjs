@@ -62,14 +62,17 @@ const STUB_SOURCE = {
    * Error value is thrown instead (the missing-Firebase-config case).
    */
   'expo-notifications': `
-    export const __state = { token: null, listeners: [], presented: [], channels: [] };
+    export const __state = { token: null, listeners: [], presented: [], channels: [], dismissed: [] };
     export function __setDevicePushToken(v) { __state.token = v; }
     export function __emitPushToken(v) { for (const l of __state.listeners) l(v); }
     export function __listenerCount() { return __state.listeners.length; }
     /** What reached the OS, in order — the assertion surface for the push receive path. */
     export function __presented() { return __state.presented; }
     export function __channelIds() { return __state.channels; }
-    export function __resetPresented() { __state.presented = []; __state.channels = []; }
+    /** What was taken DOWN, in order. "Siren off, banner on" (P-030) is an
+     *  ordering claim, and an ordering claim needs both halves recorded. */
+    export function __dismissed() { return __state.dismissed; }
+    export function __resetPresented() { __state.presented = []; __state.channels = []; __state.dismissed = []; }
     export async function getDevicePushTokenAsync() {
       if (__state.token instanceof Error) throw __state.token;
       return __state.token;
@@ -84,7 +87,7 @@ const STUB_SOURCE = {
     export async function getPermissionsAsync() { return { granted: true, canAskAgain: true }; }
     export async function requestPermissionsAsync() { return { granted: true }; }
     export async function scheduleNotificationAsync(req) { __state.presented.push(req); }
-    export async function dismissNotificationAsync() {}
+    export async function dismissNotificationAsync(id) { __state.dismissed.push(id); }
     export async function cancelScheduledNotificationAsync() {}
     export async function getLastNotificationResponseAsync() { return null; }
     export function addNotificationResponseReceivedListener() { return { remove() {} }; }

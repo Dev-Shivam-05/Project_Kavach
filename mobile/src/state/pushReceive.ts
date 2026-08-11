@@ -20,13 +20,13 @@
  *
  * ★ F-21 / F-01 — WHAT WE ARE WILLING TO BELIEVE ★
  * The payload transited Google. `notifications.ts` explains why the server may
- * only send the lock-screen-safe five; this file is where the client refuses to
+ * only send the lock-screen-safe set; this file is where the client refuses to
  * act on anything else. `readPushFields` is an ALLOWLIST reader, not a cast: it
- * takes five values by name, validates and sanitises each, and drops the rest on
- * the floor. So even a compromised or buggy sender that puts `duress` in the
- * payload cannot get that bit onto a lock screen, into the notification's `data`
- * bag, or into the app — the client half of F-01 does not depend on the server
- * half being correct.
+ * takes the permitted values by name, validates and sanitises each, and drops the
+ * rest on the floor. So even a compromised or buggy sender that puts `duress` in
+ * the payload cannot get that bit onto a lock screen, into the notification's
+ * `data` bag, or into the app — the client half of F-01 does not depend on the
+ * server half being correct.
  *
  * `subjectShortName` gets the strictest treatment because it is the one
  * attacker-influencable string that renders as text on a LOCKED screen: ASCII
@@ -43,7 +43,11 @@
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { DEFAULT_POLICY } from '../core/policy';
-import { ensureNotificationChannels, notifyIncidentFromPush } from './notifications';
+import {
+  ensureNotificationChannels,
+  notifyIncidentFromPush,
+  notifyOwnershipFromPush,
+} from './notifications';
 import type { IncidentAlertFields } from './notifications';
 import type { TriggerType, UUID } from '../core/types';
 
@@ -54,8 +58,25 @@ import type { TriggerType, UUID } from '../core/types';
  */
 export const PUSH_INCIDENT_TASK = 'kavach.push.incident';
 
-/** The five, minus the drill flag the server does not send. */
-export type PushIncidentFields = Omit<IncidentAlertFields, 'isDrill'>;
+/**
+ * What a push may say it is about (W10-d · 1.32). `alert` is the default for a
+ * payload that does not say — including one from a server older than this build.
+ */
+export type PushKind = 'alert' | 'claimed' | 'released';
+
+const KNOWN_KINDS = new Set<PushKind>(['alert', 'claimed', 'released']);
+
+/**
+ * The wire fields, minus the drill flag the server does not send. `kind` and
+ * `ownerShortName` arrived with W10-d: a CLAIM now fans out over push as well as
+ * the socket (§2.6.4), and without these two a claim would be indistinguishable
+ * from a fresh emergency — the receiving phone would ring the alarm stream at the
+ * exact moment the design says to stop ringing.
+ */
+export type PushIncidentFields = Omit<IncidentAlertFields, 'isDrill'> & {
+  kind: PushKind;
+  ownerShortName: string;
+};
 
 /**
  * Ids reach two places that deserve care: a notification identifier and the
@@ -95,10 +116,25 @@ function asTier(value: unknown): 1 | 2 | 3 {
 }
 
 /**
+ * ★ FAIL-SAFE IN ONE DIRECTION ONLY. ★ An unrecognised kind — a newer server, a
+ * corrupted field, a hostile sender — becomes `alert`, so the phone rings. The
+ * asymmetry is the point: a claim mistakenly presented as an alert costs one
+ * wasted siren, an alert mistakenly presented as a quiet banner costs the alert.
+ */
+function asKind(value: unknown): PushKind {
+  return typeof value === 'string' && KNOWN_KINDS.has(value as PushKind)
+    ? (value as PushKind)
+    : 'alert';
+}
+
+/**
  * F-18 / I-2: ASCII printable (32..126), ≤8 characters. This is the only piece
  * of server-supplied text that reaches a locked screen, so it is clamped rather
  * than trusted — control characters, RTL overrides and emoji all leave here as
  * nothing. An empty result is fine: the alert falls back to "Family".
+ *
+ * Both names on the wire go through this — the subject's and, since W10-d, the
+ * responding owner's.
  */
 function asShortName(value: unknown): string {
   if (typeof value !== 'string') return '';
@@ -172,12 +208,18 @@ export function readPushFields(payload: unknown): PushIncidentFields | null {
     trigger: asTrigger(bag.trigger),
     tier: asTier(bag.tier),
     subjectShortName: asShortName(bag.subjectShortName),
+    kind: asKind(bag.kind),
+    ownerShortName: asShortName(bag.ownerShortName),
   };
 }
 
 /**
- * Parse, then present. Returns whether an alert reached the OS, which is what
+ * Parse, then present. Returns whether something reached the OS, which is what
  * the task reports back as its result.
+ *
+ * ★ W10-d · 1.32 — two outcomes, one task. ★ `claimed` is the ladder STOPPING:
+ * the siren comes down and a quiet banner naming the responder goes up. Anything
+ * else — including `released`, which is the ladder resuming at L2 — rings.
  *
  * Nothing here throws. A background task that rejects is retried and rate
  * limited by the platform, and an exception on this path costs the alert.
@@ -187,7 +229,23 @@ export async function handleIncidentPush(payload: unknown): Promise<boolean> {
   if (fields === null) return false;
   try {
     await ensureNotificationChannels();
-    await notifyIncidentFromPush(fields);
+    if (fields.kind === 'claimed') {
+      await notifyOwnershipFromPush({
+        incidentId: fields.incidentId,
+        familyId: fields.familyId,
+        trigger: fields.trigger,
+        subjectShortName: fields.subjectShortName,
+        ownerShortName: fields.ownerShortName,
+      });
+      return true;
+    }
+    await notifyIncidentFromPush({
+      incidentId: fields.incidentId,
+      familyId: fields.familyId,
+      trigger: fields.trigger,
+      tier: fields.tier,
+      subjectShortName: fields.subjectShortName,
+    });
     return true;
   } catch {
     // `present()` already fails soft; this is the belt for its braces.

@@ -215,6 +215,7 @@ import {
   notifyAgentSilent,
   notifyDegraded,
   notifyIncident,
+  notifyOwnership,
   notifyProbe,
   subscribeNotificationResponses,
   subscribePushTokenChanges,
@@ -1870,9 +1871,15 @@ async function reactToOwnState(incident: Incident, event: IncidentEvent): Promis
 
     case 'OWNED':
       // ★ P-030 / §5.2 Correction 1 — DO NOT FULLY SILENCE. T0 stops the siren;
-      //   the persistent notification stays up, because full silence makes the
+      //   a persistent notification stays up, because full silence makes the
       //   other five people forget an emergency is in progress.
-      void safe(() => notifyIncident(incident, 1, subject), undefined);
+      //
+      // ★ W10-d · 1.32 ★ It used to re-post the ALERT here, on the alarm channel,
+      // still reading "NOBODY HAS RESPONDED YET" — while somebody demonstrably
+      // had. It now says who (§2.6.4), through the same composer the push path
+      // uses, so the family hears one story regardless of which transport
+      // delivered it.
+      void safe(() => notifyOwnership(incident, subject, ownerOf(incident)), undefined);
       break;
 
     case 'FALSE_ALARM':
@@ -2144,10 +2151,11 @@ async function reactToRemoteState(incident: Incident): Promise<void> {
       void safe(() => notifyIncident(incident, 3, subject), undefined);
       break;
     case 'OWNED':
-      // Siren off, banner on. Never full silence (P-030).
+      // Siren off, banner on. Never full silence (P-030). W10-d: the banner now
+      // names the responder instead of repeating "nobody has responded yet".
       stopAlarm();
       playCue('ack');
-      void safe(() => notifyIncident(incident, 1, subject), undefined);
+      void safe(() => notifyOwnership(incident, subject, ownerOf(incident)), undefined);
       break;
     case 'RESOLVING':
       stopAlarm();
@@ -2548,6 +2556,17 @@ function findIncident(id: UUID): Incident | null {
 
 function subjectOf(incident: Incident): Member | null {
   return selectMember(useKavach.getState(), incident.subjectMemberId) ?? null;
+}
+
+/**
+ * The member who claimed, if this device knows them. Null is a real answer — a
+ * claim can arrive naming somebody whose record has not synced here yet — and
+ * `notifyOwnership` degrades to "Someone is responding" rather than guessing.
+ */
+function ownerOf(incident: Incident): Member | null {
+  return incident.ownerMemberId
+    ? (selectMember(useKavach.getState(), incident.ownerMemberId) ?? null)
+    : null;
 }
 
 function putIncident(incident: Incident): void {
