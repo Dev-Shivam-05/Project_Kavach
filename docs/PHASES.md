@@ -12,20 +12,23 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 
 ## Now
 
-**Phase 1 · W10-b — make a real handset ring.** The server can address a phone and really sends
-(W10-a, 11 Aug); nothing on the device consumes the message. One session: a `TaskManager` background
-task registered in `index.ts` that composes the alert from the five push fields through the existing
-`notifyIncident()`, plus a `showWhenLocked` full-screen-intent Activity to present it — closing
-**1.35e, 1.37 and 1.28** together, since all three are the same Activity work.
+**Phase 1 · W10-c — present the alert on a locked screen.** The receive half landed on 11 Aug
+(W10-b): a data-only FCM message now wakes the bundle, is read through an allowlist, and is
+presented on the bypass-DND alarm channel. What is left is **1.37** (full-screen intent) and **1.28**
+(`showWhenLocked` medical card) — one `Activity` in `modules/kavach-t0/android/`, since both are the
+same native work and `expo-notifications` has no `fullScreenIntent` surface at all.
 
-> ⛔ **Blocked until a Firebase project exists** — `google-services.json` in the Android build and a
-> service-account key at `KAVACH_FCM_CREDENTIALS`. Free, ~15 min, **owner: the user.** W10's exit
-> criterion is a physical device ringing through DND; building the receive path first produces code
-> that typechecks and cannot be exercised (D-018).
+> ⛔ **Two independent blockers, both outside code.**
+> 1. **No Firebase project.** `google-services.json`, an `android.googleServicesFile` line in
+>    `app.json`, and a service-account key at `KAVACH_FCM_CREDENTIALS`. Free, ~15 min,
+>    **owner: the user.** W10's exit criterion is a physical device ringing through DND (D-018).
+> 2. **No Android toolchain on this machine** — no JDK, no `ANDROID_HOME`. Kotlin written here
+>    cannot be compiled, let alone run, and the nine CI gates are Go/TS/Node only. W10-c is the
+>    first phase whose output no gate in this repo can check (D-021).
 
 ## Next 3
 
-1. **W10-b + 1.28** — receive half, full-screen intent, `showWhenLocked` medical card. *(above)*
+1. **W10-c (1.37 + 1.28)** — full-screen intent and the `showWhenLocked` medical card. *(above)*
 2. **Hardware trigger (1.16, 1.17)** — `PowerButtonWatcher` (5× in 3 s) and `VolumePatternWatcher`
    (vol-down 3 s, screen off). Both **absent**; nothing in the app observes a hardware button, which
    makes `PocketSuppressor` (1.19, complete) a guard on a door nobody can open. A panic button you
@@ -130,23 +133,26 @@ Soak is W13–16: **four weeks, write no new features.**
 
 ### W10 — Notification orchestrator 🔨 **the weakest week in the project**
 
-Split into **W10-a (send)** and **W10-b (receive + present)** on 11 Aug. W10-a landed on branch
-`phase1-w10-remote-push`; W10-b has not started.
+Split into **W10-a (send)**, **W10-b (receive)** and **W10-c (present)** on 11 Aug — all on branch
+`phase1-w10-remote-push`. W10-a and W10-b have landed; W10-c has not started.
 
 | 1.35a | **FCM data-only, high priority — send side** | ✅ | `backend/internal/notify/fcm.go` — FCM HTTP v1, stdlib only (RS256 service-account JWT, cached access token). Data-only always; `assertPushSafe` fails closed on anything outside the lock-screen-safe five, so the duress bit cannot ride the push side channel (F-01/F-21). TTL read off the generated machine's `AUTO_QUIESCE` transition, not hardcoded. 20 tests |
 | 1.35b | **Device push token registration** | ✅ | `acquireDevicePushToken()` (`notifications.ts`) uses the **native** FCM token, not the Expo relay — no third party between an emergency and a family phone. Wired at `store.ts` bootstrap; rolled tokens re-register via `addPushTokenListener`. Server side: `Device.push_token_fcm` + `PATCH /v1/devices/{id}` |
 | 1.35c | **Delivery rows now tell the truth** | ✅ | The FCM leg used to record `delivered` for a push it never sent. It now records `KV-NOTOKEN` (this handset never registered), `KV-NOPUSHCFG` (no credentials in this deployment), `KV-UNREGISTERED` (T-218), `KV-PUSHFAIL`. The four clocks stop averaging in a number the process invented about itself |
-| 1.35d | **⛔ FCM credentials** | ⛔ | **Blocked on a Firebase project, which is yours to create** — a project, `google-services.json` in the Android build, and a service-account key at `KAVACH_FCM_CREDENTIALS`. Free, ~15 min. Until then `NewFCMFromEnv` returns `ErrPushNotConfigured`, the control plane logs `push_not_configured` at WARN with the variable name, and **every push leg records KV-NOPUSHCFG**. No push has ever reached a handset |
-| 1.35e | **Receive side — W10-b** | 🔨 | **Absent, and this is what makes 1.35 still incomplete.** A data-only message needs `TaskManager.defineTask` + `Notifications.registerTaskAsync` registered in an early module (`index.ts`) to wake a killed app; without it the server sends into the void. `expo-task-manager` is already a dependency |
+| 1.35d | **⛔ FCM credentials** | ⛔ | **Blocked on a Firebase project, which is yours to create.** Four steps, all verified missing on 11 Aug: (1) a Firebase project with an Android app on package `in.example.kavach`; (2) `mobile/google-services.json`; (3) **`"googleServicesFile": "./google-services.json"` under `expo.android` in `app.json` — currently absent, so even with the file present `prebuild` would not place it and FCM would never initialise**; (4) a service-account key at `KAVACH_FCM_CREDENTIALS`. Until then `NewFCMFromEnv` returns `ErrPushNotConfigured`, the control plane logs `push_not_configured` at WARN, and **every push leg records KV-NOPUSHCFG**. No push has ever reached a handset |
+| 1.35e | **Receive side — W10-b** | ⛔ | **Code complete and wired, exit criterion unmeetable.** `src/state/pushReceive.ts` defines `kavach.push.incident` with `TaskManager.defineTask` in module scope and registers it with `Notifications.registerTaskAsync`; `index.ts` imports it **before** `expo-router/entry` (ES modules evaluate in source order, so the reverse defines the task too late on the one launch that matters). `readPushFields()` is an allowlist reader, not a cast — the client half of F-01 does not depend on the server half being right. Degrades rather than drops: an unknown trigger or unparseable tier still rings. **14 tests**, incl. a wiring test that fails if `defineTask` ever moves into a function. ⛔ because **no handset has received one** — 1.35d, and §3.8 says the code compiling is not the bar |
 | 1.36 | Bypass-DND channel, USAGE_ALARM | ✅ | `src/state/notifications.ts` — `AndroidImportance.MAX`, alarm usage, locally-composed text (F-21) |
-| 1.37 | Full-screen intent — W10-b | 🔨 | `USE_FULL_SCREEN_INTENT` declared in `app.json:27` and **never requested or presented** |
+| 1.37 | Full-screen intent — W10-c | 🔨 | `USE_FULL_SCREEN_INTENT` declared in `app.json:27` and **never requested or presented**. Confirmed 11 Aug: **`expo-notifications` has no `fullScreenIntent` surface** — zero matches in the package — so this is native work, not a content field. Needs an `Activity` (`showWhenLocked`, `turnScreenOn`) in `modules/kavach-t0/android/` plus a `setFullScreenIntent` notification posted from Kotlin, and a bridge function for `pushReceive.ts` to call. Same Activity as 1.28 |
+| 1.35f | Push-borne gaps left open by W10-b | 🔨 | Three, each small and each real. **(a) No drill flag on the wire** — `pushPayload` sends the safe five and `isDrill` is not one, so `notifyIncidentFromPush` passes `false`. Fail-safe direction (a real alert shown as a drill is the unrecoverable error), and a drill usually carries `trigger: 'DRILL'` which renders as "Drill" anyway — but a `notifies_family` quarterly drill on another trigger presents as real. **(b) Headless alerts are English** — the locale lives in `t0ConfigRepo` behind SQLite, and opening the DB on the wake path was judged the wrong trade (D-020); `t()` falls back to `en` (NFR-020). **(c) A terminated-app action tap is still dropped** — Android routes it to the same task, `readPushFields` correctly refuses to re-alarm on it, and nothing yet applies `ACTION_PROBE_FINE`. That one is the P-002 spiral `notifications.ts` names in its own header |
 | 1.38–1.42 | APNs Critical Alert · PushKit→CallKit · iOS NSE · Live Activity · Wear/watchOS | 🔨 | Absent. iOS is out of scope by ADR-015; the Android ongoing notification exists |
 
-> **Stated plainly, 11 Aug:** the server can now address a phone and really sends to it. Nothing on
-> the device consumes the message yet, and no deployment holds FCM credentials — so **nobody's phone
-> has rung, and none will until W10-b lands and a Firebase project exists.** With the app closed the
-> only working leg to another human is still SMS. What changed is that the system now *says so*
-> instead of recording a delivery it never made.
+> **Stated plainly, end of 11 Aug:** the server can address a phone and really sends; the device now
+> really listens, parses and presents. Both halves of the wire exist and are tested. **No handset has
+> received one, because no deployment holds FCM credentials and no build contains
+> `google-services.json`** — and with the app closed the only working leg to another human is still
+> SMS. The honest status of W10 is "the mechanism is complete and has never once been exercised."
+> Two things stand between here and a phone ringing, and neither is code: a Firebase project
+> (1.35d), and a handset to ring.
 
 ### W11 — SMS and voice tiers ✅ (two gaps)
 | 1.43 | Multi-SIM enumeration, send on ALL | ✅ | `KavachT0Module.kt` — `SubscriptionManager`, per-subscription `SmsManager` |
@@ -178,14 +184,14 @@ Then: **"stop and use it for a month."** §3.4 calls that the most important pro
 directive in the document.
 
 ### 🔨 To close Phase 1 — in dependency order
-1. **Remote push — W10-b (1.35e, 1.37).** Nothing else in this phase matters if no phone rings.
-   Token registration → server token store → data-only FCM send are **done** (W10-a, 11 Aug). What
-   remains is the receive half, and it is one session: a `TaskManager` background task registered in
-   `index.ts` that composes the alert from the five push fields through the existing
-   `notifyIncident()`, then a `showWhenLocked` full-screen-intent Activity to present it. Pair it
-   with 1.28, which needs the same Activity work.
-   **Do the Firebase project first** (1.35d) — without it W10-b cannot be verified on a device, and
-   verification on a device is the whole exit criterion for this week.
+1. **Remote push — the last unbuilt piece is 1.37 + 1.28 (W10-c).** Nothing else in this phase
+   matters if no phone rings. Token registration → server token store → data-only FCM send (W10-a)
+   and the device receive path (W10-b) are **done, 11 Aug**. What remains is presentation: one
+   `showWhenLocked` / `turnScreenOn` Activity in `modules/kavach-t0/android/` and a Kotlin
+   `setFullScreenIntent` post, closing 1.37 and 1.28 together.
+   **Do the Firebase project first** (1.35d), and note that W10-c needs a **JDK and an Android SDK
+   that this machine does not have** — its output is Kotlin, which no CI gate here compiles. Both
+   the writing and the checking of it need a workstation that can build the app.
 2. **Hardware trigger (1.16, 1.17).** A panic button you must unlock the phone and open an app to
    reach is not a panic button.
 3. **`showWhenLocked` medical card (1.28)** and the **exact-alarm Kotlin watchdog (1.13)** — both

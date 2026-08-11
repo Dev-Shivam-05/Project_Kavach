@@ -231,3 +231,53 @@ the two should be one session, not two.
 **Blocker owner: the user.** A Firebase project, `google-services.json` in the Android build, and a
 service-account key at `KAVACH_FCM_CREDENTIALS`. Free, ~15 minutes, and nothing downstream of it can
 be finished first.
+
+## D-019 — The client reads the push payload through an allowlist, not a cast
+
+**Decision.** `readPushFields()` takes the five lock-screen-safe fields **by name**, validates and
+sanitises each, and drops every other key on the floor. It does not cast the payload to a type and
+spread it into a notification.
+**Why.** `fcm.go`'s `assertPushSafe` already fails closed on a forbidden key — but that is the
+*sender* checking itself, and F-01 says the duress bit must not be inferable from anything that
+leaves the device. A payload arrives over Google's fabric from a server the phone cannot audit. If
+the only thing standing between `duress` and a lock screen is the sender's own assertion, then one
+compromised or simply wrong server defeats the entire duress design. Two independent gates, on two
+sides of the wire, is the same shape as the F-21 double-check already inside the backend.
+**Consequence.** `subjectShortName` is clamped to printable ASCII, ≤8 chars (F-18 / I-2) — it is the
+only server-supplied string that renders as text on a locked screen. Ids are restricted to
+URL-unreserved characters so a hostile id cannot become a path segment of its own.
+**Evidence.** `mobile/src/state/pushReceive.ts`; `mobile/test/push-receive.test.ts` — "the
+notification carries the five fields and NOTHING else" sends `duress`, `lat`, `lon` and `note` and
+asserts the presented `data` bag has exactly five keys.
+
+## D-020 — The push wake path opens no database
+
+**Decision.** The headless background task does exactly two things: parse the payload and present
+the notification. It does not open SQLite, hydrate the store, or restore the member's locale.
+**Why.** The locale lives in `t0ConfigRepo`, behind `requireDb()`. Reading it would localise the
+alert (NFR-020) at the cost of putting a database open — with its own timeout, lock and corruption
+failure modes — on the one code path whose entire job is to make a phone ring within seconds of a
+message the OS may already be rate-limiting. A Gujarati-speaking responder reading an English
+"NOBODY HAS RESPONDED YET" still gets the short name, the trigger label and the alarm; a responder
+whose alert never fired because the DB was locked gets nothing.
+**Cost, accepted and logged.** Alerts composed on a headless wake are English until the app opens.
+Tracked as 1.35f(b), not silently absorbed.
+**Related.** `ensureNotificationChannels()` **is** called there — three cheap native calls, no I/O,
+and on API 26+ a notification posted to a channel that does not exist is dropped by the OS with no
+error at all.
+
+## D-021 — W10 splits a third time: the presentation half needs a toolchain this machine lacks
+
+**Decision.** W10-b is now the **receive** half only (landed 11 Aug). The full-screen intent (1.37)
+and the `showWhenLocked` medical card (1.28) become **W10-c** and were not started.
+**Why.** Both are Kotlin: `expo-notifications` exposes no `fullScreenIntent` field at all, so this
+is a new `Activity` plus a `setFullScreenIntent` post from the native module. This machine has **no
+JDK and no Android SDK**, and the nine CI gates are Go, TypeScript and Node only — so Kotlin written
+here cannot be compiled, cannot be run, and cannot be checked by anything in the repo. Writing it
+anyway would produce the exact artefact D-010 exists to prevent, with the added twist that not even
+`tsc` would notice.
+**What the split buys.** W10-b was verifiable off-device and is now verified off-device: 14 tests,
+including a wiring test that fails if `defineTask` ever moves out of module scope. That is the whole
+of what could honestly be finished without hardware.
+**Blocker owner: the user.** W10-c needs a workstation that can build the app, and 1.35d still needs
+the Firebase project.

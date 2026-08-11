@@ -22,6 +22,18 @@ the same for realtime-gw and is compiled into the production binary.
 `control-plane/main.go:1340` accepts a plain `X-Kavach-Deploy-Override` header, not only the env
 var. F-02 exists to stop a deploy during a live incident; anyone who can reach the endpoint bypasses it.
 
+**14. No build this repo can produce is capable of receiving a push.** *(added 11 Aug, W10-b.
+Numbered 14 rather than inserted at 3 because these ids are cited from `CLAUDE.md` and
+`PROJECT_MAP.md`; renumbering would silently break those references.)*
+`mobile/app.json` has no `android.googleServicesFile` key and there is no `google-services.json`
+anywhere in the tree. Both halves of the push wire now exist and are tested — server send (W10-a),
+device receive (W10-b) — but `expo prebuild` places no Firebase config into the Android build, so
+`getDevicePushTokenAsync()` throws, `acquireDevicePushToken()` returns null by design, and the
+server records `KV-NOTOKEN` for that handset forever. **This fails honestly and silently**: the
+delivery matrix says "unreachable by push" and nothing else complains, so a build can pass every
+gate, install cleanly, and never be addressable. Dropping the JSON file into the repo is not
+sufficient on its own — see PHASES 1.35d for all four steps.
+
 ## S2 — will make a change unverifiable
 
 **4. ~5,400 LOC of backend has no direct tests.**

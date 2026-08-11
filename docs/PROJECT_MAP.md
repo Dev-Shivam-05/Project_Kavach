@@ -16,11 +16,17 @@ Status board: [PHASES.md](PHASES.md) · Risks: [RISK.md](RISK.md) · History: [h
 | run stack | `docker compose -f ops/docker-compose.yml up --build -d` | root |
 | release APK | `npx eas build --platform android --profile preview` | `mobile/` |
 
-**Verified green 2026-08-11 (after W10-a):** `go build` ✅ · `go vet ./...` ✅ · `go test ./...` ✅ ·
-`tsc --noEmit` ✅ · `npm test` **144/144** ✅ · `gen:check` in sync (14 states · 20 events ·
+**Verified green 2026-08-11 (after W10-b):** `go build` ✅ · `go vet ./...` ✅ · `go test ./...` ✅ ·
+`tsc --noEmit` ✅ · `npm test` **158/158** ✅ · `gen:check` in sync (14 states · 20 events ·
 35 transitions · 16 fixtures) · `schema-lint` ✅ · `protolint` ✅ · `TestLOCBudget` **963/1000**.
 `go test -race` needs `CGO_ENABLED=1` **and a C compiler**; there is no gcc on this machine, so the
 race gate runs in CI only.
+
+**Two other toolchains are absent here, and it matters.** No JDK and no `ANDROID_HOME`, so the
+Kotlin under `mobile/modules/kavach-t0/android/` **cannot be compiled on this machine** and no CI
+gate compiles it either — the nine gates are Go, TypeScript and Node. Any change to the native
+Tier-0 plane is unverifiable from this checkout (D-021). No Firebase credentials either: see
+`KAVACH_FCM_CREDENTIALS` below.
 
 Env vars: full table in [ops/README.md](../ops/README.md) §5. External services: **none** — no
 Postgres, no Redis, no NATS, no cloud account. `backend/go.mod` has zero `require` lines.
@@ -133,12 +139,25 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 with FCM enabled. Unset is the current normal: the control plane logs `push_not_configured` at WARN
 and every push leg records `KV-NOPUSHCFG`.
 
+**The push path, end to end (W10-a + W10-b).** Server: `internal/notify/fcm.go` (FCM HTTP v1,
+stdlib only) ← `notify.go pushPayload()` (the safe five) ← `Device.push_token_fcm`. Device:
+`src/state/notifications.ts acquireDevicePushToken()` registers the **native** FCM token, and
+`src/state/pushReceive.ts` defines the `kavach.push.incident` background task **in module scope**,
+imported by `mobile/index.ts` *before* `expo-router/entry` — order is load-bearing, see the file
+header. Both `notifyIncident()` (socket) and `notifyIncidentFromPush()` (FCM) compose through one
+`presentIncidentAlert()`, so the two paths cannot tell the family different stories.
+
 ## Known broken
 
 - `ops/run-backend.ps1:77` passes `-addr`/`-data` to all four binaries; two define neither and exit.
 - `control-plane` and `sos-ingest` **both default to `:8081`** (main.go:60 / main.go:1138).
 - `controlBase` falls back to `extra.apiBase` (`config.ts:51`), moving the control plane to :8081.
 - `README.md:34` still says to use Expo Go, which cannot run this app.
+- **`app.json` has no `android.googleServicesFile`.** Every build produced today therefore ships
+  without Firebase config, `getDevicePushTokenAsync()` throws, `acquireDevicePushToken()` returns
+  null, and the server records `KV-NOTOKEN` for that handset — forever. Adding
+  `google-services.json` to the repo is not enough on its own; the key must be in `app.json` for
+  `expo prebuild` to place it (PHASES 1.35d step 3).
 - `mobile/docs/PHASE-STATUS.md` is **stale** — audited at `20a5fdf`, before ADRs/CI/proto existed.
 - Windows: `go test ./...` may fail once with *"An Application Control policy has blocked this
   file"* on a freshly linked test binary. Re-run — it is the OS, not the code.
