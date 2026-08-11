@@ -64,6 +64,9 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 - The four generated files (`stateMachine.generated.ts`, `machine_gen.go`, `machine_gen_test.go`,
   `__generated__/fixtures.json`) — **never hand-edit.** Change `spec/state-machine.yaml`, `npm run gen`.
 - `proto/incident.proto` — additive only; field numbers are frozen (`tools/protolint.mjs`, Gate 9).
+- **`notify.Fanout` rebuilds `Step` by hand for the neighbour feed** (the `reduced` loop in
+  `notify.go`). A field you add to `Step` and do not name there is silently dropped — for neighbours
+  only, so every test on the main path still passes. Add the field *and* a neighbour-leg test.
 - `internal/{bus,wal}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**;
   `internal/{store,escalation}` have one test file each covering one seam (device table, W10-a ·
   CLAIM/RELEASE, W10-d) and nothing else. Characterize current behaviour in a test *before*

@@ -30,6 +30,10 @@ both are the same native work and `expo-notifications` has no `fullScreenIntent`
 
 ## Next 3
 
+> ⚠ **All three need a JDK. Check `java -version` before picking one, not after.** W10-d exists
+> because that check was run first on 11 Aug; the alternative was a session of Kotlin that no gate
+> in this repo can compile, run, or check, with every familiar green tick still green (D-021).
+
 1. **W10-c (1.37 + 1.28)** — full-screen intent and the `showWhenLocked` medical card. *(above)*
 2. **Hardware trigger (1.16, 1.17)** — `PowerButtonWatcher` (5× in 3 s) and `VolumePatternWatcher`
    (vol-down 3 s, screen off). Both **absent**; nothing in the app observes a hardware button, which
@@ -38,6 +42,13 @@ both are the same native work and `expo-notifications` has no `fullScreenIntent`
 3. **Exact-alarm Kotlin watchdog (1.13)** — `exactAlarmsPermitted` is *checked* and no exact alarm is
    ever *scheduled*, so on a force-stopped app on an aggressive OEM nothing resurrects the agent.
    §4.12 names OEM battery managers as risk #3.
+
+**On a machine with no JDK, do these instead** — both fully covered by the nine gates:
+`internal/escalation` is 1,140 lines that decide whether a human is woken and `claim_test.go`
+(W10-d) covers only CLAIM and RELEASE — the ladder, the timer wheel, `FireTimer` claiming and
+two-party resolution are unpinned. Then Phase 2's `policyRepo.byVersion()`: one repo method, and
+without it a six-month-old incident renders under today's rules while labelled with yesterday's
+version.
 
 Then the measurement work: T-213 statistically, NFR instrumentation, drills, the four-week soak.
 

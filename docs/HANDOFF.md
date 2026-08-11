@@ -1,106 +1,123 @@
-# HANDOFF — Kavach — Phase 1 (W10-b, remote push: receive side) — 2026-08-11
+# HANDOFF — Kavach — Phase 1 (W10-d, CLAIM/RELEASE over push) — 2026-08-11
 
-Branch **`phase1-w10-remote-push`**, 5 commits, **not pushed** at the time of writing. Session
-W10-a's handoff is superseded by this one; its content is in commit `a4e0ab0e`.
+Branch **`phase1-w10-remote-push`**, 3 new commits, **push failed — no network to github.com**
+(`Failed to connect to github.com port 443`, retried once). The commits are safe locally; the
+branch is `[ahead 3]` of `origin/phase1-w10-remote-push`. Run the push again when the network is
+back. Session W10-b's handoff is superseded by this one; its content is in commit `2a912d78`.
+
+**W10-c was not started, and that was the session's first decision.** Its entire output is Kotlin,
+this machine has no JDK and no Android SDK, and no CI gate here compiles Kotlin (D-021) — so
+`npm run verify` would have gone green over a file no compiler had ever read. 1.32 was chosen
+instead because it is the last piece of W10 that Go/TypeScript gates can actually check.
 
 ## Done
 
-- **A killed app now consumes a data-only FCM message and presents the alert.** The task
-  `kavach.push.incident` is defined with `TaskManager.defineTask` **in module scope** and registered
-  with `Notifications.registerTaskAsync`; `mobile/index.ts` imports it **before**
-  `expo-router/entry`. That order is the whole feature: ES modules evaluate in source order, and
-  `expo-task-manager` looks the task up by name the moment it finishes loading the bundle — so a
-  task defined from a screen or an effect is defined too late on the one launch that matters.
-- **The client refuses to believe the payload.** `readPushFields()` is an allowlist reader, not a
-  cast: five fields by name, each validated, everything else dropped. A sender that puts `duress`,
-  `lat` or a note in the payload cannot get any of it onto a lock screen — F-01 no longer depends on
-  the sender checking itself (D-019).
-- **It degrades instead of dropping.** An unknown trigger or an unparseable tier still rings, on the
-  generic label at tier 1. Only a payload with no usable incident/family id presents nothing.
-- **One place composes the words.** `notifyIncident()` (socket, app alive) and
-  `notifyIncidentFromPush()` (FCM, app killed) both route through `presentIncidentAlert()`, so the
-  two paths cannot drift into telling a family two different stories about the same incident.
-- **A pre-existing red gate was found and fixed.** `test/push-token.test.ts` did **not** typecheck at
-  HEAD, although the previous handoff recorded `tsc --noEmit` as green. See "Watch out for".
-- Verified green: `go build`, `go vet ./...`, `go test ./...`, `tsc --noEmit`, `npm test`
-  **158/158** (was 144), `gen:check`, `schema-lint`, `protolint`.
+- **A CLAIM now reaches a phone whose app is closed.** `Claim()` published one bus frame and
+  stopped, so §2.6.4's "fan-out of CLAIM goes over BOTH channels simultaneously — never rely on only
+  one; a backgrounded device may have no WS" was written down and not built. It now calls
+  `notifyStep` with WS+FCM+APNs+PushKit, tier 1 (the ladder has *stopped*; this must not read as an
+  escalation in the after-action matrix) and no billable channel.
+- **The receiving phone presents it as the ladder stopping, not as a second emergency.** `claimed`
+  dismisses the alert and posts a persistent quiet banner: *"Rohan is responding. Stand by."* — the
+  copy already in `i18n` as `panic.responding`, and the sentence P-003 exists to produce.
+- **F-21 grew by exactly two fields, `kind` and `ownerShortName` (D-022).** The original five could
+  not say what a push was *about*, which is why 1.32 sat open for three sessions with both halves of
+  the wire built. Both are allowlisted fail-closed twice: `assertPushSafe` on the server,
+  `readPushFields` on the device.
+- **Unknown `kind` rings, on both sides.** A claim shown as an alert costs one wasted siren; an
+  alert shown as a quiet banner costs the alert. Asserted in Go and in TS.
+- **A pre-existing wording bug was fixed as a side effect.** Both `reactToOwnState` and
+  `reactToRemoteState` re-posted the ALERT on `OWNED`, on the alarm channel, still reading
+  "NOBODY HAS RESPONDED YET" — while somebody demonstrably had. Both now route through one
+  `notifyOwnership()`, the same composer the push path uses.
+- **`internal/escalation` has tests for the first time.** 1,140 lines that decide whether a human is
+  woken had none (RISK §4). Six characterization tests passed against unchanged code, then three new
+  requirement tests were shown failing before the behaviour changed.
+- Verified green: `go build`, `go vet ./...`, `go test ./...`, `archlint`, `tsc --noEmit`,
+  `npm test` **165/165** (was 158), `gen:check`, `schema-lint`, `protolint`.
 
 ## Files changed
 
+**Backend**
+- `internal/escalation/claim_test.go` **(new, ~430 lines)** — the package's first tests. Pins OWNED,
+  owner + t4, ladder halted with auto-quiesce *kept* (F-02), watchdog armed, CRITICAL bus frame,
+  refused claim mutates nothing — then states the push requirement.
+- `internal/escalation/engine.go` — `Claim()` fans out; `Release()` marks its rung `KindReleased`.
+- `internal/notify/notify.go` — `Kind` (zero value = alert, so no existing call site changes
+  meaning), `Step.Kind`, `pushPayload` gains both fields, `kind` threaded through
+  `dispatch → startLeg → sendPush`, **and copied into the reconstructed neighbour Step** — that
+  reconstruction silently drops any field not named in it.
+- `internal/notify/fcm.go` — `pushSafeKeys` +2, header prose.
+- `internal/notify/fcm_test.go` — 5 new tests incl. the neighbour-leg regression and "an alert still
+  carries no owner name".
+- `internal/store/store.go` — the `PushTokenFCM` comment enumerated the five; corrected.
+
 **Mobile**
-- `src/state/pushReceive.ts` **(new, ~190 lines)** — the task, the allowlist reader, the sanitisers.
-  `subjectShortName` is clamped to printable ASCII ≤8 (F-18/I-2) because it is the only
-  server-supplied string that renders on a locked screen; ids are restricted to URL-unreserved
-  characters so a hostile id cannot become a path segment.
-- `src/state/notifications.ts` — `ensureNotificationChannels()` exported (a channel that does not
-  exist means the OS drops the notification silently on API 26+); `IncidentAlertFields`,
-  `presentIncidentAlert()`, `notifyIncidentFromPush()`; `scenarioLabel()` now takes a `TriggerType`.
-- `index.ts` — the two imports, in the order that matters, with the reason above them.
-- `test/push-receive.test.ts` **(new, 14 tests)** — incl. a **wiring test** that fails if `defineTask`
-  ever moves out of module scope, and one that sends `duress`/`lat`/`lon`/`note` and asserts the
-  presented `data` bag has exactly five keys.
-- `test/shim.mjs` — controllable `expo-task-manager` stub (`__runTask`, `__definedTasks`);
-  `expo-notifications` now records what was presented (`__presented`, `__resetPresented`).
-- `test/push-token.test.ts` — the `@ts-expect-error` fix.
+- `src/state/notifications.ts` — `CHANNEL_OWNERSHIP`, `presentOwnershipBanner`, `notifyOwnership`,
+  `notifyOwnershipFromPush`, `OwnershipAlertFields`; `clearIncident` takes the banner down too;
+  the foreground handler keeps `kavach.ownership.` silent.
+- `src/state/pushReceive.ts` — `PushKind`, `asKind`, both new fields read through the allowlist.
+- `src/state/store.ts` — `ownerOf()`; both `OWNED` branches route through `notifyOwnership`.
+- `test/push-receive.test.ts` — 7 new tests. `test/shim.mjs` — `dismissNotificationAsync` is now
+  recorded (`__dismissed()`), because "siren off, banner on" is an ordering claim.
 
-**Docs** — `PHASES.md`, `DECISIONS.md` (D-019…D-021), `PROJECT_MAP.md`, `RISK.md` (new item 14),
-`CLAUDE.md`, this file.
-
-**Not touched: the backend.** Nothing on the server needed to change for the receive half.
+**Docs** — `02-System-Architecture.md` §2.6.3 (the payload's naming authority), `DECISIONS.md`
+(D-022, D-023), `PHASES.md`, `PROJECT_MAP.md`, `CLAUDE.md`, this file.
 
 ## Decisions made
 
-- **D-019 — the client reads the payload through an allowlist, not a cast.** `assertPushSafe` in
-  `fcm.go` is the sender checking itself; a phone cannot audit the server it is hearing from.
-- **D-020 — the push wake path opens no database.** Restoring the member's locale means opening
-  SQLite on the one code path whose job is to ring within seconds. Headless alerts are English until
-  the app opens; logged as 1.35f(b), not silently absorbed.
-- **D-021 — 1.37 and 1.28 become W10-c and were not started.** Both are Kotlin, this machine has no
-  JDK and no Android SDK, and no CI gate compiles Kotlin. Writing it here would produce code that
-  cannot be compiled, run, or checked by anything in the repo.
+- **W10-d instead of W10-c** — the board's entire "Next 3" (W10-c, 1.16/1.17, 1.13) is Kotlin, and
+  none of it is checkable here. 1.32 was the last non-native item in the weakest week.
+- **D-022 — F-21's five become seven.** The alternative was leaving CLAIM socket-only, which
+  abandons the requirement for the one device push exists to serve. Neither field is inferable from
+  duress: a claim happens identically on duress and non-duress incidents.
+- **D-023 — the ownership banner gets its own Android channel.** P-030 wants quiet + persistent +
+  lock-screen-readable at once. The emergency channel rings (its whole point), the health channel is
+  `PRIVATE` so "Rohan is responding" would render as "Notification", and Android cannot re-tune an
+  existing channel's importance or visibility after creation. Dismiss-then-post rather than
+  replace-in-place, because cross-channel replacement cannot be verified from this checkout and its
+  failure mode is a phone that keeps screaming.
 
 ## Known broken / deliberately skipped
 
-- **⛔ Still nobody's phone has rung, and none can.** — *because* no Firebase project exists.
-  Newly found and previously unrecorded: **`app.json` has no `android.googleServicesFile` key**, so
-  even dropping `google-services.json` into the repo would not put it in the build. All four steps
-  are in PHASES 1.35d. This is now RISK item 14.
-- **1.37 (full-screen intent) and 1.28 (`showWhenLocked` medical card) — not started.** — *because*
-  D-021. Confirmed while scoping: `expo-notifications` has **no** `fullScreenIntent` surface (zero
-  matches in the package), so this is a native `Activity` plus a Kotlin `setFullScreenIntent` post,
-  not a content field. That is W10-c and needs a workstation that can build the app.
-- **A drill can present as a real alert.** — *because* the wire carries the safe five and `isDrill`
-  is not one of them, so `notifyIncidentFromPush` passes `false`. That is the fail-safe direction (a
-  real alert mislabelled "DRILL —" is the unrecoverable error) and a drill usually carries
-  `trigger: 'DRILL'`, which renders as "Drill" anyway. Logged as 1.35f(a).
-- **A terminated-app action tap is still dropped.** — *because* Android routes it to the same task,
-  `readPushFields` correctly refuses to re-alarm on it, and applying `ACTION_PROBE_FINE` needs the
-  store and the network. Logged as 1.35f(c); it is the P-002 spiral `notifications.ts` names in its
-  own header.
+- **⛔ Still nobody's phone has rung, and none can.** — *because* 1.35d: no Firebase project, no
+  `mobile/google-services.json`, **no `android.googleServicesFile` key in `app.json`**, and
+  `KAVACH_FCM_CREDENTIALS` unset. All four re-verified missing this session. RISK item 14.
+- **The banner has never been seen on a screen.** — *because* the same blocker. Every claim
+  assertion in this session is off-device: channel id, sticky, sound, dismissal order and copy are
+  asserted against a stub, not against Android. §3.8's UI bar is a screenshot of each state.
+- **1.37 / 1.28 (W10-c) not started.** — *because* D-021. Unchanged.
 - **`go test -race` was not run.** — *because* there is no gcc on this machine. CI gate 3 only.
-- **1.32 (CLAIM/RELEASE over push) is still open.** Both halves of the wire now exist; nothing fans a
-  claim out over it.
+- **`escalation` is still 90% unpinned.** — *because* scope. `claim_test.go` covers CLAIM and
+  RELEASE; the ladder, the timer wheel, `FireTimer` claiming and two-party resolution have nothing.
+- **1.35f(a/b/c) untouched** — no drill flag on the wire, headless alerts are English (D-020), a
+  terminated-app action tap is still dropped.
 
 ## Next session starts here
 
-- **Phase 1, W10-c:** one `Activity` in `modules/kavach-t0/android/` — `showWhenLocked`,
-  `turnScreenOn`, `excludeFromRecents` — posted via `setFullScreenIntent` from the native module and
-  called from `pushReceive.ts`, closing **1.37 and 1.28** together.
+- **Phase 1, W10-c** — *if and only if* you are on a machine with a JDK and an Android SDK. One
+  `Activity` in `modules/kavach-t0/android/` (`showWhenLocked`, `turnScreenOn`,
+  `excludeFromRecents`) posted via `setFullScreenIntent`, closing **1.37 and 1.28** together.
+  **On this machine, do not.** The next verifiable items instead: pin the escalation ladder and
+  timer wheel with characterization tests, or Phase 2's `policyRepo.byVersion()`.
 - **First command:**
 
   ```
-  git checkout phase1-w10-remote-push && cd mobile && npm run verify
+  git push origin phase1-w10-remote-push
   ```
 
-  Then confirm both blockers are cleared before writing a line:
+  It failed on a network error at the end of this session and nothing else is outstanding. Then:
+  `cd mobile && npm run verify`. Before writing a line of W10-c, confirm the blockers:
   `echo $env:KAVACH_FCM_CREDENTIALS` · `Test-Path mobile/google-services.json` ·
   `Select-String -Path mobile/app.json -Pattern googleServicesFile` · `java -version`.
-- **Watch out for:** **do not start W10-c on a machine with no JDK.** Its entire output is Kotlin,
-  nothing in this repo compiles Kotlin, and `npm run verify` will go green over a file that has
-  never been parsed by a compiler. That is a worse version of the trap W10-b was split to avoid,
-  because the usual green ticks are still there.
+- **Watch out for:** **the board's next three items are all Kotlin.** W10-c, the hardware triggers
+  (1.16/1.17) and the exact-alarm watchdog (1.13) cannot be compiled, run or checked from this
+  checkout, and every green tick you are used to seeing will still be green over code no compiler
+  has read. Check `java -version` *before* picking a phase, not after — that check is what turned
+  this session into W10-d instead of three days of unverifiable Kotlin.
 
-  Second trap, and the concrete lesson of this session: **read the gate output, do not trust the
-  previous handoff's summary of it.** `tsc --noEmit` was recorded green on 11 Aug and was red — a
-  `// @ts-expect-error` written as a trailing comment inside multi-line import braces suppresses
-  nothing, because `tsc` reports one error per specifier. Now in `CLAUDE.md`.
+  Second trap, specific to what just landed: **`Fanout` rebuilds the `Step` for the neighbour feed
+  by hand** (`notify.go`, the `reduced` loop). Any field added to `Step` and not named there is
+  silently dropped for neighbours only — which for `Kind` would have meant a neighbour woken on the
+  alarm stream to be told nothing is needed. There is a test for that one; the next field added
+  needs its own.
