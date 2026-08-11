@@ -1,72 +1,105 @@
-# Handoff
+# HANDOFF — Kavach — Phase 1 (W10-a, remote push: send side) — 2026-08-11
 
-## Session: 2026-08-11 — context recovery + documentation spine
+Branch **`phase1-w10-remote-push`**, 3 commits, **not pushed**. Previous handoff (session 1, the
+documentation spine) is in [history/SESSION-LOG.md](history/SESSION-LOG.md) and its commit
+`cf42d7c4` — that session's `docs/` output had never been committed and is now in git.
 
-**Goal.** The project had been `/clear`ed several times without a handoff, so twelve days of
-decisions existed only in transcripts. Recover that history and write the spine.
-**Source changes: zero.** Only `docs/` and `CLAUDE.md` were written.
+## Done
 
-### What was done
+- **The server can address a specific family phone and really sends to it.** A device acquires its
+  native FCM registration token at boot, registers it with the control plane, and re-registers when
+  FCM rolls it. `internal/notify` performs a real FCM HTTP v1 send on the `fcm` leg.
+- **The push payload cannot leak the duress bit.** Data-only always, and an allowlist assertion
+  fails closed on anything outside `{incidentId, familyId, trigger, tier, subjectShortName}` —
+  enforced in two independent places (F-01, F-21, D-007).
+- **The delivery matrix stopped lying.** The FCM leg used to record `delivered` for a push it never
+  sent. It now records `KV-NOTOKEN` / `KV-NOPUSHCFG` / `KV-UNREGISTERED` / `KV-PUSHFAIL`. On this
+  deployment every FCM row now reads `failed / KV-NOPUSHCFG` — truthfully.
+- **`internal/store` and `internal/notify` have their first direct tests** (they had zero — RISK §4).
+  The store test was shown failing on the new column *before* the field was added.
+- Verified green: `go build`, `go vet ./...`, `go test ./...`, `tsc --noEmit`, `npm test`
+  **144/144** (was 139), `gen:check`, `schema-lint`, `protolint`, `TestLOCBudget` **963/1000**.
 
-- **Recovered the lost history** by mining `~/.claude/projects/` transcripts (10 MB, 5,097 lines,
-  26 Jul → 7 Aug). Found the six workflow scripts that encode the plan actually executed, the phase
-  claims and their contradictions, and the point where the session died.
-  → [history/SESSION-LOG.md](history/SESSION-LOG.md)
-- **Verified the safety net green** — every later change is now falsifiable:
+## Files changed
 
-  | Check | Result |
-  |---|---|
-  | `cd backend && go build ./...` | pass |
-  | `cd backend && go test ./...` | pass (5 test files; 9 packages have none) |
-  | `cd mobile && npm run typecheck` | pass, clean |
-  | `cd mobile && npm test` | **139 / 139** |
-  | `npm run gen:check` | in sync — 14 states · 20 events · 35 transitions · 16 fixtures |
-  | `go test ./cmd/sos-ingest -run TestLOCBudget` | **963 / 1000** |
+**Backend**
+- `internal/notify/fcm.go` **(new, 380 lines)** — FCM HTTP v1 sender. Stdlib only, because
+  `go.mod` must keep zero `require` lines (ADR-002): RS256 service-account JWT via `crypto/rsa`,
+  cached access token with 60 s skew, PKCS#8 and PKCS#1 keys. `assertPushSafe` is the F-21 gate.
+- `internal/notify/fcm_test.go` **(new, 20 tests)** — fan-out audience rules (subject excluded,
+  drill scoping, dead agent) plus every FCM delivery outcome, and the wire shape against a stub FCM.
+- `internal/notify/notify.go` — `Deps.Push` (optional), `sendPush()`, the two new eligibility checks
+  in `dispatch()`. `startLeg` no longer models FCM.
+- `internal/store/store.go` — `Device.PushTokenFCM` (`push_token_fcm`, the migration's name).
+- `internal/store/store_test.go` **(new, 6 tests)** — pins the device table's persisted key set
+  against `migrations/0001_init.sql`, tenancy-on-write, by-value row copies.
+- `cmd/control-plane/main.go` — `deviceReq.PushTokenFCM` as a **pointer** so omitting ≠ clearing;
+  revocation clears the token; `NewFCMFromEnv` at startup, WARN (never fatal) when unconfigured.
 
-- **Re-scored every phase at HEAD** rather than trusting the old numbers, and retired the
-  59% / 70% / 52% figures with the evidence that they were measured once and re-quoted four times
-  over ten days. → [PHASES.md](PHASES.md)
-- **Measured the 07 Aug brief item by item: 0 of 8 built, 7 absent, 1 partial by accident.** Three
-  of the eight reverse documented architecture decisions. Recorded as Phase 6.
-- Wrote [PROJECT_MAP.md](PROJECT_MAP.md), [DECISIONS.md](DECISIONS.md) (14 decisions that existed
-  only in code or chat), [RISK.md](RISK.md), [spec/GLOSSARY.md](spec/GLOSSARY.md), `CLAUDE.md`.
+**Mobile**
+- `src/state/notifications.ts` — `acquireDevicePushToken()`, `subscribePushTokenChanges()`.
+- `src/net/api.ts` — `putDevicePushToken()`; `PATCH` added to the `control()` method union.
+- `src/state/store.ts` — `registerForRemotePush()`, called from `doBootstrap()` after
+  `initNotifications()`.
+- `test/push-token.test.ts` **(new, 5 tests)** · `test/shim.mjs` — controllable `expo-notifications`
+  and `expo-router` stubs.
 
-### Decisions taken this session
+**Docs** — `PHASES.md`, `RISK.md`, `PROJECT_MAP.md`, `DECISIONS.md` (D-015…D-018), this file.
 
-1. **Phase 1 gate before the Aug-7 product brief** — §4.12 names scope creep before the gate as the
-   most likely way this project dies.
-2. **The satellite map must respect ADR-010** — pre-cached offline tiles, no live third-party tile
-   requests.
-3. **Untrack `.claude/skills/` and wire the real tools in** — none of the eight has a `SKILL.md`, so
-   none can load; the project has no linter at all. → D-013, **not yet executed.**
+## Decisions made
 
-### What was NOT done
+- **D-015 — a delivery row must never claim a leg that was not attempted.** The four clocks are the
+  family's only evidence the chain works; a green row for a nonexistent leg corrupts them.
+- **D-016 — the native FCM token, never the Expo push relay.** No third party between an emergency
+  and a family phone. Costs a mandatory Firebase project.
+- **D-017 — the store↔migration column pairing is machine-checked, for the `device` table only.**
+  Narrow on purpose; generalising means parsing the SQL, which is its own task.
+- **D-018 — W10 splits into send (done) and receive (not started),** because W10's exit criterion is
+  a physical-device check and the receive half cannot be honestly verified without credentials.
 
-- No source file was touched. No test added, no dependency changed, no git history altered.
-- `mobile/docs/PHASE-STATUS.md` was **not** corrected — [PHASES.md](PHASES.md) supersedes it. Leave
-  it as a historical artifact or delete it in a later session, but do not half-update it.
-- D-013 (untracking skills, wiring ESLint/semgrep/dependency-cruiser) is decided and unexecuted.
-- The earlier transcript `2f4187f3-….jsonl` (1.1 MB, 26 Jul) was not mined; it may hold the original
-  architecture reasoning.
+## Known broken / deliberately skipped
 
-### Next session starts here
+- **Nobody's phone rings yet, and none will.** The **receive** half does not exist: a data-only FCM
+  message needs `TaskManager.defineTask` + `Notifications.registerTaskAsync` in an early-loaded
+  module to wake a killed app. Without it the server sends into the void. — *because* it is W10-b,
+  and pairing it with the full-screen intent (1.37) and the `showWhenLocked` medical card (1.28) is
+  one coherent session instead of three half ones.
+- **⛔ No FCM credentials exist anywhere.** — *because* creating the Firebase project is yours, not
+  mine: a project, `google-services.json` in the Android build, a service-account key at
+  `KAVACH_FCM_CREDENTIALS`. Free, ~15 min. **Nothing in W10 can be verified on a handset until this
+  exists**, so it is the true first task.
+- **`go test -race` was not run.** — *because* it needs `CGO_ENABLED=1` **and a C compiler**, and
+  there is no gcc on this machine. CI gate 3 covers it; it has not been observed passing locally.
+- **APNs, PushKit, SMS and voice legs are still modelled** with jittered latency. — *because* only
+  FCM was in scope; iOS is out of scope by ADR-015 and SMS is W11.
+- **1.32 (CLAIM/RELEASE over push) is still open.** The send mechanism now exists; nothing fans a
+  claim out over it. — *because* it is downstream of a device that can receive.
+- **`store_test.go` covers the `device` table only.** Ten other tables remain unpinned.
+- **This session touched 11 files against the ~8 rule.** — *because* landing the server side without
+  the mobile leg would have shipped exactly the zero-call-site module D-010 exists to prevent.
+  Flagged rather than absorbed silently.
 
-**Phase 1, W10 — remote push.** It is the top of the dependency chain: today a phone hears about an
-incident **only while its WebSocket is alive**, so with the app closed the only working leg to
-another human is SMS. Nothing else in Phase 1 matters until a phone rings.
+## Next session starts here
 
-Scope, in order: request a device push token → store it server-side → data-only FCM send from
-`internal/notify` → present a full-screen intent (the `USE_FULL_SCREEN_INTENT` permission is already
-declared in `app.json:27` and never used). Split into two sessions if it grows past ~8 files.
+- **Phase 1, W10-b:** make a real handset ring — a `TaskManager` background task that composes the
+  alert from the five push fields through the existing `notifyIncident()`, then a `showWhenLocked`
+  full-screen-intent Activity to present it, closing 1.35e, 1.37 and 1.28 together.
+- **First command:**
 
-Two smaller items are good candidates if you want a quick win first: the `showWhenLocked` medical
-card Activity (PHASES 1.28), and the exact-alarm Kotlin watchdog (1.13).
+  ```
+  git checkout phase1-w10-remote-push && cd mobile && npm run verify
+  ```
 
-Read first: [CLAUDE.md](../CLAUDE.md) → [PROJECT_MAP.md](PROJECT_MAP.md) → [PHASES.md](PHASES.md)
-Phase 1. Check [RISK.md](RISK.md) before touching anything in its danger table.
+  Then, before writing code, confirm the blocker is cleared:
+  `echo $env:KAVACH_FCM_CREDENTIALS` and check `mobile/google-services.json` exists.
+- **Watch out for:** **do not build W10-b before the Firebase project exists.** Its entire exit
+  criterion is a physical device ringing through Do Not Disturb; without credentials you will write
+  a receive path that typechecks, cannot be exercised, and will be reported as done. That is the
+  precise failure this project has already shipped more than once (D-010), and it is how W10 stays
+  the weakest week in the project for another twelve days.
 
-### Open question carried forward
-
-For **offline video calling** (Phase 6.4), the design is blocked on one answer that was asked on
-07 Aug and never given: **same room / same building** (Wi-Fi Direct, ~30–50 m indoors — buildable),
-or **across the city** (which no app can do without a network)? Pick one before any code.
+  Second trap: `expo-notifications` background tasks must be registered in an **early-loaded module**
+  (`index.ts`), not inside a React component — registering from a screen silently never fires when
+  the app is killed, which is the only case that matters. Read
+  https://docs.expo.dev/versions/v57.0.0/sdk/notifications/ before writing it; `mobile/AGENTS.md`
+  requires the versioned docs, and SDK 57 moved this API.

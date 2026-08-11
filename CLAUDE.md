@@ -7,10 +7,16 @@ for status, and [docs/RISK.md](docs/RISK.md) before touching anything in its dan
 
 | | |
 |---|---|
-| backend | `cd backend && go build ./... && go test ./... -race` |
+| backend | `cd backend && go build ./... && go vet ./... && go test ./...` |
 | mobile | `cd mobile && npm run verify` (= `tsc --noEmit` + `npm test`) |
 | codegen | `npm run gen` (root) · check drift with `npm run gen:check` |
+| lints | `node tools/schema-lint.mjs` · `node tools/protolint.mjs` (root) |
 | stack | `docker compose -f ops/docker-compose.yml up --build -d` |
+
+**`-race` does not run on this machine.** It needs `CGO_ENABLED=1` *and* a C compiler, and there is
+no gcc here — `go test -race` fails with `cgo: C compiler "gcc" not found`, which is a toolchain
+gap, not a test failure. CI gate 3 is the only place the race detector has ever run. Do not report
+`-race` as passing locally; say it was not run.
 
 Windows: `go test ./...` may fail once with *"An Application Control policy has blocked this
 file"* — that is the OS, not the code. Re-run.
@@ -29,6 +35,14 @@ file"* — that is the OS, not the code. Re-run.
    `src/ui/theme.ts`, never literals.
 6. **There is no linter.** `tsc --noEmit`, `go vet` and staticcheck are the whole static-analysis
    surface — match surrounding style by reading it, not by running a formatter.
+7. **A mobile test that imports an Expo module needs a stub in `mobile/test/shim.mjs`.** Node runs
+   the tests directly; there is no Metro and no jest. Add the specifier to `STUBS` and its source to
+   `STUB_SOURCE`. Keep stubs *controllable* (`__setX` / `__emitX` exports) so behaviour can be
+   driven, not just satisfied.
+8. **Never invent a persisted field name.** `backend/migrations/0001_init.sql` is the naming
+   authority for anything the server stores, even though nothing runs it (ADR-006, D-003).
+   `internal/store/store_test.go` now enforces this for the `device` table: its key list must match
+   the migration's columns exactly, so a new column fails the test until you add it there.
 
 ## Danger zones
 

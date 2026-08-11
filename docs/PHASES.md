@@ -8,6 +8,36 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 > **Two traps.** `W1…W16` are **week numbers, not workstream ids** — they run continuously across
 > Phases 0 and 1. Each phase's soak is *inside* its week range, not added on top.
 
+---
+
+## Now
+
+**Phase 1 · W10-b — make a real handset ring.** The server can address a phone and really sends
+(W10-a, 11 Aug); nothing on the device consumes the message. One session: a `TaskManager` background
+task registered in `index.ts` that composes the alert from the five push fields through the existing
+`notifyIncident()`, plus a `showWhenLocked` full-screen-intent Activity to present it — closing
+**1.35e, 1.37 and 1.28** together, since all three are the same Activity work.
+
+> ⛔ **Blocked until a Firebase project exists** — `google-services.json` in the Android build and a
+> service-account key at `KAVACH_FCM_CREDENTIALS`. Free, ~15 min, **owner: the user.** W10's exit
+> criterion is a physical device ringing through DND; building the receive path first produces code
+> that typechecks and cannot be exercised (D-018).
+
+## Next 3
+
+1. **W10-b + 1.28** — receive half, full-screen intent, `showWhenLocked` medical card. *(above)*
+2. **Hardware trigger (1.16, 1.17)** — `PowerButtonWatcher` (5× in 3 s) and `VolumePatternWatcher`
+   (vol-down 3 s, screen off). Both **absent**; nothing in the app observes a hardware button, which
+   makes `PocketSuppressor` (1.19, complete) a guard on a door nobody can open. A panic button you
+   must unlock the phone and open an app to reach is not a panic button.
+3. **Exact-alarm Kotlin watchdog (1.13)** — `exactAlarmsPermitted` is *checked* and no exact alarm is
+   ever *scheduled*, so on a force-stopped app on an aggressive OEM nothing resurrects the agent.
+   §4.12 names OEM battery managers as risk #3.
+
+Then the measurement work: T-213 statistically, NFR instrumentation, drills, the four-week soak.
+
+---
+
 > **Retired figures.** The numbers **59% / 70% / 52%** appear in chat logs and in
 > `mobile/docs/PHASE-STATUS.md`. They were measured once on 28 Jul and then re-quoted four times
 > over ten days **without re-measurement**, including a week later as if current. They also predate

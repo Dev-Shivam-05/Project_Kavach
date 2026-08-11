@@ -163,3 +163,71 @@ side. Each becomes a CI gate.
 **Why.** `62ed6839 "Initial Commit"` collapsed twelve days of work into one commit on 9 Aug. There
 is no bisect, no blame, and no way to see when a behaviour changed. Combined with `/clear` without
 handoff, that is how the project's history was lost in the first place.
+
+---
+
+*Added 2026-08-11, session 2 (Phase 1 W10-a — remote push, send side).*
+
+## D-015 — A delivery row must never claim a leg that was not attempted
+
+**Decision.** `internal/notify` no longer models the FCM leg with a jittered sleep and an
+unconditional `delivered`. It really sends, and records what happened: `KV-NOTOKEN` (this handset
+never registered a token), `KV-NOPUSHCFG` (this deployment holds no FCM credentials),
+`KV-UNREGISTERED` (T-218 — the token is dead), `KV-PUSHFAIL` (transient).
+**Why.** Those rows are the input to the four clocks and the notification matrix (§2.6.1, §16.2) —
+the only evidence a family has that the safety chain works. A green row for a leg that does not
+exist is not an approximation, it is the system lying about the exact property W10 exists to
+establish. The same argument the module's own header already makes for `KV-SHUTDOWN` ("record the
+truth rather than a delivery we cannot vouch for") applies here and had simply not been applied.
+**Consequence, stated plainly.** Until a Firebase project exists, **every** FCM row on a running
+deployment reads `failed / KV-NOPUSHCFG`. That is a truthful red, not a regression, and it is the
+first time the deployment has been able to say "no phone here can be reached with its app closed".
+**Evidence.** `internal/notify/notify.go` `dispatch()` / `sendPush()`; `fcm_test.go` — one test per
+outcome. The four modelled channels (APNs, PushKit, SMS, voice) are **untouched** and still
+simulated; only FCM became real.
+
+## D-016 — The native FCM token, never the Expo push service
+
+**Decision.** `acquireDevicePushToken()` calls `getDevicePushTokenAsync()`, not
+`getExpoPushTokenAsync()`, and the server sends to Google directly with the family's own
+service-account credentials.
+**Why.** The Expo push service is a relay. Using it puts a third party between an emergency and a
+family phone, adds a hop that must be up at the one moment that matters, and means the alert's
+routing depends on this app's Expo project rather than on infrastructure the family controls. The
+same reasoning that put `apiDirect` beside the CDN endpoint (F-05) applies to the push fabric.
+**Cost, accepted.** A Firebase project and `google-services.json` in the Android build become hard
+requirements; the app cannot be push-tested from Expo Go at all (it already could not run there —
+D-001).
+**Evidence.** `mobile/src/state/notifications.ts`; `backend/internal/notify/fcm.go` (FCM HTTP v1).
+
+## D-017 — The store↔migration column pairing is now machine-checked, for one table
+
+**Decision.** `internal/store/store_test.go` pins the **complete set of persisted JSON keys** on
+`Device` against the column names in `migrations/0001_init.sql`. Adding a column to the Go struct
+fails the test until the list is updated, and the list is only allowed to name columns the migration
+really has.
+**Why.** [RISK.md](RISK.md) §8: the SQL is the target Postgres schema, the store is the live
+implementation, five tables exist only in SQL, and **nothing checked that they agree**. Drift is
+invisible until migration day. W10 needed to add a column, which made this the moment to make the
+pairing cost something.
+**Deliberately narrow.** One table. Generalising it to all eleven is worth doing and is *not* done —
+doing it properly means parsing the SQL rather than hand-listing keys, and that is its own task.
+**Consequence.** `push_token_fcm` is the migration's name, not an invented one. `push_token_apns`
+and `push_token_voip` exist in the SQL and are deliberately **absent** from the Go struct: iOS is out
+of scope (ADR-015), and a column nothing writes is D-010's failure mode in schema form.
+
+## D-018 — W10 splits into send and receive; the Firebase project gates the half that can be proven
+
+**Decision.** W10 is now W10-a (token registration + server send — **done**) and W10-b (device
+receive + full-screen presentation — **not started**). W10-b is sequenced *after* creating a Firebase
+project.
+**Why.** W10's exit criterion is "an alert rings through Do Not Disturb on every device in the §17.2
+matrix" — a physical-device check. W10-a is verifiable by test and is therefore honest work to do
+without hardware; W10-b is *only* verifiable on a handset receiving a real push, so building it
+before credentials exist means writing code that cannot be checked and calling it done. That is the
+failure mode §3.8 and rule 8 both exist to prevent.
+**Also true.** W10-b needs the same `showWhenLocked` Activity work as the medical card (1.28), so
+the two should be one session, not two.
+**Blocker owner: the user.** A Firebase project, `google-services.json` in the Android build, and a
+service-account key at `KAVACH_FCM_CREDENTIALS`. Free, ~15 minutes, and nothing downstream of it can
+be finished first.
