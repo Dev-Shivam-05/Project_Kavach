@@ -22,6 +22,7 @@ const STUBS = new Set([
   'expo-sqlite',
   'expo-notifications',
   'expo-router',
+  'expo-task-manager',
 ]);
 
 const STUB_SOURCE = {
@@ -61,10 +62,14 @@ const STUB_SOURCE = {
    * Error value is thrown instead (the missing-Firebase-config case).
    */
   'expo-notifications': `
-    export const __state = { token: null, listeners: [] };
+    export const __state = { token: null, listeners: [], presented: [], channels: [] };
     export function __setDevicePushToken(v) { __state.token = v; }
     export function __emitPushToken(v) { for (const l of __state.listeners) l(v); }
     export function __listenerCount() { return __state.listeners.length; }
+    /** What reached the OS, in order — the assertion surface for the push receive path. */
+    export function __presented() { return __state.presented; }
+    export function __channelIds() { return __state.channels; }
+    export function __resetPresented() { __state.presented = []; __state.channels = []; }
     export async function getDevicePushTokenAsync() {
       if (__state.token instanceof Error) throw __state.token;
       return __state.token;
@@ -74,15 +79,18 @@ const STUB_SOURCE = {
       return { remove() { __state.listeners = __state.listeners.filter((l) => l !== listener); } };
     }
     export function setNotificationHandler() {}
-    export async function setNotificationChannelAsync() {}
+    export async function setNotificationChannelAsync(id) { __state.channels.push(id); }
     export async function setNotificationCategoryAsync() {}
     export async function getPermissionsAsync() { return { granted: true, canAskAgain: true }; }
     export async function requestPermissionsAsync() { return { granted: true }; }
-    export async function scheduleNotificationAsync() {}
+    export async function scheduleNotificationAsync(req) { __state.presented.push(req); }
     export async function dismissNotificationAsync() {}
     export async function cancelScheduledNotificationAsync() {}
     export async function getLastNotificationResponseAsync() { return null; }
     export function addNotificationResponseReceivedListener() { return { remove() {} }; }
+    export async function registerTaskAsync() { return null; }
+    export async function unregisterTaskAsync() { return null; }
+    export const BackgroundNotificationTaskResult = { NewData: 0, NoData: 1, Failed: 2 };
     export const AndroidAudioContentType = { SONIFICATION: 4 };
     export const AndroidAudioUsage = { ALARM: 4 };
     export const AndroidImportance = { MAX: 5, DEFAULT: 3, LOW: 2 };
@@ -90,6 +98,25 @@ const STUB_SOURCE = {
   `,
   'expo-router': `
     export const router = { push() {}, replace() {}, back() {} };
+  `,
+  /**
+   * Controllable, because the thing worth testing about the background push task
+   * is that it is DEFINED — under the expected name, at module scope, before
+   * anything renders. __runTask invokes the registered executor exactly the way
+   * expo-task-manager does, so the receive path can be driven end to end without
+   * a device.
+   */
+  'expo-task-manager': `
+    const tasks = new Map();
+    export function defineTask(name, executor) { tasks.set(name, executor); }
+    export function __definedTasks() { return [...tasks.keys()]; }
+    export function __runTask(name, body) {
+      const executor = tasks.get(name);
+      if (!executor) throw new Error('no task defined named ' + name);
+      return executor(body);
+    }
+    export async function isTaskRegisteredAsync(name) { return tasks.has(name); }
+    export async function unregisterTaskAsync(name) { tasks.delete(name); }
   `,
 };
 

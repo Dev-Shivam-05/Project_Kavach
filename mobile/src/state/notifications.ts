@@ -44,7 +44,7 @@ import {
 import { CONFIG } from '../core/config';
 import { DEFAULT_POLICY } from '../core/policy';
 import { t } from '../i18n';
-import type { Incident, Member, UUID } from '../core/types';
+import type { Incident, Member, TriggerType, UUID } from '../core/types';
 
 export const CHANNEL_EMERGENCY = 'kavach-emergency';
 export const CHANNEL_PROBE = 'kavach-probe';
@@ -87,7 +87,18 @@ export function installNotificationHandler(): void {
   });
 }
 
-async function ensureChannels(): Promise<void> {
+/**
+ * ★ Exported for the background push task (W10-b · 1.35e). ★
+ *
+ * A headless wake has NOT run `initNotifications()` — the app was killed, and
+ * `TaskManager` loads the bundle to run one function. On API 26+ a notification
+ * posted to a channel id that does not exist on the device is DROPPED by the OS:
+ * no error, no fallback channel, nothing on screen. Channels survive app
+ * restarts, so in practice they are already there — but "in practice" is not the
+ * standard for the one code path whose entire job is to make a phone ring.
+ * Idempotent, three cheap native calls, and it removes the failure mode.
+ */
+export async function ensureNotificationChannels(): Promise<void> {
   if (Platform.OS !== 'android') return;
 
   await Notifications.setNotificationChannelAsync(CHANNEL_EMERGENCY, {
@@ -195,7 +206,7 @@ export async function initNotifications(): Promise<boolean> {
     }
 
     if (!initialised) {
-      await ensureChannels();
+      await ensureNotificationChannels();
       await ensureCategories();
       initialised = true;
     }
@@ -386,23 +397,84 @@ export function subscribeNotificationResponses(actions: NotificationActions): ()
 }
 
 /** Trigger class, in the family's language. Never the sealed detail. */
-function scenarioLabel(incident: Incident): string {
-  return DEFAULT_POLICY.scenarios[incident.trigger]?.label ?? incident.trigger;
+function scenarioLabel(trigger: TriggerType): string {
+  // Same fallback as `ladderFor()` in policy.ts: an unrecognised trigger is
+  // still an emergency, it is just an unlabelled one.
+  return DEFAULT_POLICY.scenarios[trigger]?.label ?? trigger;
 }
 
 /**
- * Only Class B/C fields. This object mirrors exactly what a remote data-only
- * push is permitted to carry, so the local and remote paths compose identical
- * text from identical inputs (F-21).
+ * ★ THE ALERT CONTRACT — the five lock-screen-safe fields and nothing else. ★
+ *
+ * Exactly what a remote data-only push is permitted to carry (F-21), which is
+ * why both paths into `presentIncidentAlert` below take THIS and not an
+ * `Incident`: the socket path holds a full decrypted incident and the push path
+ * holds five strings, and the alert a family sees must not depend on which one
+ * woke the phone. Anything the push cannot carry is therefore something the
+ * alert must not use.
+ *
+ * Note what is absent and stays absent: location, the sealed note, the medical
+ * card, and the duress flag (F-01).
  */
-function incidentData(incident: Incident, tier: 1 | 2 | 3, subjectShortName: string) {
-  return {
-    incidentId: incident.id,
-    familyId: incident.familyId,
-    trigger: incident.trigger,
-    tier,
-    subjectShortName,
-  } as const;
+export interface IncidentAlertFields {
+  incidentId: UUID;
+  familyId: UUID;
+  trigger: TriggerType;
+  tier: 1 | 2 | 3;
+  subjectShortName: string;
+  /**
+   * Known on the socket path, unknowable on the push path — the server does not
+   * put it in the payload. `notifyIncidentFromPush` passes false, which is the
+   * fail-SAFE direction: a drill shown as real costs one apology, a real
+   * incident shown as "DRILL —" costs the thing this app exists to prevent.
+   * In practice a drill usually carries `trigger: 'DRILL'`, which the title
+   * renders as "Drill" anyway.
+   */
+  isDrill: boolean;
+}
+
+/**
+ * ★ THE ONE PLACE AN INCIDENT BECOMES WORDS. ★ Both `notifyIncident` (socket,
+ * app alive) and `notifyIncidentFromPush` (FCM, app killed) land here, so the
+ * two paths cannot drift into telling the family two different stories.
+ */
+async function presentIncidentAlert(f: IncidentAlertFields): Promise<void> {
+  const short = f.subjectShortName || 'Family';
+  const drill = f.isDrill ? 'DRILL — ' : '';
+  const title = `${drill}${short}: ${scenarioLabel(f.trigger)}`;
+
+  // Escalating urgency, composed locally. Tier 3 says the quiet part out loud.
+  const body =
+    f.tier === 3
+      ? `${t('state.ACTIVE_L3')} · ${t('panic.call112')}`
+      : f.tier === 2
+        ? `${t('state.ACTIVE_L2')} · ${t('panic.nobodyResponded')}`
+        : t('panic.nobodyResponded');
+
+  await present(incidentNotificationId(f.incidentId), CHANNEL_EMERGENCY, {
+    title,
+    body,
+    data: {
+      incidentId: f.incidentId,
+      familyId: f.familyId,
+      trigger: f.trigger,
+      tier: f.tier,
+      subjectShortName: short,
+    },
+    categoryIdentifier: CATEGORY_INCIDENT,
+    sound: 'defaultCritical',
+    // iOS: 'critical' breaks through the mute switch and Focus, matching the
+    // Android alarm channel. Downgrades to 'timeSensitive' without the
+    // entitlement rather than failing to deliver.
+    interruptionLevel: f.isDrill ? 'timeSensitive' : 'critical',
+    priority: 'max',
+    color: '#FF3B30',
+    // The family must dismiss it deliberately; an emergency should not be
+    // swiped away by accident while the phone is in a pocket.
+    sticky: !f.isDrill,
+    autoDismiss: false,
+    vibrate: [0, 400, 200, 400, 200, 800],
+  });
 }
 
 async function present(
@@ -435,36 +507,34 @@ export async function notifyIncident(
   tier: 1 | 2 | 3,
   subject?: Member | null,
 ): Promise<void> {
-  const short = subject?.asciiShortName ?? 'Family';
-  const drill = incident.isDrill ? 'DRILL — ' : '';
-  const title = `${drill}${short}: ${scenarioLabel(incident)}`;
-
-  // Escalating urgency, composed locally. Tier 3 says the quiet part out loud.
-  const body =
-    tier === 3
-      ? `${t('state.ACTIVE_L3')} · ${t('panic.call112')}`
-      : tier === 2
-        ? `${t('state.ACTIVE_L2')} · ${t('panic.nobodyResponded')}`
-        : t('panic.nobodyResponded');
-
-  await present(incidentNotificationId(incident.id), CHANNEL_EMERGENCY, {
-    title,
-    body,
-    data: incidentData(incident, tier, short),
-    categoryIdentifier: CATEGORY_INCIDENT,
-    sound: 'defaultCritical',
-    // iOS: 'critical' breaks through the mute switch and Focus, matching the
-    // Android alarm channel. Downgrades to 'timeSensitive' without the
-    // entitlement rather than failing to deliver.
-    interruptionLevel: incident.isDrill ? 'timeSensitive' : 'critical',
-    priority: 'max',
-    color: '#FF3B30',
-    // The family must dismiss it deliberately; an emergency should not be
-    // swiped away by accident while the phone is in a pocket.
-    sticky: !incident.isDrill,
-    autoDismiss: false,
-    vibrate: [0, 400, 200, 400, 200, 800],
+  await presentIncidentAlert({
+    incidentId: incident.id,
+    familyId: incident.familyId,
+    trigger: incident.trigger,
+    tier,
+    subjectShortName: subject?.asciiShortName ?? 'Family',
+    isDrill: incident.isDrill,
   });
+}
+
+/**
+ * ★ W10-b · 1.35e — THE SAME ALERT, WOKEN BY A PUSH INSTEAD OF A SOCKET. ★
+ *
+ * Called from the headless background task in `pushReceive.ts` when a data-only
+ * FCM message arrives on a phone whose app is backgrounded or killed. The
+ * fields have already been parsed and sanitised there; this function's only job
+ * is to make the remote path and the local path produce byte-identical text,
+ * because a family that learns to recognise one alert must not meet a second,
+ * differently-worded one on the night the app happened to be closed.
+ *
+ * The identifier is derived from the incident id, so if the app later opens and
+ * `notifyIncident` runs for the same incident, the OS REPLACES this notification
+ * rather than stacking a duplicate.
+ */
+export async function notifyIncidentFromPush(
+  fields: Omit<IncidentAlertFields, 'isDrill'>,
+): Promise<void> {
+  await presentIncidentAlert({ ...fields, isDrill: false });
 }
 
 /**

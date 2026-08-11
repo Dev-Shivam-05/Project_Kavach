@@ -15,12 +15,11 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import {
-  __emitPushToken,
-  __listenerCount,
-  __setDevicePushToken,
-  // @ts-expect-error — resolved to a controllable stub by test/shim.mjs
-} from 'expo-notifications';
+// @ts-expect-error — resolved to a controllable stub by test/shim.mjs. The
+// directive must sit on the line the specifiers are on: tsc reports an unknown
+// export per specifier, so a trailing comment inside the braces suppresses
+// nothing and silently leaves this file failing `tsc --noEmit`.
+import { __emitPushToken, __listenerCount, __setDevicePushToken } from 'expo-notifications';
 import { acquireDevicePushToken, subscribePushTokenChanges } from '../src/state/notifications';
 
 afterEach(() => {
