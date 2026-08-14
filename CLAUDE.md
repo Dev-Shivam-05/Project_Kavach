@@ -11,6 +11,8 @@ for status, and [docs/RISK.md](docs/RISK.md) before touching anything in its dan
 | mobile | `cd mobile && npm run verify` (= `tsc --noEmit` + `npm test`) |
 | codegen | `npm run gen` (root) · check drift with `npm run gen:check` |
 | lints | `node tools/schema-lint.mjs` · `node tools/protolint.mjs` (root) |
+| archlint | `cd backend && go run ./tools/archlint` — **from `backend/`, not the root.** The root has no `go.mod`, so running it there fails with `cannot find main module` |
+| staticcheck | **is installed here**, and is not on PATH: `& "$env:USERPROFILE\go\bin\staticcheck.exe" ./...` from `backend/`. It is a local gate, unlike `-race` |
 | stack | `docker compose -f ops/docker-compose.yml up --build -d` |
 
 **`-race` does not run on this machine.** It needs `CGO_ENABLED=1` *and* a C compiler, and there is
