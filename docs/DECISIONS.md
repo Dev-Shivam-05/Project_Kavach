@@ -452,3 +452,101 @@ characterization this repo's rules demand does not exist yet. (4) It is well pas
 an exhaustive grep for bus subscribers. **Nothing here has been run against a live stack**, and the
 compose stack has never been brought up on this machine. Do not quote "no rung ever fires" as
 measured; quote it as read, and read it yourself before acting on it.
+
+### D-026 addendum (W10-h, 20 Aug) — two of the three breaks are closed, and the third grew
+
+**What changed.** `cmd/control-plane` now holds a durable subscription on `fam.*.incident`
+(`incidentsDurable = "control-plane.incidents"`, `bus.StartAll`) whose handler projects the incident
+into the control plane's store and calls `engine.OnIncidentOpen`. The bus leg is closed. The
+action-name leg is closed with it, for free and by construction: the engine mints its own rungs, so
+what lands on disk is `REPEAT_L1` / `SMS_TIER` / `ESCALATE_L2` / `ESCALATE_L3` / `AUTO_QUIESCE` —
+names `execute` has cases for — and never the `NO_ACK` that `armTimers` derives.
+
+The order this repo asks for was followed: `cmd/control-plane/main_test.go` landed first, asserting
+that a `fam.*.incident` message armed **nothing** (commit `ae6dc1f7`, green); the subscriber turned
+that test red; the same commit inverts it. `newServer` was extracted from `main()` first, as a pure
+move, because a question about wiring cannot be answered while the wiring is inline next to a
+listener and a signal handler.
+
+**Three decisions inside the handler, each of which could have gone the other way.**
+
+1. **The redelivery guard is "has rungs", not "exists".** `escalation.arm` mints a fresh UUID per
+   rung, so an unguarded second delivery appends a *whole second ladder* rather than overwriting the
+   first — D-025's mirror image, and `bus.StartAll` replays the entire retained stream at every
+   boot, which makes it the ordinary case rather than the exotic one. But guarding on existence
+   alone would strand an incident whose projection died between `PutIncident` and `OnIncidentOpen`:
+   recorded, unarmed, and permanently skipped. Every incident the engine has opened carries at least
+   the F-02 backstop, so "has rungs" is the honest test for "was fully projected". A re-arm re-reads
+   the stored incident rather than the envelope, so it cannot rewind a ladder that has already
+   climbed.
+2. **`initialState` is now one function**, shared with `POST /v1/incidents`. DURESS opens
+   `ACTIVE_L1_SILENT` and skips the window outright (§7.5 — a countdown the attacker can watch is
+   not a safety feature); everything else opens `PENDING` and the server arms its own copy of the
+   device's cancel window, which is what `defaultCancelWindowS` already said it was for ("the device
+   may be underwater").
+3. **An unknown family drops with a WARN, and does not retry.** The same call `sos-ingest`'s
+   projector makes on the same question: there is nobody to escalate to, and five retries then park
+   a poison record in front of every other family's incidents.
+
+**What is NOT closed, and it is the bigger half.**
+
+- **The store split stands.** `sos-ingest` still writes `<data>/store` and the control plane still
+  reads `KAVACH_DATA_DIR`. That is now correct rather than broken — the bus is the seam and each
+  binary owns its store, which is what ADR-002 asks for — but it means the control plane's store is
+  the only place an incident's ladder exists, and `sos-ingest.armTimers` still writes rungs into a
+  directory nothing polls. Those rungs are now dead weight rather than a broken ladder.
+  `armTimers` and `tierFor` should come **out** of `sos-ingest` (~20 lines back into the ADR-002
+  budget), and that is a separate phase with its own characterization: `projector_test.go` asserts
+  the arming behaviour D-025 fixed, and deleting the function means deciding what those tests become.
+- **⛔ Nothing crosses a process.** See **D-027**. Every test that proves the above runs in one
+  process on one `*Bus` instance. In the deployed topology no rung reaches a container, and that is
+  not a wiring gap this phase could have closed.
+
+**So: is D-026 closed?** No. Its bus leg and its action-name leg are closed and measured; its
+premise — that the two binaries can talk at all — turns out to be false one layer down.
+
+---
+
+## D-027 — The file-backed bus does not cross a process, and `ops/docker-compose.yml` assumes it does
+
+**Found** 20 Aug (W10-h), while wiring D-026's subscriber. **Measured**, not read:
+`internal/bus/crossprocess_test.go` — the first tests `internal/bus` has ever had.
+
+**What the code does.**
+- `Open` replays `stream.wal` **once**, at boot, into `b.msgs` (`bus.go:113`).
+- `publish` appends to this instance's file handle and to this instance's slice (`bus.go:190`).
+- `drain` walks that slice and nothing else (`bus.go:425`); the 250 ms ticker re-checks the same
+  in-memory slice.
+- No code path re-reads the file after boot.
+
+**Three measured consequences.**
+1. A second `*Bus` on the same directory **never receives** the first's messages. Not late —
+   absent.
+2. Both instances assign the same `Seq` to different messages.
+3. The write offset is fixed at `Open` (`wal.go:75`, `w.size = st.Size()`) and advanced only by that
+   instance's own appends (`wal.go:180`). `os.OpenFile` uses `O_RDWR|O_CREATE` — **no `O_APPEND`, no
+   file lock** — and `w.mu` is an in-process mutex. So two live writers land every record at the
+   same offset and **overwrite each other**. Reopening the directory afterwards finds one survivor.
+   In the compose topology the record that gets erased is the SOS `sos-ingest` fsynced and acked to
+   a frightened person's phone.
+
+**Why this outranks D-026.** D-026 said the escalation engine was not subscribed to the incident
+stream. That was true, and it is fixed. D-027 says that even subscribed, it cannot hear: `sos-ingest`
+and `control-plane` are separate containers with separate `*Bus` instances. The same is true of
+every other pair — `realtime-gw`'s socket frames, the canary's chain, the consent surfacing job.
+**No message in this system has ever crossed a container boundary**, and the four-service stack in
+`ops/docker-compose.yml` is four programs that each work alone.
+
+**Not fixed here, deliberately.** Three routes, none of them a phase-sized edit:
+1. **Real NATS JetStream**, which `internal/bus` says in its own comments it stands in for. Costs a
+   dependency, and `backend/go.mod` must keep zero `require` lines (ADR-006 territory).
+2. **Make the file bus multi-process** — a tailing reader plus a cross-process write lock. Needs
+   `syscall.LockFileEx`/`Flock` behind build tags in a package that had zero tests until today, and
+   a sequence-assignment scheme that survives two writers. Its own phase, probably its own ADR.
+3. **Collapse the processes**, which is the thing ADR-002 exists to prevent.
+
+**Stated honestly.** The mechanism is proven by three passing tests, in-process, with two `*Bus`
+instances standing in for two containers. **The compose stack has still never been brought up on
+this machine.** What is measured is that the transport cannot work across instances; what is
+inferred is that containers behave as separate instances do, which follows from there being no
+shared memory between them. Read `internal/bus/crossprocess_test.go` before acting on this.

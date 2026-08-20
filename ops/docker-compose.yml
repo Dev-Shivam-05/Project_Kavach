@@ -57,10 +57,20 @@ x-common: &common
   volumes:
     - kavach-store:/var/lib/kavach
   environment: &common-env
-    # The file-backed bus (internal/bus: stream.wal + cursors.json, tailed on a
-    # 250 ms poll) stands in for NATS JetStream. All four processes read and
-    # write ONE directory — that shared directory IS the seam between sos-ingest
-    # and everything downstream, and it is the only thing they share.
+    # The file-backed bus (internal/bus: stream.wal + cursors.json) stands in for
+    # NATS JetStream, and all four processes are pointed at ONE directory.
+    #
+    # ⛔ That does NOT make it a seam, and this comment used to claim it did.
+    # internal/bus reads stream.wal once, at Open, into an in-memory slice;
+    # publish appends to that slice and drain walks it. Nothing tails the file,
+    # so a second process here is not a peer — it is a separate stream that
+    # happens to share a filename. Worse, the write offset is fixed at Open and
+    # WriteAt puts every instance's records at it, so two live processes
+    # overwrite each other. Measured: internal/bus/crossprocess_test.go.
+    #
+    # Until that is fixed (real NATS, a tailing reader, or a single-writer
+    # broker) nothing published by one container is delivered to another, and
+    # this stack is four programs that each work alone. See DECISIONS.md D-027.
     KAVACH_BUS_DIR: /var/lib/kavach/bus
     # Structured dev logging. Set to 0 for the JSON production formatter.
     KAVACH_DEV: "1"

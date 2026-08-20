@@ -50,7 +50,7 @@ on success, so a redelivery after a partial failure must still arm what is missi
 `engine.cancelTimers` still depends on that; see [DECISIONS.md](DECISIONS.md) D-025.
 963 → 970/1000 lines.
 
-**16. Nothing executes the escalation rungs `sos-ingest` arms.** *(added 20 Aug, W10-g.)*
+**16. Nothing executes the escalation rungs `sos-ingest` arms.** *(added 20 Aug, W10-g; **two of three breaks closed 20 Aug, W10-h** — and superseded in practice by item 17.)*
 Two independent breaks between the binary that receives an SOS and the binary that climbs the ladder:
 - **Different stores.** `sos-ingest` opens `filepath.Join(<data>, "store")` (`main.go:264`), which
   `ops/docker-compose.yml:114` makes `/var/lib/kavach/store`. The escalation engine lives in
@@ -71,14 +71,49 @@ the A′ path — and no rung of the escalation ladder will ever fire for it. It
 that cannot be reached; this is about a ladder that never starts climbing. It is the reason item 15
 could not ring anybody today, and the reason item 15 had to be fixed anyway: the wiring must close
 for Phase 1 to pass its gate, and the day it does, item 15 goes live.
-See [DECISIONS.md](DECISIONS.md) D-026. **Not fixed, and not a one-file fix** — it is a topology
-decision spanning `cmd/control-plane`, `ops/docker-compose.yml` and possibly ADR-002.
+**What W10-h closed.** `cmd/control-plane` now holds a durable subscription on `fam.*.incident`
+(`control-plane.incidents`, `StartAll`) that projects the incident into its own store and calls
+`engine.OnIncidentOpen`. The bus leg is closed, and the action-name leg with it — the engine mints
+its own rungs, so `NO_ACK` is never written. Measured by `cmd/control-plane/main_test.go`, this
+binary's first tests: the assertion that a published incident armed **nothing** is in the history,
+green, one commit before the subscriber turned it red.
+**What is still open.** The store split stands, and is now correct rather than broken — but
+`sos-ingest.armTimers` writes rungs into a directory nothing polls, so those ~20 lines should come
+out of the sacred binary in a phase of their own. And, decisively, **item 17**: nothing crosses a
+process, so none of the above reaches a container.
+See [DECISIONS.md](DECISIONS.md) D-026 and its W10-h addendum.
+
+**17. No message in this system has ever crossed a process.** *(added 20 Aug, W10-h.)*
+`internal/bus` is in-process only, and `ops/docker-compose.yml` deploys four containers on the
+assumption that it is not. **Measured** by `internal/bus/crossprocess_test.go`, the first tests that
+package has ever had:
+- `Open` replays `stream.wal` once, at boot, into an in-memory slice (`bus.go:113`); `publish`
+  appends to that slice (`bus.go:190`); `drain` walks it and nothing else (`bus.go:425`). **Nothing
+  tails the file.** A second `*Bus` on the same directory never receives the first's messages.
+- Both instances assign the same `Seq` to different messages.
+- The write offset is fixed at `Open` (`wal.go:75`) and the file is opened `O_RDWR|O_CREATE` — no
+  `O_APPEND`, no lock, and `w.mu` is an in-process mutex. Two live writers put every record at the
+  same offset and **overwrite each other**; reopening the directory finds one survivor.
+**What this costs:** the compose stack is four programs that each work alone. `sos-ingest` publishes
+an incident and no other container hears it; the control plane publishes a notify frame and
+`realtime-gw` never sees it; the canary watches a stream nothing writes to from its point of view.
+It is also silent data loss on the safety path — the record a second process overwrites can be the
+SOS `sos-ingest` fsynced and acked. Item 16's fix is correct and cannot reach a container until this
+is closed.
+**Not fixed, and not a one-file fix:** real NATS (a dependency `backend/go.mod` may not take), a
+tailing reader plus a cross-process write lock (build-tagged `syscall` work in a package that had no
+tests until today), or collapsing the processes (what ADR-002 forbids).
+See [DECISIONS.md](DECISIONS.md) D-027.
 
 ## S2 — will make a change unverifiable
 
 **4. ~4,300 LOC of backend has no direct tests.**
-`internal/{bus,wal,consent}` and all of `control-plane`, `realtime-gw`, `canary` — the append-only
-log, the durable stream every plane hangs off, and a hand-written WebSocket frame codec.
+`internal/{wal,consent}` and all of `realtime-gw`, `canary` — the append-only log and a hand-written
+WebSocket frame codec. Two came off this list on 20 Aug (W10-h): `internal/bus` has three tests
+pinning the one property everything else assumes (item 17), and `cmd/control-plane` has nine —
+the front door's ladder, the bus leg, redelivery, an unknown family, and a source-text contract
+check against `sos-ingest`'s wire shape. Neither package is *covered*; both now have a place to
+hang the next test.
 `cmd/sos-ingest` came off this list on 20 Aug (W10-g): `projector_test.go` pins the arming path —
 what PENDING arms (nothing), what a duress open arms, and the D-025 rewrite — through the real
 front door. Its request path was already covered by `main_test.go`. What is still unpinned there:
@@ -129,7 +164,8 @@ ten days without re-measurement ([history/SESSION-LOG.md](history/SESSION-LOG.md
 `TestLOCBudget` reports **970/1000** (963 before W10-g spent 7 on D-025's guard); CI Gate 4 fails
 past 1000 (ADR-002, deliberate). Any feature touching the sacred binary must remove lines to add
 lines. If item 16 is closed by moving the ladder to the control plane, `armTimers` and `tierFor`
-become deletable and about 20 lines come back.
+become deletable and about 20 lines come back. W10-h closed item 16's bus leg, so those rungs are
+now written into a directory nothing polls — the deletion is available and has not been taken.
 
 **8. `migrations/0001_init.sql` and `internal/store/store.go` must stay in sync, and nothing checks
 it.** The SQL is the target Postgres schema (ADR-006, not deployed); the store is the live

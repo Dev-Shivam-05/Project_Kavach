@@ -73,8 +73,9 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 - **`notify.Fanout` rebuilds `Step` by hand for the neighbour feed** (the `reduced` loop in
   `notify.go`). A field you add to `Step` and do not name there is silently dropped — for neighbours
   only, so every test on the main path still passes. Add the field *and* a neighbour-leg test.
-- `internal/{bus,wal,consent}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**;
-  `internal/store` covers two seams (the device table, W10-a; the escalation_timer row and
+- `internal/{wal,consent}` and `cmd/{realtime-gw,canary}` have **zero tests**; `cmd/control-plane`
+  (9 tests) and `internal/bus` (3) got their first in W10-h and ~30 control-plane routes are still
+  unpinned. `internal/store` covers two seams (the device table, W10-a; the escalation_timer row and
   `FireTimer`, W10-f) out of eleven tables. `internal/notify`
   and `internal/escalation` are the covered ones — escalation has 69 cases over CLAIM/RELEASE
   (W10-d), the ladder and the timer wheel (W10-e), action routing (W10-g), and still nothing on
@@ -96,12 +97,21 @@ directive above it, and read the actual `npm run typecheck` output before claimi
   it reads the incident's rungs once and skips any id already on disk, **per rung id, never per
   incident**, because a bus redelivery after a partial failure must still arm what is missing
   (D-025). Do not move that guard into the store without reading both callers.
-- **Nothing executes the rungs `sos-ingest` arms (D-026, RISK 16).** The escalation engine lives in
-  `control-plane` and polls `<data>/control-plane`; `sos-ingest` writes `<data>/store`; the only
-  subscriber to `fam.*.incident` is `sos-ingest`'s own projector; and `NO_ACK` — the L1→L2→L3 climb
-  — is not an action `escalation.execute` implements (pinned by `action_routing_test.go`). Every ✅
-  in W9 is true of the engine in isolation and untrue end to end. Read D-026 before you touch
-  `armTimers`, `OnIncidentOpen`, or either binary's data directory.
+- **⛔ `internal/bus` does not cross a process, and the whole deployment assumes it does (D-027,
+  RISK 17).** `Open` replays `stream.wal` once into an in-memory slice; `publish` appends to that
+  slice; `drain` walks it. **Nothing tails the file.** A second process on the same directory
+  receives nothing — and because the write offset is fixed at `Open`, with no `O_APPEND` and no file
+  lock, the two **overwrite each other's records**. Measured: `internal/bus/crossprocess_test.go`.
+  The four containers in `ops/docker-compose.yml` are four programs that each work alone. Never
+  report a cross-binary path as working on the strength of an in-process test; say which it is.
+- **The rungs `sos-ingest` arms are executed by nobody, and are now redundant too (D-026 +
+  addendum).** W10-h gave `cmd/control-plane` a durable subscription on `fam.*.incident` that
+  projects the incident and calls `engine.OnIncidentOpen` — so the ladder is armed by the engine,
+  with action names `execute` has cases for, **in one process**. `sos-ingest.armTimers` still derives
+  `NO_ACK` rungs into `<data>/store`, which nothing polls and which `escalation.execute` has no case
+  for (`action_routing_test.go`). `armTimers` and `tierFor` are ~20 deletable lines; deleting them
+  means deciding what `projector_test.go`'s four tests become. Read D-026 and D-027 before you touch
+  `armTimers`, `OnIncidentOpen`, `onIngestedIncident`, or either binary's data directory.
 
 ## Do not "fix" these
 
