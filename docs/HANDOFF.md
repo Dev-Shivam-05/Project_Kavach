@@ -1,6 +1,6 @@
 # HANDOFF — Kavach — Phase 1 (W10-i, D-027 closed; the arrow connects) — 2026-08-20
 
-Branch **`shivam`**, 6 new commits on top of `b1a416bb`. Session W10-h's handoff is superseded by
+Branch **`shivam`**, 7 new commits on top of `b1a416bb`, pushed. Session W10-h's handoff is superseded by
 this one; its content is in commit `b1a416bb`.
 
 **W10-c was not started, again, and for the same reason.** First command of the session was
@@ -94,8 +94,9 @@ a throwaway probe, two OS processes, 500 records each, 1000 intact, no overwrite
 **Ops** — `ops/e2e-two-binaries.sh` **(new)**; `docker-compose.yml`'s bus comment is true now and
 says what keeps it true; `README.md` gains the cursor-directory layout and the e2e recipe.
 
-**Docs** — `DECISIONS.md` (D-027 W10-i addendum), `RISK.md` (16 and 17 **closed**, 4 loses `wal`),
-`PHASES.md` (Now, the queue reordered), `PROJECT_MAP.md`, `ADR-007`, `CLAUDE.md`, this file.
+**Docs** — `DECISIONS.md` (D-027 W10-i addendum, appended), `RISK.md` (16 and 17 **closed**, 4 loses
+`wal`), `PHASES.md` (Now, the queue reordered, and the 1.4 / 1.29 / 1.30 status cells, which still
+said the ladder could not run for a real SOS), `PROJECT_MAP.md`, `ADR-007`, `CLAUDE.md`, this file.
 
 ## Decisions made
 

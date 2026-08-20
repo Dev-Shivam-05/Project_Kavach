@@ -27,7 +27,11 @@ Changes to the native Tier-0 plane are unverifiable from this checkout; say so r
 Kotlin as done (D-021).
 
 Windows: `go test ./...` may fail with *"An Application Control policy has blocked this file"* —
-that is the OS, not the code. Re-running sometimes clears it. **For `cmd/sos-ingest` it does not**:
+that is the OS, not the code. Re-running sometimes clears it. **It also blocks a test that re-execs
+its own binary** (`internal/{wal,bus}`'s two-real-process tests, `fork/exec …\b001\x.test.exe`).
+Those skip themselves on that one error string, so the package stays green; to actually run them,
+give the binary a stable path — `go test -c -o .gotmp/bus.test.exe ./internal/bus/` then
+`./.gotmp/bus.test.exe -test.run=TestTwoRealProcesses…`. **For `cmd/sos-ingest` it does not**:
 three consecutive runs failed identically on `sos-ingest.test.exe` while every other package passed.
 The fix is to build somewhere else —
 `mkdir -p backend/.gotmp && GOTMPDIR=/d/Projects/Project_Kavach/backend/.gotmp go test ./cmd/sos-ingest/`
@@ -115,6 +119,11 @@ directive above it, and read the actual `npm run typecheck` output before claimi
   which kind of test you are quoting — **`docker compose up` has never been run on this machine**
   (no daemon), so the four-container claim remains untested; `ops/e2e-two-binaries.sh` is the
   strongest evidence that exists and it is two binaries on one host.
+- **A bus test handler that blocks hangs the whole package, it does not fail it.** The cursor stops
+  advancing, `Drain` never returns, and `Close` waits on the worker for ever — `go test` sits there
+  until its timeout with no failing assertion to read. Publishing more messages than a test
+  channel's buffer is the easy way to cause it; `subscribeInto` sends non-blocking for that reason.
+  Always pass `-timeout` when a bus change is under test.
 - **The rungs `sos-ingest` arms are executed by nobody, and are now redundant too (D-026 +
   addendum).** W10-h gave `cmd/control-plane` a durable subscription on `fam.*.incident` that
   projects the incident and calls `engine.OnIncidentOpen` — so the ladder is armed by the engine,
