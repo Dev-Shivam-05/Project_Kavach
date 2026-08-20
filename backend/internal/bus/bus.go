@@ -147,9 +147,11 @@ func Open(dir string) (*Bus, error) {
 		_ = lg.Close()
 		return nil, errors.New("bus: cannot read " + filepath.Join(dir, "stream.wal"))
 	}
-	if raw, err := os.ReadFile(filepath.Join(dir, "cursors.json")); err == nil {
-		_ = json.Unmarshal(raw, &b.cursors)
+	if err := os.MkdirAll(filepath.Join(dir, cursorDirName), 0o755); err != nil {
+		_ = lg.Close()
+		return nil, err
 	}
+	b.loadCursors()
 	go b.poll()
 	return b, nil
 }
@@ -434,6 +436,12 @@ type Sub struct {
 // SubscribeDurable registers a named consumer whose cursor is persisted, and
 // starts its worker.
 func (b *Bus) SubscribeDurable(durable, pattern string, start Start, h Handler) (*Sub, error) {
+	if !safeDurable(durable) {
+		// Its cursor is a file named after it. Refusing at subscribe time is loud
+		// at boot; the alternative is a consumer whose cursor silently never
+		// persists and which replays its whole stream after every restart.
+		return nil, errors.New("bus: durable name must be [A-Za-z0-9._-]: " + durable)
+	}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -596,23 +604,21 @@ func (s *Sub) persistCursor() {
 	b.writeCursors()
 }
 
-// writeCursors merges this process's cursors into the file rather than
-// replacing it.
+// writeCursors persists the cursor of every durable this process owns, one file
+// each.
 //
-// cursors.json is shared by every process on the directory, and each holds a
-// copy loaded at Open. Writing that whole copy back would reset another
-// process's durable to wherever it stood when we booted — for control-plane's
-// incidents durable that means replaying a resolved incident and re-arming a
-// ladder. So: re-read, overlay only the durables this process actually owns,
-// write. Two writers can still interleave between the read and the rename, and
-// the loser is one cursor tick behind; at-least-once already requires consumers
-// to dedupe on (incident_id, hlc).
+// One file per durable, not one map for all of them, and the reason is a race
+// this package's own test caught: two processes that both read cursors.json
+// before either renamed it produced a file with only the second writer's
+// durable in it. Merge-on-write narrows that window; it does not close it,
+// because read-modify-write across processes needs a lock, and a cursor that
+// vanishes is a durable that resumes from `start` — for a StartAll projector,
+// the whole stream replayed.
+//
+// A file nobody else writes needs no merge. Each process writes only the names
+// it subscribed, so the only way to lose a cursor is for two processes to claim
+// the SAME durable name, which is a deployment mistake rather than a race.
 func (b *Bus) writeCursors() {
-	merged := map[string]uint64{}
-	if raw, err := os.ReadFile(filepath.Join(b.dir, "cursors.json")); err == nil {
-		_ = json.Unmarshal(raw, &merged)
-	}
-
 	b.mu.RLock()
 	subs := make([]*Sub, len(b.subs))
 	copy(subs, b.subs)
@@ -620,16 +626,63 @@ func (b *Bus) writeCursors() {
 	b.mu.RUnlock()
 
 	for _, s := range subs {
-		if s.persist {
-			merged[s.durable] = s.Cursor()
+		if !s.persist {
+			continue
+		}
+		writeAtomic(cursorPath(dir, s.durable),
+			[]byte(strconv.FormatUint(s.Cursor(), 10)))
+	}
+}
+
+// cursorDirName holds one file per durable consumer.
+const cursorDirName = "cursors"
+
+func cursorPath(dir, durable string) string {
+	return filepath.Join(dir, cursorDirName, durable+".cursor")
+}
+
+// safeDurable reports whether a durable name can be a filename. Durable names
+// are identifiers chosen in code, never user input, so this is a guard against
+// a future one containing a path separator rather than a sanitiser.
+func safeDurable(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-':
+		default:
+			return false
 		}
 	}
+	return true
+}
 
-	raw, err := json.Marshal(merged)
+// loadCursors reads every durable's cursor. cursors.json is read first and the
+// per-durable files win: a directory written by an older build resumes where it
+// stopped instead of replaying its whole stream on the upgrade.
+func (b *Bus) loadCursors() {
+	if raw, err := os.ReadFile(filepath.Join(b.dir, "cursors.json")); err == nil {
+		_ = json.Unmarshal(raw, &b.cursors)
+	}
+	entries, err := os.ReadDir(filepath.Join(b.dir, cursorDirName))
 	if err != nil {
 		return
 	}
-	writeAtomic(filepath.Join(dir, "cursors.json"), raw)
+	for _, e := range entries {
+		name := strings.TrimSuffix(e.Name(), ".cursor")
+		if name == e.Name() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(b.dir, cursorDirName, e.Name()))
+		if err != nil {
+			continue
+		}
+		if n, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64); err == nil {
+			b.cursors[name] = n
+		}
+	}
 }
 
 // Cursor reports the number of stream records this consumer has passed.

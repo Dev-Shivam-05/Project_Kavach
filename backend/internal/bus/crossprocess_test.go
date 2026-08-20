@@ -25,11 +25,11 @@
 package bus
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -60,11 +60,19 @@ func incidentMsg(id, who string) Msg {
 }
 
 // subscribeInto returns a channel fed by a durable subscription.
+//
+// The send is non-blocking on purpose. A handler that blocks does not just stall
+// its own test: the cursor stops advancing, Drain never returns, and Close waits
+// on the worker for ever, so the whole package hangs instead of failing. Tests
+// here assert on the first message or on the cursor, never on the buffer.
 func subscribeInto(t *testing.T, b *Bus, durable string) chan Msg {
 	t.Helper()
 	got := make(chan Msg, 8)
 	if _, err := b.SubscribeDurable(durable, "fam.*.incident", StartAll, func(m Msg) error {
-		got <- m
+		select {
+		case got <- m:
+		default:
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -215,11 +223,20 @@ func TestSeqIsThePositionInTheFileNotAPerInstanceCounter(t *testing.T) {
 	}
 }
 
-// TestADurableCursorIsNotErasedByAnotherProcess — cursors.json is shared. Each
-// process holds a copy loaded at Open, so writing that whole copy back resets
-// every durable it does not own to where it stood at boot. For control-plane's
-// incidents durable that means replaying a resolved incident and re-arming a
-// ladder somebody already climbed.
+// TestADurableCursorIsNotErasedByAnotherProcess — a cursor that vanishes is a
+// durable that resumes from `start`, and for a StartAll projector that is the
+// whole stream replayed.
+//
+// This test was written against a single shared cursors.json that each process
+// merged into, and it caught that merging loses: two processes that both read
+// before either renamed produced a file holding only the second writer's
+// durable. Read-modify-write across processes needs a lock. One file per
+// durable needs nothing, because nobody else writes it — which is the fix this
+// now pins.
+//
+// The publishing is deliberately noisy: cursors are also written by each
+// durable's own drain, so the interleaving that broke the merge happens on its
+// own rather than only at the two explicit calls below.
 func TestADurableCursorIsNotErasedByAnotherProcess(t *testing.T) {
 	dir := t.TempDir()
 	ingest := openAt(t, dir)
@@ -228,8 +245,15 @@ func TestADurableCursorIsNotErasedByAnotherProcess(t *testing.T) {
 	ingestSub := subscribeInto(t, ingest, "sos-ingest.projector")
 	planeSub := subscribeInto(t, plane, "control-plane.incidents")
 
-	if _, err := ingest.PublishSync(incidentMsg("i-1", "sos-ingest")); err != nil {
-		t.Fatal(err)
+	const incidents = 12
+	for i := 0; i < incidents; i++ {
+		src := ingest
+		if i%2 == 1 {
+			src = plane
+		}
+		if _, err := src.PublishSync(incidentMsg(fmt.Sprintf("i-%d", i), "either")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, ch := range []chan Msg{ingestSub, planeSub} {
 		select {
@@ -238,22 +262,67 @@ func TestADurableCursorIsNotErasedByAnotherProcess(t *testing.T) {
 			t.Fatal("an incident was not delivered to both processes' durables")
 		}
 	}
-	if !plane.subs[0].Drain(settle) || !ingest.subs[0].Drain(settle) {
+	if !plane.subs[0].Drain(4 * settle) || !ingest.subs[0].Drain(4 * settle) {
 		t.Fatal("a durable did not catch up with the stream")
 	}
 	plane.writeCursors()
 	ingest.writeCursors()
 
-	raw, err := os.ReadFile(filepath.Join(dir, "cursors.json"))
-	if err != nil {
+	for _, durable := range []string{"control-plane.incidents", "sos-ingest.projector"} {
+		raw, err := os.ReadFile(cursorPath(dir, durable))
+		if err != nil {
+			t.Fatalf("%s has no cursor file: %v", durable, err)
+		}
+		n, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+		if err != nil {
+			t.Fatalf("%s cursor = %q: %v", durable, raw, err)
+		}
+		if n != incidents {
+			t.Fatalf("%s cursor = %d, want %d", durable, n, incidents)
+		}
+	}
+
+	// And a third process reads both back, which is the point of persisting them.
+	third := openAt(t, dir)
+	if got := third.cursors["control-plane.incidents"]; got != incidents {
+		t.Fatalf("a fresh instance loaded control-plane.incidents as %d, want %d", got, incidents)
+	}
+	if got := third.cursors["sos-ingest.projector"]; got != incidents {
+		t.Fatalf("a fresh instance loaded sos-ingest.projector as %d, want %d", got, incidents)
+	}
+}
+
+// TestALegacyCursorsJSONIsStillHonoured — a directory written by a build from
+// before D-027 has one cursors.json and no cursors/ directory. Ignoring it
+// would make the upgrade replay every retained message on first boot.
+func TestALegacyCursorsJSONIsStillHonoured(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var saved map[string]uint64
-	if err := json.Unmarshal(raw, &saved); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "cursors.json"),
+		[]byte(`{"control-plane.incidents":7}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if saved["control-plane.incidents"] == 0 || saved["sos-ingest.projector"] == 0 {
-		t.Fatalf("cursors.json = %v, want both durables recorded: the last writer erased the other", saved)
+	b := openAt(t, dir)
+	if got := b.cursors["control-plane.incidents"]; got != 7 {
+		t.Fatalf("legacy cursor loaded as %d, want 7", got)
+	}
+}
+
+// TestADurableNameThatCannotBeAFilenameIsRefused — its cursor is a file named
+// after it, so a name with a separator in it would silently never persist and
+// replay its whole stream after every restart. Loud at subscribe instead.
+func TestADurableNameThatCannotBeAFilenameIsRefused(t *testing.T) {
+	b := openAt(t, t.TempDir())
+	for _, bad := range []string{"", "..", "a/b", `a\b`, "cp:incidents"} {
+		if _, err := b.SubscribeDurable(bad, "fam.>", StartAll, func(Msg) error { return nil }); err == nil {
+			t.Fatalf("SubscribeDurable(%q) was accepted", bad)
+		}
+	}
+	if _, err := b.SubscribeDurable("control-plane.incidents", "fam.>", StartAll,
+		func(Msg) error { return nil }); err != nil {
+		t.Fatalf("a name this repo actually uses was refused: %v", err)
 	}
 }
 

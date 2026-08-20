@@ -103,7 +103,7 @@ grep -o '"id":"[^"]*","family_id":"[^"]*"\|"state":"[A-Z_0-9]*"' "$CP/incident.j
 echo
 echo "== the seam =="
 echo "stream.wal: $(stat -c %s "$BUS/stream.wal" 2>/dev/null) bytes"
-echo "cursors:    $(cat "$BUS/cursors.json" 2>/dev/null)"
+echo "cursors:    $(ls "$BUS/cursors" 2>/dev/null | xargs echo)"
 echo
 echo "== control-plane: what it heard and what it did =="
 grep -E "ingest_incident_projected|timer_armed|transition|fanout" "$E2E/control-plane.log" | tail -12

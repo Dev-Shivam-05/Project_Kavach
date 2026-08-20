@@ -1,152 +1,163 @@
-# HANDOFF — Kavach — Phase 1 (W10-h, D-026's bus leg closed; D-027 found) — 2026-08-20
+# HANDOFF — Kavach — Phase 1 (W10-i, D-027 closed; the arrow connects) — 2026-08-20
 
-Branch **`shivam`**, 5 new commits on top of `580f24e8`. Session W10-g's handoff is superseded by
-this one; its content is in commit `580f24e8`.
+Branch **`shivam`**, 6 new commits on top of `b1a416bb`. Session W10-h's handoff is superseded by
+this one; its content is in commit `b1a416bb`.
 
 **W10-c was not started, again, and for the same reason.** First command of the session was
 `java -version` — not found, `JAVA_HOME` and `ANDROID_HOME` unset (D-021). The board's instruction
-for that case named D-026 as the next item, and that is what this session did.
+for that case named D-027 as the next item, and that is what this session did.
 
-It closed two of D-026's three breaks — and found that the third one was never the real problem.
+**An SOS posted to the `sos-ingest` binary now climbs the escalation ladder in the `control-plane`
+binary.** That has never been true before today.
+
+## The decision (this phase was a decision before it was code)
+
+D-027 offered three routes and two of them needed an ADR amended, so it was put to the user as a
+spec-lock table. **Route chosen: make the file bus multi-process, stdlib only.** Not NATS —
+`backend/go.mod` keeps zero `require` lines (ADR-003/ADR-006) and the stack grows a broker. Not
+"admit it is single-process" — that is not a compose comment but a merge of three binaries, because
+`realtime-gw` subscribes to tickets the control plane mints and the canary to frames escalation
+publishes, and it *still* would not connect `sos-ingest`.
+
+**D-027's own estimate of the chosen route was wrong, in our favour.** It said this needed
+`syscall.LockFileEx`/`Flock` behind build tags. It does not: `O_APPEND` makes the kernel place each
+record at the end of the file under its own lock. That was measured before anything was designed —
+a throwaway probe, two OS processes, 500 records each, 1000 intact, no overwrite.
 
 ## Done
 
-- **`newServer` is extracted from `main()`** (`607bcdc3`). A pure move: same order, same log events,
-  same failure behaviour. It exists because "does this binary subscribe to anything" is a question
-  about wiring, and the wiring was inline in `main()` between a listener and a signal handler.
-- **`cmd/control-plane` has tests** — its first, ever. Nine of them (`main_test.go`). The matched
-  pair is the point: `POST /v1/incidents` arms all five rungs, and the same incident published on
-  `fam.*.incident` **armed nothing**. That second test landed green, in its own commit
-  (`ae6dc1f7`), *before* the fix — the red is in the history, not only in prose.
-- **D-026's bus leg is closed** (`23989003`). `cmd/control-plane` now holds a durable subscription
-  on `fam.*.incident` (`control-plane.incidents`, `StartAll`) whose handler projects the incident
-  into its own store and calls `engine.OnIncidentOpen`. **The action-name leg closed with it, by
-  construction**: the engine mints its own rungs, so what lands on disk is
-  `REPEAT_L1`/`SMS_TIER`/`ESCALATE_L2`/`ESCALATE_L3`/`AUTO_QUIESCE` — names `execute` has cases for
-  — and never the `NO_ACK` `armTimers` derives.
-- **Three judgement calls inside that handler, each of which could have gone the other way.**
-  1. **The redelivery guard is "has rungs", not "exists".** `escalation.arm` mints a fresh UUID per
-     rung, so an unguarded second delivery appends *a whole second ladder* — D-025's mirror image,
-     and `StartAll` replays the whole stream at every boot, which makes it the ordinary case. But
-     guarding on existence alone would strand an incident whose projection died between
-     `PutIncident` and `OnIncidentOpen`: recorded, unarmed, skipped forever. A re-arm re-reads the
-     **stored** incident, so it cannot rewind a ladder that has already climbed.
-  2. **`initialState` is now one function**, shared with the HTTP front door so the two cannot
-     drift. DURESS skips the cancel window (§7.5); everything else gets the server's own copy of it,
-     which is what `defaultCancelWindowS` already said it was for — "the device may be underwater".
-  3. **An unknown family drops with a WARN and does not retry** — the same call `sos-ingest`'s
-     projector makes on the same question. Retrying parks a poison record in front of every other
-     family's incidents.
-- **⛔ D-027 — no message in this system has ever crossed a process.** Found while wiring the above,
-  and it is bigger than the thing it was found under. `internal/bus` has its first tests
-  (`crossprocess_test.go`, 3), and they measure:
-  - `Open` replays `stream.wal` **once**, at boot, into `b.msgs` (`bus.go:113`); `publish` appends
-    to that slice (`bus.go:190`); `drain` walks it and nothing else (`bus.go:425`). **Nothing tails
-    the file.** A second `*Bus` on the same directory receives nothing — not late, absent.
-  - Both instances assign **`Seq` 1** to different messages.
-  - The write offset is fixed at `Open` (`wal.go:75`) and the file is opened `O_RDWR|O_CREATE` — no
-    `O_APPEND`, no lock, and `w.mu` is an in-process mutex. Two live writers land every record at
-    the same offset and **overwrite each other**. Reopening the directory afterwards finds **one
-    survivor**; in compose the erased record is the SOS `sos-ingest` fsynced and acked.
-  So the four containers in `ops/docker-compose.yml` are four programs that each work alone, and
-  that file's comment claiming "the shared directory IS the seam" was false. **Recorded, not
-  fixed** — RISK item 17, D-027.
-- Verified green: `go build`, `go vet ./...`, `staticcheck ./...`, `go test ./...`
-  (control-plane **9**, bus **3**, sos-ingest **27**, escalation **69**, store **21**), `archlint`
-  (14 packages, **54** edges), `TestLOCBudget` **970/1000**, `logx` deny-list, `gen:check`,
-  `schema-lint`, `protolint`, `tsc --noEmit`, `npm test` **165/165**.
+- **`internal/wal` has tests — 19, its first ever** (`wal_test.go` 10, `shared_test.go` 9). The ten
+  came **first**, before a line of the file changed, because it is the file ADR-002 rests on: the
+  8-byte header, the length+CRC framing, the `Append`-offset/`ReadAt` contract, refusal of empty and
+  oversize records, survival across close/reopen, `ErrClosed` everywhere, and both crash-repair
+  paths. One of them, `TestReplayReadsOnlyUpToThisInstancesOwnSize`, is D-027's root cause stated in
+  `wal`'s own terms — and it still passes, because `Open` (single-writer, `sos.wal`) is untouched.
+- **`wal.OpenShared`** (`216f644e`) — the multi-process mode, opt-in, used only by the bus.
+  `O_APPEND` and one whole record per `Write`; `Tail(from, fn)` re-stats the file and stops without
+  error at a record that is not yet whole. Four things that were not in D-027's estimate:
+  1. **The writer no longer knows where its record went.** On Windows the handle's own pointer
+     counts only that process's writes — measured — so `Append` returns `-1` in shared mode rather
+     than a number that is right on Linux and wrong where the tests run. Nothing read it.
+  2. **Windows will not truncate through an `O_APPEND` handle** (`FILE_APPEND_DATA` without
+     `FILE_WRITE_DATA`); torn-tail repair opens its own.
+  3. **A short tail is no longer evidence of a crash** — it is usually another process mid-`Write` —
+     so repair settles 20 × 5 ms before truncating.
+  4. **The header is written once**, by whoever wins `O_EXCL`, not by every booting container.
+- **`internal/bus` crosses a process** (`df23c001`). `poll()` tails the file on the 250 ms ticker it
+  already had; records enter `b.msgs` there and in `publish`, nowhere else. **`Seq` is now the
+  record's ordinal in the file**, not `len(b.msgs)+1` on whichever instance published — a cursor
+  *is* a `Seq`, so two processes may not have two names for one record. `publish` reads its own
+  record back to learn it, which is also why an in-process subscriber is still woken immediately
+  instead of 250 ms later.
+- **`crossprocess_test.go` is the same file, inverted.** Its W10-h version promised to fail and name
+  the sentence that stopped being true, and it did, both of them — `the second instance received
+  "i-sos"` and `seq 1 and 2 … no longer collide`. That red is in the run log above the commit.
+- **The inference is retired.** `TestTwoRealProcessesAppendToOneSharedLog` and
+  `TestTwoRealProcessesOnOneBusDirectory` **re-execute the test binary as a second OS process**.
+  D-027 was measured with two values in one binary and said honestly that containers behaving the
+  same way was an inference. It is not one now.
+- **`ops/e2e-two-binaries.sh`** (`d8b46e88`) — the two real binaries, one `KAVACH_BUS_DIR`, a real
+  SOS to sos-ingest's HTTP front door. Run six times:
+
+  ```
+  ack           {"verified":false,"flags":1}          ADR-018: accept, flag, count
+  control-plane ingest_incident_projected             it heard the other process
+                timer_armed AUTO_QUIESCE, CANCEL_WINDOW
+  +20s          transition CANCEL_WINDOW_EXPIRED      PENDING -> ACTIVE_L1
+                timer_armed REPEAT_L1, SMS_TIER, ESCALATE_L2, ESCALATE_L3
+                fanout tier=1 label=L1 devices=0
+  ```
+
+- **A bug my own test caught, and the first fix for it was wrong.** `cursors.json` is shared, and
+  each process holds a copy loaded at `Open`, so writing that copy back reset the *other* process's
+  durables to where they stood at boot. Merge-on-write was the obvious answer and it is not
+  sufficient: `TestADurableCursorIsNotErasedByAnotherProcess` failed on roughly one run in six with
+  `cursors.json = map[sos-ingest.projector:1]`, because two processes that both read before either
+  renamed still lose a key. It is **one file per durable** now — `bus/cursors/<name>.cursor` — and
+  `SubscribeDurable` refuses a name that cannot be a filename. A legacy `cursors.json` is still read
+  at boot so an upgrade resumes instead of replaying.
+- Verified green: `go build`, `go vet ./...`, `staticcheck ./...`, `go test ./...` (wal **19**, bus
+  **10**, control-plane **9**, sos-ingest **27**, escalation **69**, store **21**), `internal/bus`
+  at `-count=6`, `archlint` (14 packages, **54** edges), `TestLOCBudget` **970/1000**, `schema-lint`,
+  `protolint`, `gen:check`, `tsc --noEmit`, `npm test` **165/165**.
 
 ## Files changed
 
 **Backend**
-- `cmd/control-plane/main.go` — `newServer`/`serverConfig` extracted from `main()`; `initialState`
-  extracted from `openIncident`; `subjFamIncident` + `incidentsDurable`; `incidents *bus.Sub` on
-  `server`; `ingestRecord` + `onIngestedIncident` (~120 lines); drain on shutdown. 1708 → **1911**.
-- `cmd/control-plane/main_test.go` **(new, 296 lines)** — 9 tests. `newPlane` builds through
-  `newServer`; `sosIngestOpen` synthesises the bus message; `armedActions`, `waitForRungs`.
-- `internal/bus/crossprocess_test.go` **(new, 165 lines)** — 3 tests, the package's first.
+- `internal/wal/wal.go` — `OpenShared`/`open(path, shared)`, `Tail`, `endLocked`, `createShared`,
+  `awaitHeader`, `repairTo`, `walk` split out of `scan`. 344 → **~470**.
+- `internal/wal/wal_test.go` **(new, 10 tests)** · `internal/wal/shared_test.go` **(new, 9)**.
+- `internal/bus/bus.go` — `wal.OpenShared`, `poll`, `tailLocked`, `readOff`, `TailErrors`,
+  `writeCursors`/`loadCursors`/`cursorPath`/`safeDurable`; `publish` no longer assigns `Seq`.
+- `internal/bus/crossprocess_test.go` — inverted; 3 tests → **10**.
 
-**Ops** — `ops/docker-compose.yml`: the bus comment was a false claim and is now where D-027 is
-explained.
+**Ops** — `ops/e2e-two-binaries.sh` **(new)**; `docker-compose.yml`'s bus comment is true now and
+says what keeps it true; `README.md` gains the cursor-directory layout and the e2e recipe.
 
-**Docs** — `DECISIONS.md` (D-026 addendum, D-027), `RISK.md` (item 16 updated, **new S1 items 17
-and 18**, items 4 and 7 updated), `PHASES.md` (the Now blocker rewritten around D-027, the W10-h paragraph,
-the queue reordered, the W9 heading, 1.29, a new board rule), `PROJECT_MAP.md` (danger table ×3,
-coverage), `CLAUDE.md` (the bus danger zone replaces the old D-026 one, coverage), this file.
+**Docs** — `DECISIONS.md` (D-027 W10-i addendum), `RISK.md` (16 and 17 **closed**, 4 loses `wal`),
+`PHASES.md` (Now, the queue reordered), `PROJECT_MAP.md`, `ADR-007`, `CLAUDE.md`, this file.
 
 ## Decisions made
 
-- **W10-h instead of W10-c** — `java` is not on PATH. Checked first, before picking the phase.
-- **The subscriber, not a shared store.** ADR-002 exists to stop the second one. The bus is the
-  seam and each binary keeps its own store; the control plane projects what it hears.
-- **Shipped the leg knowing D-027 stops it at the container boundary.** The alternative — hold the
-  fix until the transport is decided — leaves a phase with no functional change and a decision
-  nobody has the evidence to make. What is *not* allowed is the tick, so the test file, the commit
-  message, `DECISIONS.md`, `RISK.md`, `PROJECT_MAP.md`, `CLAUDE.md` and the board each say in their
-  own words that these nine green tests stop at one process.
-- **D-027 recorded, not fixed.** Three routes, none phase-sized: real NATS (a `require` line
-  `go.mod` may not take), a tailing reader plus a cross-process write lock (build-tagged `syscall`
-  work in a package whose only tests are the three written today), or admitting the stack is
-  single-process. It is a decision before it is code.
-- **`armTimers` left in place.** Its rungs are now dead weight rather than a broken ladder, and
-  deleting it means deciding what `projector_test.go`'s four tests become. Queued at #2, not taken.
+- **W10-i instead of W10-c** — `java` is not on PATH. Checked first, before picking the phase.
+- **The user chose the route**, from a table with the ADR cost of each spelled out. Two of the three
+  needed an accepted ADR amended, which is not a call to make while implementing.
+- **`Open` was left alone.** The multi-writer mode is opt-in, so `sos.wal` — ADR-002's durability
+  file — writes exactly as it did, and its ten characterization tests pass unmodified. Do not
+  "unify" the two modes.
+- **Per-durable cursor files over merge-on-write**, once the merge was measured losing. A format
+  change beats a spin loop in a file that decides whether a family is woken twice.
+- **The e2e script is committed rather than described.** It seeds `family.json` by hand — RISK 18 —
+  with a comment saying to delete that helper the day a real seed route exists, because a fixture
+  that outlives the gap it works around is why nobody closes the gap.
 
 ## Known broken / deliberately skipped
 
-- **⛔ D-027 is measured in-process, with two `*Bus` instances standing in for two containers.**
-  What is *measured* is that the transport cannot work across instances; what is *inferred* is that
-  containers behave as separate instances do — which follows from their having no shared memory,
-  but **the compose stack has still never been brought up on this machine.** Read
-  `internal/bus/crossprocess_test.go` before acting on it.
-- **⛔ D-026 is not closed.** Its bus leg and action-name leg are. Its premise — that the two
-  binaries can talk — is what D-027 falsified.
-- **⛔ Still nobody's phone has rung, and none can** — 1.35d, RISK 14, unchanged and untouched:
-  `KAVACH_FCM_CREDENTIALS` unset, `mobile/google-services.json` absent, no
-  `android.googleServicesFile` in `app.json`.
+- **⛔ `docker compose up` has still never been run on this machine.** Docker's daemon is not
+  running (`failed to connect to the docker API at npipe:…dockerDesktopLinuxEngine`). Everything
+  above is Go tests plus **two binaries on one host** — not four containers. This is now the single
+  weakest claim in the repo and it is #1 on the queue.
+- **⛔ Still nobody's phone has rung, and none can** — `devices 0` in that fanout line is correct:
+  no device is enrolled, `KAVACH_FCM_CREDENTIALS` is unset, `mobile/google-services.json` absent.
+  1.35d, RISK 14, unchanged.
+- **⛔ No running binary can create a family** — RISK 18, unchanged and now load-bearing: the e2e
+  script only gets past it by writing `family.json` directly, and a real `docker compose up` will
+  drop every incident at WARN until it is closed.
+- **`realtime-gw`'s socket frames and the canary's chain have still never been observed.** They now
+  rest on a transport that works; nobody has watched either.
 - **`go test -race` was not run** — no gcc on this machine. CI gate 3 only.
-- **`go test ./cmd/sos-ingest/` still needs the `GOTMPDIR` workaround** in `CLAUDE.md`. It was run,
-  and it passes: 27 tests, `TestLOCBudget` 970/1000.
-- **⛔ No running binary can create a family** — **RISK item 18, new.** Noticed while writing the
-  seed helper and then checked properly: `store.PutFamily` has zero non-test call sites, there is
-  only `GET /v1/family`, no seed script, and nothing runs the migration. Both incident projectors
-  gate on the family row, so on a freshly deployed stack *every* incident is dropped at WARN. Fixing
-  it is one route or one command, but which is an enrolment-flow decision (§W4), so it is recorded
-  and not plugged. Verified by grep and the route table; **not** verified against a running stack.
-- **~30 control-plane routes are still unpinned.** Nine tests is a place to hang the next one.
+- **The Windows Application Control policy blocks re-exec intermittently.** Both real-process tests
+  skip — and only for that one error string — when it does; they run on Linux and in CI. If you see
+  it, `go test -c -o .gotmp/bus.test.exe ./internal/bus/` and run the binary directly.
+- **`armTimers` and `tierFor` are still in `sos-ingest`** — dead weight now, ~20 lines against a
+  1000-line ceiling. Queued at #3, not taken.
 - **`escalation` is still not comprehensively covered** — `Cancel` and its duress twin, `Ack`,
-  `OnScene`, two-party `Resolve` and the HLC have nothing.
-- **`internal/store`'s other nine tables are unpinned**; `cmd/sos-ingest`'s `replayWAL` and
-  `refreshCache` are unpinned; `internal/{wal,consent}` and `cmd/{realtime-gw,canary}` have no tests.
-- **1.37 / 1.28 (W10-c) not started** — D-021, unchanged.
-- **1.35f(a/b/c) untouched** — no drill flag on the wire, headless alerts are English (D-020), a
-  terminated-app action tap is still dropped.
+  `OnScene`, two-party `Resolve`, the HLC.
+- **1.37 / 1.28 (W10-c) not started** — D-021, unchanged. **1.35f(a/b/c) untouched.**
 
 ## Next session starts here
 
 - **Check `java -version` first.** With a JDK: **W10-c** — one `Activity` in
   `modules/kavach-t0/android/` (`showWhenLocked`, `turnScreenOn`, `excludeFromRecents`) posted via
-  `setFullScreenIntent`, closing **1.37 and 1.28** together. **Without one, do not.**
-- **Without a JDK, in order:** (1) **D-027**, and it outranks everything, because it is the reason
-  Phase 1's last arrow still does not connect in a deployment. Read RISK 17 and D-027 first, and
-  consider actually bringing the compose stack up — everything about it is measured in-process and
-  reasoned about across containers. It is a *decision* first: NATS, a tailing reader with a
-  cross-process lock, or an honest admission that the stack is single-process. (2) Take `armTimers`
-  and `tierFor` **out** of `sos-ingest` — ~20 lines back into the ADR-002 budget, and the phase is
-  really "decide what `projector_test.go`'s four tests become". (3) The rest of `escalation` —
-  `Cancel`'s duress twin deserves the care `verifyPin` got. (4) Phase 2's `policyRepo.byVersion()`.
+  `setFullScreenIntent`, closing **1.37 and 1.28**. **Without one, do not.**
+- **Without a JDK, in order:** (1) **Start Docker Desktop and bring `ops/docker-compose.yml` up.**
+  It is the only claim left in this repo that has never once been executed, and W10-i's whole lesson
+  is what one run is worth against a plausible sentence. Expect RISK 18 to stop you immediately.
+  (2) **Enrolment — `POST /v1/family` and a device** (RISK 18, §W4): the difference between a ladder
+  that climbs and a phone that rings. (3) `armTimers`/`tierFor` out of `sos-ingest`. (4) The rest of
+  `escalation`.
 - **First command:**
 
   ```
   git checkout shivam
-  cd backend && go test ./internal/bus/ ./cmd/control-plane/ -v
+  bash ops/e2e-two-binaries.sh /tmp/kavach-e2e
   ```
 
   Nothing is outstanding once the branch is pushed.
-- **Watch out for:** **an in-process green test is not an end-to-end green.** Nine control-plane
-  tests and three bus tests pass, and the escalation ladder still does not climb for a real SOS in
-  `ops/docker-compose.yml`. That is D-027, and it is now the single most consequential fact about
-  this backend — it is also true of `realtime-gw`'s socket frames and the canary's chain, neither of
-  which anyone has checked.
+- **Watch out for:** **three things hold the seam open, and breaking any one leaves every in-process
+  test green** — `O_APPEND` on `stream.wal` (never `WriteAt`), `bus.poll()` tailing the file, and
+  `Seq` being the record's ordinal in the file. A record split across two `Write` calls reopens
+  D-027 silently.
 
   Second trap, unchanged since W10-d: **`notify.Fanout` rebuilds `Step` by hand for the neighbour
   feed** (the `reduced` loop in `notify.go`). A field added to `Step` and not named there is dropped

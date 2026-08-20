@@ -577,9 +577,17 @@ syscall. That was measured before it was designed: two OS processes, 500 records
   two processes had two names for one record — and a cursor *is* a `Seq`. It is now the record's
   ordinal in the file, assigned when the record is read back, which is also why `publish` reads its
   own record back before returning.
-- **`cursors.json` was a second, quieter instance of the same bug.** Every process holds a copy
-  loaded at `Open`, so writing the whole copy back reset the other process's durables to where they
-  stood at boot: a resolved incident replayed, a climbed ladder re-armed. It is merged now.
+- **`cursors.json` was a second, quieter instance of the same bug — and the first fix for it was
+  wrong.** Every process holds a copy loaded at `Open`, so writing the whole copy back reset the
+  other process's durables to where they stood at boot: a resolved incident replayed, a climbed
+  ladder re-armed. Merge-on-write was the obvious answer and it is not sufficient — the test
+  written for it, `TestADurableCursorIsNotErasedByAnotherProcess`, failed on about one run in six
+  with `cursors.json = map[sos-ingest.projector:1]`, because two processes that both read before
+  either renamed still lose one key. Read-modify-write across processes needs a lock; a file nobody
+  else writes needs nothing. So it is **one file per durable** now, `bus/cursors/<name>.cursor`,
+  and `SubscribeDurable` refuses a name that cannot be a filename rather than letting a consumer
+  silently never persist. A `cursors.json` from an older build is still read at boot, so an upgrade
+  resumes instead of replaying its whole stream.
 - **Windows will not truncate through an `O_APPEND` handle** (`FILE_APPEND_DATA` without
   `FILE_WRITE_DATA`), so torn-tail repair opens its own.
 - **A short tail is no longer evidence of a crash** — it is usually another process mid-`Write` —

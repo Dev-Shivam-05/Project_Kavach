@@ -92,8 +92,11 @@ curl http://localhost:8080/internal/active-incidents  # F-02 deploy gate
 ├── sos.wal                  sos-ingest: fsynced BEFORE any 2xx is written
 ├── store/                   sos-ingest: family + device-key caches (F-22)
 ├── bus/                     ★ THE SEAM
-│   ├── stream.wal              append-only; tailed on a 250 ms poll
-│   └── cursors.json            durable per-consumer positions
+│   ├── stream.wal              append-only, O_APPEND; tailed on a 250 ms poll
+│   ├── cursors/                one file per durable consumer
+│   │   ├── control-plane.incidents.cursor
+│   │   └── sos-ingest.projector.cursor
+│   └── cursors.json            legacy: written by builds before 20 Aug, still read
 └── control-plane/           control-plane: incidents, consent, drills, audit
 ```
 
@@ -103,6 +106,26 @@ project. All four services are pointed at that one directory explicitly
 (`KAVACH_BUS_DIR`) rather than by defaulting, because the defaults in the four
 `main.go` files are relative to each process's working directory and silently
 disagree.
+
+**Why a directory of cursor files instead of one JSON map** (D-027): the map was
+read-modify-written by every process, and two that read before either renamed
+produced a file holding only the second writer's durable. A vanished cursor is a
+consumer that resumes from `start` — for a `StartAll` projector, the whole
+stream replayed. One file per durable needs no merge because nobody else writes
+it. A `cursors.json` left by an older build is still read at boot, so an upgrade
+resumes rather than replaying.
+
+To watch the seam work, without Docker:
+
+```
+bash ops/e2e-two-binaries.sh /tmp/kavach-e2e
+```
+
+It runs `sos-ingest` and `control-plane` as two processes on one `KAVACH_BUS_DIR`
+and posts a real SOS; the control plane should log `ingest_incident_projected`
+and then climb `PENDING → ACTIVE_L1`. Read its header before believing it: it
+seeds a family by writing `family.json` directly, because nothing in the system
+can create one yet.
 
 The volume is **named**, not a bind mount, so `docker compose down` does not
 erase the incident log. An append-only log that a container teardown can delete
