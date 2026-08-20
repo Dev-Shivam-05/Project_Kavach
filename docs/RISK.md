@@ -105,6 +105,22 @@ tailing reader plus a cross-process write lock (build-tagged `syscall` work in a
 tests until today), or collapsing the processes (what ADR-002 forbids).
 See [DECISIONS.md](DECISIONS.md) D-027.
 
+**18. No running binary can create a family, so every store starts empty and stays empty.**
+*(added 20 Aug, W10-h.)* `store.PutFamily` has **zero non-test call sites** in the repository, and
+`cmd/control-plane` serves `GET /v1/family` with no `POST`. There is no seed script
+(`ops/run-backend.ps1` starts processes and nothing else) and nothing runs `migrations/0001_init.sql`
+(ADR-006). A family therefore exists only inside a test's `t.TempDir()`.
+**What this costs:** both incident projectors gate on the family row and drop when it is missing —
+`sos-ingest.projectOpen` ("the control plane owns family creation") and, since W10-h,
+`control-plane.onIngestedIncident`. On a freshly deployed stack that is *every* incident, silently,
+at WARN. `server.familyID` also falls back to `""` when `st.Families()` is empty, so the tenant of
+an unheadered request is the empty string.
+**Verified**, not inferred: an exhaustive grep for `PutFamily` across `.go`/`.mjs`/`.ps1`/`.yml`, plus
+the route table in `cmd/control-plane/main.go:627`. **Not verified against a running stack** — like
+items 16 and 17, this has never been observed on a live deployment, because there has not been one.
+**Not fixed:** it is one route (`POST /v1/family`) or one seed command, but which of the two is an
+enrolment-flow decision (§W4) and not a hole to plug on the way past.
+
 ## S2 — will make a change unverifiable
 
 **4. ~4,300 LOC of backend has no direct tests.**
