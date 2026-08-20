@@ -76,9 +76,9 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 - **`notify.Fanout` rebuilds `Step` by hand for the neighbour feed** (the `reduced` loop in
   `notify.go`). A field you add to `Step` and do not name there is silently dropped — for neighbours
   only, so every test on the main path still passes. Add the field *and* a neighbour-leg test.
-- `internal/{wal,consent}` and `cmd/{realtime-gw,canary}` have **zero tests**; `cmd/control-plane`
-  (9 tests) and `internal/bus` (3) got their first in W10-h and ~30 control-plane routes are still
-  unpinned. `internal/store` covers two seams (the device table, W10-a; the escalation_timer row and
+- `internal/consent` and `cmd/{realtime-gw,canary}` have **zero tests**; `cmd/control-plane`
+  (9 tests) and `internal/bus` (now 7) got their first in W10-h, `internal/wal` (19) in W10-i, and
+  ~30 control-plane routes are still unpinned. `internal/store` covers two seams (the device table, W10-a; the escalation_timer row and
   `FireTimer`, W10-f) out of eleven tables. `internal/notify`
   and `internal/escalation` are the covered ones — escalation has 69 cases over CLAIM/RELEASE
   (W10-d), the ladder and the timer wheel (W10-e), action routing (W10-g), and still nothing on

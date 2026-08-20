@@ -136,24 +136,31 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 |---|---|
 | `cmd/control-plane/main.go` (1911) | biggest file, ~30 routes. Its **first tests** landed 20 Aug (`main_test.go`, 9): the front door's ladder, the `fam.*.incident` leg, redelivery, an unknown family, the subject filter, and a source-text contract check on `sos-ingest`'s wire shape. ~30 routes are still unpinned. `newServer` now holds the wiring so it is reachable from a test |
 | `internal/store/store.go` (1170) | the durable record for everything; two seams have tests — the **device** table (`store_test.go`, W10-a) and the **escalation_timer** row plus `FireTimer` (`timer_test.go`, W10-f). The other nine tables are unpinned. `PutTimer` is still a blind upsert with no state guard — `cancelTimers` depends on that, so D-025 was fixed in `sos-ingest.armTimers` instead |
-| `internal/escalation/engine.go` (1140) | decides whether a human is woken. CLAIM/RELEASE (`claim_test.go`, W10-d), the ladder and the timer wheel (`ladder_test.go` + `timer_test.go`, W10-e) are covered. Still unpinned: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, the HLC. ⬛ **W10-h connected it to the front door over the bus** (D-026: `control-plane` subscribes to `fam.*.incident` and calls `OnIncidentOpen`). It still never sees a real SOS, because the bus does not cross a process — **D-027 / RISK 17** |
+| `internal/escalation/engine.go` (1140) | decides whether a human is woken. CLAIM/RELEASE (`claim_test.go`, W10-d), the ladder and the timer wheel (`ladder_test.go` + `timer_test.go`, W10-e) are covered. Still unpinned: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, the HLC. ★ **It now climbs for a real SOS across two binaries** — W10-h connected it to the front door over the bus (D-026), W10-i made the bus cross a process (D-027), and `ops/e2e-two-binaries.sh` watched `PENDING → ACTIVE_L1` with all four rungs armed. Nobody's phone rang: `devices 0`, RISK 14 |
 | `cmd/realtime-gw/main.go` (1034) | hand-written WebSocket framing + backpressure, **zero tests** |
 | `cmd/sos-ingest/main.go` | **970/1000 LOC** — CI Gate 4 fails past 1000 (ADR-002). Request path pinned by `main_test.go`, projector arming path by `projector_test.go` (W10-g). `armTimers` now skips a rung already on disk (D-025 closed) — **and the rungs it writes are dead weight**: since W10-h the engine arms its own ladder from the bus, so `armTimers` and `tierFor` are ~20 deletable lines in the one file with a ceiling (D-026 addendum) |
 | `src/state/store.ts` (2606) | consumed by 21 files; owns bootstrap and the L0 floor |
 | `src/t0/triggerRouter.ts` (999) | cancel window, PIN compare, 500 ms budget — only the *generated* table is tested |
 
-`internal/{wal,consent}` plus `realtime-gw` and `canary` — roughly **3,000 LOC with no direct
-tests**. Three packages left that list on 20 Aug: `cmd/sos-ingest` (W10-g, `projector_test.go` on
+`internal/consent` plus `realtime-gw` and `canary` — roughly **2,700 LOC with no direct
+tests**. Four packages left that list on 20 Aug: `cmd/sos-ingest` (W10-g, `projector_test.go` on
 top of an already-covered request path), then `cmd/control-plane` and `internal/bus` (W10-h, 9 and 3
-tests, their first). `store` and `notify` are partially covered (W10-a, W10-f) and `escalation` is
+tests, their first), then `internal/wal` (W10-i, 19 — ten characterizations written before D-027
+changed a line of it, nine for the new multi-process mode). `store` and `notify` are partially covered (W10-a, W10-f) and `escalation` is
 the best-covered package in the backend (W10-d + W10-e + W10-g, 69 cases); everything those three do
 outside the device table, the escalation_timer row, the FCM fan-out path, and the ladder / wheel /
 ownership transitions is still unpinned.
 
-⛔ **`internal/bus`'s three tests are the most important ones in the backend right now.** They pin
-the property everything else assumes and nothing else checks: the bus is **in-process only**, so no
-message crosses a container in `ops/docker-compose.yml`, and two processes on one directory
-overwrite each other's records. D-027 / RISK 17.
+★ **`internal/bus` and `internal/wal` now pin the property everything else assumes**: a record
+written by one process is delivered to another, and two writers on one directory do not overwrite
+each other. Both prove it with a **real second OS process** (`TestTwoRealProcessesOnOneBusDirectory`,
+`TestTwoRealProcessesAppendToOneSharedLog`) rather than two values in one test binary — which is
+what D-027 could not do, and said so. Three things hold the seam open and any one of them silently
+closes it with every in-process test still green: `O_APPEND` on `stream.wal`, `bus.poll()` tailing
+the file, and `Seq` being the record's ordinal in the file. D-027 / RISK 17, closed.
+
+⛔ **`docker compose up` has still never been run on this machine.** The strongest evidence that
+exists is two binaries on one host.
 
 **Env vars added by W10-a:** `KAVACH_FCM_CREDENTIALS` — path to a Google service-account JSON key
 with FCM enabled. Unset is the current normal: the control plane logs `push_not_configured` at WARN

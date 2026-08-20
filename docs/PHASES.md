@@ -12,18 +12,25 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 
 ## Now
 
-> ⛔ **Read this before picking anything: D-027 / RISK 17 (found 20 Aug, W10-h).** **No message in
-> this system has ever crossed a process.** `internal/bus` reads `stream.wal` once at `Open` and
-> serves an in-memory slice; nothing tails the file, and two writers on one directory overwrite each
-> other's records. The four containers in `ops/docker-compose.yml` are four programs that each work
-> alone. Measured — `internal/bus/crossprocess_test.go`.
+> ★ **D-026 and D-027 are both closed (20 Aug, W10-h + W10-i), and Phase 1's last arrow connects.**
+> Observed, not argued: `ops/e2e-two-binaries.sh` posts a real SOS to the `sos-ingest` binary and
+> the `control-plane` binary — a separate OS process on one `KAVACH_BUS_DIR` — projects it, arms
+> `AUTO_QUIESCE`+`CANCEL_WINDOW`, and 20 s later climbs `PENDING → ACTIVE_L1` and arms
+> `REPEAT_L1`/`SMS_TIER`/`ESCALATE_L2`/`ESCALATE_L3`.
 >
-> D-026 / RISK 16 was the phase before it: the escalation ladder did not run for an SOS because
-> nothing subscribed to `fam.*.incident`. **W10-h closed that**, and the action-name break with it —
-> `cmd/control-plane` now projects the incident and calls `engine.OnIncidentOpen`, proved by that
-> binary's first nine tests. It is correct, and until D-027 is closed it reaches no container.
-> **Both outrank W10-c on the board**; W10-c stays "Now" only because it is the named phase, and it
-> needs a JDK this machine lacks.
+> W10-h closed D-026's bus and action-name legs (`cmd/control-plane` subscribes to `fam.*.incident`
+> and calls `engine.OnIncidentOpen`) and found D-027 underneath: `internal/bus` could not deliver
+> across a process at all. **W10-i closed that** — `stream.wal` is opened `O_APPEND` so the kernel
+> places each record at the end of the file under its own lock, and `bus.poll()` tails it on the
+> 250 ms ticker it already had. No dependency and no build tags; D-027 expected
+> `LockFileEx`/`Flock` and was wrong about that. `Seq` is now the record's ordinal in the *file*,
+> which is what makes one container's cursor mean anything to another.
+>
+> ⛔ **Two things this does NOT say.** `devices 0` in that fanout line is correct — nobody's phone
+> rang, because no device is enrolled and no FCM key exists (1.35d, RISK 14). And **`docker compose
+> up` has still never been run on this machine** — Docker's daemon is not running, so the evidence
+> is two binaries on one host, not four containers. `realtime-gw`'s socket frames and the canary's
+> chain now rest on a transport that works, but nobody has watched either.
 
 **Phase 1 · W10-c — present the alert on a locked screen.** The receive half landed on 11 Aug
 (W10-b): a data-only FCM message now wakes the bundle, is read through an allowlist, and is
@@ -54,8 +61,19 @@ watched that test go red before inverting it. Nine tests now. Two of D-026's thr
 the bus leg, and the action names — the engine mints its own rungs, so `NO_ACK` is never written.
 Then, while proving it, W10-h measured why none of it reaches a container: **`internal/bus` is
 in-process only.** `Open` replays the log once into a slice, nothing tails the file, and two writers
-put every record at the same offset and overwrite each other. RISK item 17, **D-027** — the first
-thing a JDK-less session should read.
+put every record at the same offset and overwrite each other. RISK item 17, **D-027**. **W10-i**
+(20 Aug) took that decision and closed it. `java -version` was checked first and W10-c was again
+unreachable. Route: make the file bus multi-process, stdlib only — not NATS (`go.mod` keeps zero
+`require` lines) and not "admit it is single-process", which is a merge of three binaries and still
+would not connect `sos-ingest`. `internal/wal` got its first tests — **ten characterizations before
+a line of it changed**, since it is the file ADR-002 rests on — then `OpenShared`: `O_APPEND`, one
+whole record per `Write`, `Tail` re-stats the file. `internal/bus` tails on its existing 250 ms
+ticker, `Seq` became the record's ordinal in the file, and `cursors.json` is merged instead of
+overwritten (one process was resetting the other's durables to boot). Then the honest part: both
+packages got a test that **re-executes the test binary as a second OS process**, and
+`ops/e2e-two-binaries.sh` ran the two real binaries end to end and watched the ladder climb. What is
+left of D-026 is tidying — `armTimers` writing rungs nothing polls — and what is left of D-027 is
+that nobody has run `docker compose up`.
 
 > ⛔ **Two independent blockers, both outside code.**
 > 1. **No Firebase project.** `google-services.json`, an `android.googleServicesFile` line in
@@ -71,10 +89,11 @@ thing a JDK-less session should read.
 > because that check was run first on 11 Aug; the alternative was a session of Kotlin that no gate
 > in this repo can compile, run, or check, with every familiar green tick still green (D-021).
 >
-> ⛔ **And none of the three is the highest-value work available.** Since 20 Aug the top of the
-> board is **D-027** — no message crosses a process, so Phase 1's last arrow does not connect in any
-> deployment — and it needs no JDK. See "the queue as it stands" below. This list stays as-is
-> because these three are the *named* phases, not because they are next.
+> ⛔ **And none of the three is the highest-value work available.** D-027 was the top of the board
+> on 20 Aug and is closed. What replaces it needs no JDK either: **bring the compose stack up**, the
+> one claim in this repo that has never once been executed, and then **enrolment (RISK 18)**, which
+> is what stands between a working ladder and a phone that rings. See "the queue as it stands"
+> below. This list stays as-is because these three are the *named* phases, not because they are next.
 
 1. **W10-c (1.37 + 1.28)** — full-screen intent and the `showWhenLocked` medical card. *(above)*
 2. **Hardware trigger (1.16, 1.17)** — `PowerButtonWatcher` (5× in 3 s) and `VolumePatternWatcher`
@@ -86,35 +105,39 @@ thing a JDK-less session should read.
    §4.12 names OEM battery managers as risk #3.
 
 **On a machine with no JDK, do these instead** — fully covered by the nine gates. **W10-e, W10-f,
-W10-g and W10-h did the first four**: the escalation ladder and the timer wheel are pinned by 40
+W10-g, W10-h and W10-i did the first five**: the escalation ladder and the timer wheel are pinned by 40
 tests (`escalation/ladder_test.go` 24, `escalation/timer_test.go` 16), which found and closed D-024;
 `store.FireTimer` by 15 more (`store/timer_test.go`), which found D-025; the projector's arming path
 by 4 (`sos-ingest/projector_test.go`), which proved D-025 and closed it; and the control plane by 9
 (`cmd/control-plane/main_test.go`, its first), which closed D-026's bus leg — while three more
-(`internal/bus/crossprocess_test.go`, also its first) found D-027 underneath it. What is still
+(`internal/bus/crossprocess_test.go`, also its first) found D-027 underneath it. **W10-i** then gave
+`internal/wal` its first 19 — ten characterizations written before a line of it changed, nine for
+the new shared mode — and rewrote the bus's three into seven, closing D-027. What is still
 unpinned in `escalation`: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, and
 the HLC.
 
 **The queue as it stands, no JDK required:**
-1. **D-027 — decide what the bus actually is.** ★ *This is the big one now, and it is ahead of
-   everything else on this list.* Nothing published by one process is delivered to another, and two
-   processes on one directory overwrite each other's records — so the four-container stack in
-   `ops/docker-compose.yml` has never worked as a system, and W10-h's D-026 fix cannot reach a
-   container until this is decided. It is a decision before it is code: **real NATS** (a dependency
-   `backend/go.mod` may not take without amending ADR-006), **a tailing reader plus a cross-process
-   write lock** (build-tagged `syscall` work in a package whose only tests are the three W10-h
-   wrote), or **admit the stack is single-process** and say so in compose and the architecture docs
-   rather than shipping a topology that cannot work. Read RISK 17 and D-027 first — and consider
-   bringing the compose stack up, which nobody has ever done on this machine, because everything
-   here is measured in-process and reasoned about across containers.
-2. **Take `armTimers` and `tierFor` out of `sos-ingest`.** D-026's leftover. The engine arms the
+1. **Bring `ops/docker-compose.yml` up.** ★ *Now that the transport works, this is the last
+   unexecuted claim in the repo.* Every statement about the four-container topology — including the
+   ones written on 20 Aug — is either a Go test or two binaries on one host
+   (`ops/e2e-two-binaries.sh`). Docker's daemon is not running on this machine, so step one is
+   starting Docker Desktop, and the run will immediately hit **RISK 18**: nothing creates a family,
+   both projectors drop an incident without one, and the e2e script only gets past it by writing
+   `family.json` by hand. Expect to find things; W10-i's whole lesson is that a plausible sentence
+   about a deployment is worth nothing next to one run of it. `realtime-gw`'s socket frames and the
+   canary's chain have never been observed either.
+2. **Enrolment: `POST /v1/family` and a device (RISK 18, §W4).** The ladder climbs and `devices 0`
+   is the last line of the fanout. This is the difference between an incident that escalates
+   correctly and a phone that rings — and it is a decision about the enrolment flow before it is a
+   route.
+3. **Take `armTimers` and `tierFor` out of `sos-ingest`.** D-026's leftover. The engine arms the
    ladder from the bus now, so the rungs the projector derives are written into a directory nothing
    polls: dead weight in the one binary with a LOC ceiling. ~20 lines back into the ADR-002 budget.
    `projector_test.go` pins the behaviour being deleted, so the phase is really "decide what those
    four tests become" — not a delete.
-3. **The rest of `escalation`** — `Cancel`'s duress twin is a constant-time sibling of `verifyPin`
+4. **The rest of `escalation`** — `Cancel`'s duress twin is a constant-time sibling of `verifyPin`
    and deserves the same care.
-4. **Phase 2's `policyRepo.byVersion()`** — one repo method, and without it a six-month-old incident
+5. **Phase 2's `policyRepo.byVersion()`** — one repo method, and without it a six-month-old incident
    renders under today's rules while labelled with yesterday's version.
 
 Then the measurement work: T-213 statistically, NFR instrumentation, drills, the four-week soak.
