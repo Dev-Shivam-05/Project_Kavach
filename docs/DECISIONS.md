@@ -550,3 +550,68 @@ instances standing in for two containers. **The compose stack has still never be
 this machine.** What is measured is that the transport cannot work across instances; what is
 inferred is that containers behave as separate instances do, which follows from there being no
 shared memory between them. Read `internal/bus/crossprocess_test.go` before acting on this.
+
+### Addendum — 20 Aug (W10-i): route 2 taken, and it needed no build tags
+
+**The decision: make the file bus multi-process.** Not NATS — `backend/go.mod` keeps zero `require`
+lines and ADR-006/ADR-003 would both have had to be amended for a broker a family does not need.
+Not "admit it is single-process" either: that is not a compose comment, it is a merge.
+`realtime-gw` subscribes to tickets the control plane mints (`main.go:165`) and the canary
+subscribes to frames escalation publishes (`main.go:229`), so admitting it means collapsing three
+binaries into one and *still* not connecting `sos-ingest`, which is the arrow that matters.
+
+**D-027's own estimate of route 2 was wrong, in our favour.** It said this needed
+`syscall.LockFileEx`/`Flock` behind build tags. It does not. `O_APPEND` makes the kernel place each
+record at the current end of file under its own lock, so one whole record per `Write` cannot
+interleave with or land on top of another process's record — no advisory lock, no build tag, no
+syscall. That was measured before it was designed: two OS processes, 500 records each, 1000 intact.
+
+**What it cost instead**, none of which was in the estimate:
+
+- **The writer no longer knows where its record went.** With `O_APPEND` the offset is the kernel's
+  to choose, and on Windows the handle's own pointer counts only that process's writes — measured,
+  and the reason `wal.Append` returns `-1` in shared mode rather than a number that is right on
+  Linux and wrong on the platform the tests run on. Nothing read it: both bus call sites already
+  discarded it.
+- **`Seq` had to stop being a counter.** It was `len(b.msgs)+1` on whichever instance published, so
+  two processes had two names for one record — and a cursor *is* a `Seq`. It is now the record's
+  ordinal in the file, assigned when the record is read back, which is also why `publish` reads its
+  own record back before returning.
+- **`cursors.json` was a second, quieter instance of the same bug.** Every process holds a copy
+  loaded at `Open`, so writing the whole copy back reset the other process's durables to where they
+  stood at boot: a resolved incident replayed, a climbed ladder re-armed. It is merged now.
+- **Windows will not truncate through an `O_APPEND` handle** (`FILE_APPEND_DATA` without
+  `FILE_WRITE_DATA`), so torn-tail repair opens its own.
+- **A short tail is no longer evidence of a crash** — it is usually another process mid-`Write` —
+  so repair settles for 20 × 5 ms before it truncates, and the header is written once by whoever
+  wins `O_EXCL` instead of by every booting container.
+
+**The inference is retired.** `internal/wal`'s `TestTwoRealProcessesAppendToOneSharedLog` and
+`internal/bus`'s `TestTwoRealProcessesOnOneBusDirectory` re-execute the test binary as a second OS
+process. The container boundary is a process boundary now, not an argument.
+
+**And the arrow connects.** `ops/e2e-two-binaries.sh` runs the real `sos-ingest` and the real
+`control-plane` as two processes on one `KAVACH_BUS_DIR` and posts a real SOS to sos-ingest's HTTP
+front door. Observed, 20 Aug:
+
+```
+ack           {"incidentId":"1111…","verified":false,"flags":1}      <- ADR-018: accept, flag, count
+control-plane ingest_incident_projected  state=PENDING trigger=MANUAL <- it heard the other process
+              timer_armed AUTO_QUIESCE · timer_armed CANCEL_WINDOW
++20s          transition CANCEL_WINDOW_EXPIRED  PENDING -> ACTIVE_L1
+              timer_armed REPEAT_L1 · SMS_TIER · ESCALATE_L2 · ESCALATE_L3
+              fanout tier=1 label=L1 devices=0
+cursors.json  {"control-plane.incidents":3,"sos-ingest.projector":3}  <- neither erased the other
+```
+
+That is D-026 and D-027 both closed, in a deployment shape, for the first time. Two things it does
+not say: `devices 0` is correct and is RISK 14 — no device is enrolled and no FCM key exists, so
+nobody's phone rang — and **this is two binaries on one host, not four containers.** Docker's daemon
+is not running on this machine; `docker compose up` has still never been executed.
+
+**What did not change.** `PublishEphemeral` still writes nothing and `Publish` still rejects
+`KindLocationPrecise`; the write path was rewritten underneath that rule, so
+`TestClassAPrimeNeverReachesTheFile` now guards it explicitly (§2.4.6). And `Open` — the
+single-writer mode `sos.wal` uses — is untouched: ADR-002's durability file writes exactly as it
+did, and `internal/wal`'s ten characterization tests were written before any of this and still pass
+unmodified.

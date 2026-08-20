@@ -58,19 +58,33 @@ x-common: &common
     - kavach-store:/var/lib/kavach
   environment: &common-env
     # The file-backed bus (internal/bus: stream.wal + cursors.json) stands in for
-    # NATS JetStream, and all four processes are pointed at ONE directory.
+    # NATS JetStream, and all four processes are pointed at ONE directory. That
+    # shared directory IS the seam between sos-ingest and everything downstream.
     #
-    # ⛔ That does NOT make it a seam, and this comment used to claim it did.
-    # internal/bus reads stream.wal once, at Open, into an in-memory slice;
-    # publish appends to that slice and drain walks it. Nothing tails the file,
-    # so a second process here is not a peer — it is a separate stream that
-    # happens to share a filename. Worse, the write offset is fixed at Open and
-    # WriteAt puts every instance's records at it, so two live processes
-    # overwrite each other. Measured: internal/bus/crossprocess_test.go.
+    # ★ It became one on 20 Aug (D-027). This comment claimed it for months
+    # while internal/bus read stream.wal once at Open and served an in-memory
+    # slice, so nothing published by one container was delivered to another and
+    # two live writers overwrote each other's records. What makes the sentence
+    # true now, and what to keep true:
     #
-    # Until that is fixed (real NATS, a tailing reader, or a single-writer
-    # broker) nothing published by one container is delivered to another, and
-    # this stack is four programs that each work alone. See DECISIONS.md D-027.
+    #   - stream.wal is opened with O_APPEND (wal.OpenShared). The kernel places
+    #     each record at the end of the file under its own lock, so one whole
+    #     record per Write cannot land on another process's bytes. Do not
+    #     reintroduce WriteAt on this file.
+    #   - Readers tail it: bus.poll() re-stats the file every 250 ms. Delivery
+    #     between containers is therefore a poll, not a push, and 250 ms is a
+    #     floor under the t3 clock (ADR-007).
+    #   - Seq is the record's position in the FILE. That is what lets one
+    #     container's cursor mean anything to another, and it is why cursors.json
+    #     is merged rather than overwritten.
+    #
+    # Proven by two OS processes, not by argument: internal/bus's
+    # TestTwoRealProcessesOnOneBusDirectory and internal/wal's
+    # TestTwoRealProcessesAppendToOneSharedLog.
+    #
+    # ⛔ Still true: this stack has never been brought up. See DECISIONS.md
+    # D-027, and RISK item 18 — nothing creates a family, and both incident
+    # projectors drop an incident whose family row is missing.
     KAVACH_BUS_DIR: /var/lib/kavach/bus
     # Structured dev logging. Set to 0 for the JSON production formatter.
     KAVACH_DEV: "1"

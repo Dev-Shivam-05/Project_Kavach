@@ -50,7 +50,15 @@ on success, so a redelivery after a partial failure must still arm what is missi
 `engine.cancelTimers` still depends on that; see [DECISIONS.md](DECISIONS.md) D-025.
 963 → 970/1000 lines.
 
-**16. Nothing executes the escalation rungs `sos-ingest` arms.** *(added 20 Aug, W10-g; **two of three breaks closed 20 Aug, W10-h** — and superseded in practice by item 17.)*
+**16. ~~Nothing executes the escalation rungs `sos-ingest` arms.~~ CLOSED 20 Aug (W10-h + W10-i).**
+*(added 20 Aug W10-g; bus and action-name legs closed W10-h; the transport under them closed W10-i,
+item 17.)* **Observed end to end**, not inferred: `ops/e2e-two-binaries.sh` posts a real SOS to the
+`sos-ingest` binary and the `control-plane` binary — a separate OS process — projects it, arms
+`AUTO_QUIESCE`+`CANCEL_WINDOW`, and 20 s later climbs `PENDING → ACTIVE_L1` with
+`REPEAT_L1`/`SMS_TIER`/`ESCALATE_L2`/`ESCALATE_L3` armed. What remains is tidying, not breakage:
+`sos-ingest.armTimers` still derives rungs into a directory nothing polls, ~20 lines that should
+come out of the sacred binary. The original diagnosis is kept below because the store split it
+describes is still the design.
 Two independent breaks between the binary that receives an SOS and the binary that climbs the ladder:
 - **Different stores.** `sos-ingest` opens `filepath.Join(<data>, "store")` (`main.go:264`), which
   `ops/docker-compose.yml:114` makes `/var/lib/kavach/store`. The escalation engine lives in
@@ -83,27 +91,32 @@ out of the sacred binary in a phase of their own. And, decisively, **item 17**: 
 process, so none of the above reaches a container.
 See [DECISIONS.md](DECISIONS.md) D-026 and its W10-h addendum.
 
-**17. No message in this system has ever crossed a process.** *(added 20 Aug, W10-h.)*
-`internal/bus` is in-process only, and `ops/docker-compose.yml` deploys four containers on the
-assumption that it is not. **Measured** by `internal/bus/crossprocess_test.go`, the first tests that
-package has ever had:
-- `Open` replays `stream.wal` once, at boot, into an in-memory slice (`bus.go:113`); `publish`
-  appends to that slice (`bus.go:190`); `drain` walks it and nothing else (`bus.go:425`). **Nothing
-  tails the file.** A second `*Bus` on the same directory never receives the first's messages.
-- Both instances assign the same `Seq` to different messages.
-- The write offset is fixed at `Open` (`wal.go:75`) and the file is opened `O_RDWR|O_CREATE` — no
-  `O_APPEND`, no lock, and `w.mu` is an in-process mutex. Two live writers put every record at the
-  same offset and **overwrite each other**; reopening the directory finds one survivor.
-**What this costs:** the compose stack is four programs that each work alone. `sos-ingest` publishes
-an incident and no other container hears it; the control plane publishes a notify frame and
-`realtime-gw` never sees it; the canary watches a stream nothing writes to from its point of view.
-It is also silent data loss on the safety path — the record a second process overwrites can be the
-SOS `sos-ingest` fsynced and acked. Item 16's fix is correct and cannot reach a container until this
-is closed.
-**Not fixed, and not a one-file fix:** real NATS (a dependency `backend/go.mod` may not take), a
-tailing reader plus a cross-process write lock (build-tagged `syscall` work in a package that had no
-tests until today), or collapsing the processes (what ADR-002 forbids).
-See [DECISIONS.md](DECISIONS.md) D-027.
+**17. ~~No message in this system has ever crossed a process.~~ CLOSED 20 Aug (W10-i).**
+*(added 20 Aug W10-h; fixed the same day.)* `internal/bus` was in-process only while
+`ops/docker-compose.yml` deployed four containers on the assumption that it was not: `Open` replayed
+`stream.wal` once into an in-memory slice, nothing tailed the file, and two writers put every record
+at the same offset and overwrote each other — the record erased could be the SOS `sos-ingest` had
+fsynced and acked.
+**What closed it:** `wal.OpenShared` (`O_APPEND`, one whole record per `Write`, so the kernel places
+each record at the end of the file under its own lock) and `bus.poll()` (re-stats and tails the file
+on the 250 ms ticker it already had). `Seq` is now the record's ordinal in the *file*, and
+`cursors.json` is merged rather than overwritten. No dependency, no build tag, no `syscall` — D-027
+expected `LockFileEx`/`Flock` and was wrong about that, in our favour.
+**Measured across real OS processes**, which is what the W10-h version of this item could not claim:
+`internal/wal/shared_test.go` `TestTwoRealProcessesAppendToOneSharedLog` (two processes, 200 records
+each, all 400 intact) and `internal/bus/crossprocess_test.go`
+`TestTwoRealProcessesOnOneBusDirectory` (a second process publishes, a durable subscriber in this
+one receives). Both re-execute the test binary rather than standing two values up in one.
+**And end to end:** `ops/e2e-two-binaries.sh` runs the real `sos-ingest` and `control-plane` binaries
+on one `KAVACH_BUS_DIR`; a real SOS to sos-ingest's HTTP door is projected by the control plane,
+arms `AUTO_QUIESCE`+`CANCEL_WINDOW`, and 20 s later transitions `PENDING → ACTIVE_L1` and arms
+`REPEAT_L1`/`SMS_TIER`/`ESCALATE_L2`/`ESCALATE_L3`. With item 16, that is Phase 1's last arrow
+connected.
+**⛔ What is still NOT proven:** `docker compose up` has never been run — Docker's daemon is not
+running on this machine, and the evidence above is two binaries on one host, not four containers.
+The remaining per-pair claims (`realtime-gw`'s socket frames, the canary's chain) rest on the
+transport now being correct, not on anybody having watched them.
+See [DECISIONS.md](DECISIONS.md) D-027 and its W10-i addendum.
 
 **18. No running binary can create a family, so every store starts empty and stays empty.**
 *(added 20 Aug, W10-h.)* `store.PutFamily` has **zero non-test call sites** in the repository, and
@@ -123,9 +136,13 @@ enrolment-flow decision (§W4) and not a hole to plug on the way past.
 
 ## S2 — will make a change unverifiable
 
-**4. ~4,300 LOC of backend has no direct tests.**
-`internal/{wal,consent}` and all of `realtime-gw`, `canary` — the append-only log and a hand-written
-WebSocket frame codec. Two came off this list on 20 Aug (W10-h): `internal/bus` has three tests
+**4. ~4,000 LOC of backend has no direct tests.**
+`internal/consent` and all of `realtime-gw`, `canary` — a hand-written WebSocket frame codec among
+them. **`internal/wal` came off this list on 20 Aug (W10-i)** with 19 tests: ten characterizations
+written *before* D-027 touched it — the header, the framing, the Append/ReadAt offset contract,
+both crash-repair paths — and nine more for the shared multi-process mode, including two real OS
+processes appending to one file. It is the file ADR-002 rests on and it had nothing.
+Two came off this list on 20 Aug (W10-h): `internal/bus` has tests
 pinning the one property everything else assumes (item 17), and `cmd/control-plane` has nine —
 the front door's ladder, the bus leg, redelivery, an unknown family, and a source-text contract
 check against `sos-ingest`'s wire shape. Neither package is *covered*; both now have a place to

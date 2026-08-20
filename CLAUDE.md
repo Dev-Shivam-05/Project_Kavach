@@ -100,13 +100,21 @@ directive above it, and read the actual `npm run typecheck` output before claimi
   it reads the incident's rungs once and skips any id already on disk, **per rung id, never per
   incident**, because a bus redelivery after a partial failure must still arm what is missing
   (D-025). Do not move that guard into the store without reading both callers.
-- **⛔ `internal/bus` does not cross a process, and the whole deployment assumes it does (D-027,
-  RISK 17).** `Open` replays `stream.wal` once into an in-memory slice; `publish` appends to that
-  slice; `drain` walks it. **Nothing tails the file.** A second process on the same directory
-  receives nothing — and because the write offset is fixed at `Open`, with no `O_APPEND` and no file
-  lock, the two **overwrite each other's records**. Measured: `internal/bus/crossprocess_test.go`.
-  The four containers in `ops/docker-compose.yml` are four programs that each work alone. Never
-  report a cross-binary path as working on the strength of an in-process test; say which it is.
+- **`internal/bus` crosses a process now, and three things keep it that way (D-027, W10-i).**
+  Break any one and it silently stops being a seam again, with every in-process test still green:
+  **(1)** `stream.wal` is opened by `wal.OpenShared` — `O_APPEND`, one whole record per `Write`.
+  Reintroduce `WriteAt` on that file and two processes overwrite each other. **(2)** `bus.poll()`
+  re-stats and tails the file every 250 ms; records enter `b.msgs` there and in `publish`, nowhere
+  else. **(3)** `Seq` is the record's ordinal *in the file*, not a per-instance counter — a cursor
+  is a `Seq`, so the moment one process invents its own numbering the two disagree about what they
+  have already delivered. `cursors.json` is merged, never replaced, for the same reason.
+  `internal/wal`'s single-writer `Open` (that is `sos.wal`, ADR-002) is a different path and is
+  unchanged — do not "unify" them.
+  Proven by two real OS processes, not two values in one test binary:
+  `TestTwoRealProcessesOnOneBusDirectory`, `TestTwoRealProcessesAppendToOneSharedLog`. Still say
+  which kind of test you are quoting — **`docker compose up` has never been run on this machine**
+  (no daemon), so the four-container claim remains untested; `ops/e2e-two-binaries.sh` is the
+  strongest evidence that exists and it is two binaries on one host.
 - **The rungs `sos-ingest` arms are executed by nobody, and are now redundant too (D-026 +
   addendum).** W10-h gave `cmd/control-plane` a durable subscription on `fam.*.incident` that
   projects the incident and calls `engine.OnIncidentOpen` — so the ladder is armed by the engine,
