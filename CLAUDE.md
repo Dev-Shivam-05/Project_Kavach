@@ -30,8 +30,11 @@ Windows: `go test ./...` may fail with *"An Application Control policy has block
 that is the OS, not the code. Re-running sometimes clears it. **For `cmd/sos-ingest` it does not**:
 three consecutive runs failed identically on `sos-ingest.test.exe` while every other package passed.
 The fix is to build somewhere else —
-`GOTMPDIR=/d/Projects/Project_Kavach/backend/.gotmp go test ./cmd/sos-ingest/` — and delete
-`.gotmp` afterwards. Never report this package green without having actually run it.
+`mkdir -p backend/.gotmp && GOTMPDIR=/d/Projects/Project_Kavach/backend/.gotmp go test ./cmd/sos-ingest/`
+— and delete `.gotmp` afterwards with plain **`rmdir`**, not `rm -rf`: `go test` leaves the
+directory empty, and `rm -rf` on this machine is refused by the sandbox (so is
+`Remove-Item -Recurse`). `mkdir -p` first, or `go` fails with "no such file or directory". Never
+report this package green without having actually run it.
 
 **`// @ts-expect-error` must sit on the line the import specifiers are on.** The tempting shape —
 a trailing comment inside the braces of a multi-line `import { … } from 'expo-notifications'` —

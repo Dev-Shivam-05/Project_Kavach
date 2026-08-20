@@ -70,6 +70,11 @@ thing a JDK-less session should read.
 > ⚠ **All three need a JDK. Check `java -version` before picking one, not after.** W10-d exists
 > because that check was run first on 11 Aug; the alternative was a session of Kotlin that no gate
 > in this repo can compile, run, or check, with every familiar green tick still green (D-021).
+>
+> ⛔ **And none of the three is the highest-value work available.** Since 20 Aug the top of the
+> board is **D-027** — no message crosses a process, so Phase 1's last arrow does not connect in any
+> deployment — and it needs no JDK. See "the queue as it stands" below. This list stays as-is
+> because these three are the *named* phases, not because they are next.
 
 1. **W10-c (1.37 + 1.28)** — full-screen intent and the `showWhenLocked` medical card. *(above)*
 2. **Hardware trigger (1.16, 1.17)** — `PowerButtonWatcher` (5× in 3 s) and `VolumePatternWatcher`
