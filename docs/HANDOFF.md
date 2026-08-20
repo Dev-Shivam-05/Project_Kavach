@@ -1,95 +1,109 @@
-# HANDOFF — Kavach — Phase 1 (W10-f, the atomic claim gets a test) — 2026-08-11
+# HANDOFF — Kavach — Phase 1 (W10-g, D-025 executed and closed; D-026 found) — 2026-08-20
 
-Branch **`phase1-w10-remote-push`**, 2 new commits on top of W10-e's `f76339e4`. Session W10-e's
-handoff is superseded by this one; its content is in commit `f76339e4`.
+Branch **`shivam`**, 3 new commits on top of `61302e68`. Session W10-f's handoff is superseded by
+this one; its content is in commit `f34b5ae1`.
 
 **W10-c was not started, again, and for the same reason.** First command of the session was
-`Get-Command java` — not found, `JAVA_HOME` and `ANDROID_HOME` unset (D-021). The board's own
-instruction for that case names the store's timer contract as the next thing to pin, and that is
-what this session did. It shipped no feature. It closed the last hole in the escalation stack's
-test coverage — and found a new one a layer up.
+`java -version` — not found, `JAVA_HOME` and `ANDROID_HOME` unset (D-021). The board's instruction
+for that case named D-025 as the next item, and that is what this session did.
+
+It shipped one safety fix, and it found a bigger hole than the one it was sent to close.
 
 ## Done
 
-- **`store.FireTimer` has a test.** It is the primitive `engine.claim()` is one line of
-  (`c.FireTimer(t.ID) == nil`), and everything that stops N workers fanning out the same tier N
-  times lives on the other side of it. W10-e proved the *engine* prefers the transactional path and
-  that the path is exclusive — but against `claimingStore`, a hand-written double in the escalation
-  package. The production implementation (`store.go:918`) was exercised by nothing. **15 tests now;
-  `internal/store` runs 21, all green.**
-- **The claim is exclusive and it is durable.** 16 goroutines start together on one row: exactly one
-  gets nil, `attempts` is 1, and the refusal does not mutate the row it refused. Reopened from the
-  same directory — the crashed worker's successor — the claimed rung is not in `TimersDue`, cannot
-  be re-claimed, and carries the same `fired_at`. A claim that is not on disk before the rung fires
-  is not a claim.
-- **The disk contract is pinned like the device table's.** All 11 persisted keys asserted against
-  `CREATE TABLE escalation_timer` (`0001_init.sql:194`) column for column, and the three state
-  literals against its `CHECK (state IN (…))`. The engine keeps its own copies of those strings, so
-  they are a three-way contract.
-- **The read paths the engine's ordering rests on.** `Timers()` oldest-first (the batch limit defers
-  the tail rather than dropping it, which is only correct if the oldest is first); `TimersDue`'s
-  three-part predicate including the inclusive boundary and the torn `pending`-with-`fired_at` row;
-  `TimersForIncident`'s scope, and that it returns non-pending rows because `cancelTimers` filters
-  them itself. Rows cross the boundary by value on all three.
-- **The characterization pass found a real gap — and this time it was left open, on purpose
-  (D-025).** `PutTimer` is a blind upsert (`*old = t`, no state guard).
-  `sos-ingest.armTimers` derives rung ids as `incident|state|action`, and `projectOpen` calls it for
-  an incident that **already exists** without advancing its state — so a second open record rewrites
-  the rungs armed for its current state back to `pending`, zeroes `fired_at`/`attempts`, and
-  recomputes `fire_at` from a `ServerReceivedAt` that `main.go:942` has just moved forward.
-  **A fired rung can fire again; a pending rung's deadline is pushed out, so a repeated SOS delays
-  the ladder.** Reachable via F-04 coalescing, which rewrites the 4th unverified open onto the first
-  incident's id while keeping its own HLC — passing both the `markSeen` and `projSeen` dedupes.
-- Verified green: `go build`, `go vet ./...`, `staticcheck ./...`, `go test ./...`,
-  `archlint` (14 packages, **42** edges — unchanged), `TestLOCBudget` 963/1000, `logx` deny-list,
-  `gen:check`, `schema-lint`, `protolint`, `tsc --noEmit`, `npm test` **165/165**.
+- **D-025 reproduces, and it is closed.** `cmd/sos-ingest/projector_test.go` (new) drives a duress
+  SOS through the real front door — HTTP, the signature check, the F-04 flood guard, the WAL, the
+  bus, the projector — has a worker claim the `NO_ACK` rung with `store.FireTimer`, then sends three
+  more unverified reports inside the 60 s window. The fourth coalesces onto the first incident's id
+  carrying its own HLC, passes `markSeen` and `projSeen` both, and lands in `projectOpen` with
+  `exists == true`. **The claimed rung came back `pending`, `fired_at` 0, `attempts` 0, deadline 15 s
+  further out, and back in `TimersDue`.** The F-02 six-hour backstop moved with it. Every consequence
+  D-025 inferred from four call sites is what the code does.
+- **The reproduction is its own commit (`45663634`), green, before the fix.** The red is in the
+  history, not only in prose. The fix commit (`08dcf861`) then shows it going the other way.
+- **The guard is in `armTimers`, not in the store.** It reads the incident's rungs once and skips
+  any id already on disk. **Per rung id, never per incident** — `project()` marks a record seen only
+  when the whole projection succeeded, so a store failure inside `armTimers` means the bus redelivers
+  and the second pass sees `exists == true`; skipping by incident would leave the ladder permanently
+  unarmed on exactly the path that already went wrong once. A **cancelled** rung is skipped too,
+  which closes a second smaller hole: a repeated open could previously resurrect a ladder the engine
+  had deliberately cancelled. `PutTimer` is untouched — `cancelTimers` still needs the blind write.
+- **Two bounds the characterization found that D-025 did not know.** `TimeoutsFor(PENDING)` is
+  **empty**, so an ordinary open arms no rungs at all and there is nothing to reset; the way in
+  through a single open record is duress, which skips the cancel window inside `projectOpen`.
+- **⛔ D-026 — nothing executes the rungs `sos-ingest` arms.** Found while proving D-025.
+  Three independent breaks, any one sufficient:
+  1. **Different stores.** `sos-ingest` opens `<data>/store` (`main.go:264`, i.e.
+     `/var/lib/kavach/store`); `control-plane`, which owns `escalation.Engine`, opens
+     `KAVACH_DATA_DIR` directly (`control-plane/main.go:71`, i.e. `/var/lib/kavach/control-plane`).
+     `engine.Run` polls its own store.
+  2. **Nothing bridges the bus.** The only subscriber to `fam.*.incident` is `sos-ingest`'s own
+     projector (`main.go:274`). `control-plane` subscribes to `cp.*` only, `realtime-gw` to the
+     notify ticket and stream subjects, `canary` to the notify stream. `engine.OnIncidentOpen` has
+     exactly one caller: the control plane's own `POST /v1/incidents` (`main.go:797`).
+  3. **The action names disagree.** `escalation.arm` names the work (`ESCALATE_L2`) with minted UUID
+     ids; `armTimers` names the event (`NO_ACK`) with derived ids. Three of the four actions the
+     projector can derive collide with an action the engine implements; `NO_ACK` — the whole
+     L1→L2→L3 climb — hits `execute`'s `default` arm. **Measured**, not read:
+     `internal/escalation/action_routing_test.go` (new).
+  **Recorded, not fixed** — RISK item 16, D-026. See "Next session" below.
+- Verified green: `go build`, `go vet ./...`, `staticcheck ./...`, `go test ./...`
+  (escalation **69**, sos-ingest **27**, store **21**), `archlint` (14 packages, **47** edges),
+  `TestLOCBudget` **970/1000**, `logx` deny-list, `gen:check`, `schema-lint`, `protolint`,
+  `tsc --noEmit`, `npm test` **165/165**.
 
 ## Files changed
 
 **Backend**
-- `internal/store/timer_test.go` **(new, 538 lines)** — 15 tests. Reuses `openWithFamily` from
-  `store_test.go`; adds `openWithTimers` (fixed clock), `sampleTimer`, `mustPut`, `getTimer`, and a
-  local restatement of `escalation.TimerClaimer` as a compile-time guard (`store` cannot import
-  `escalation` back).
+- `cmd/sos-ingest/projector_test.go` **(new, 426 lines)** — 4 tests. Reuses `seed`, `envFor`,
+  `sealed` and `post` from `main_test.go`; adds `projClock` (a settable clock — the arming path
+  reads `s.now()` twice over, for the flood window and for every `fire_at`), `newClockedServer`,
+  `openUnverified`, `duressEnv`, `rungsFor`, `rungByID`.
+- `cmd/sos-ingest/main.go` — 7 source lines in `armTimers`. 963 → **970/1000**.
+- `internal/escalation/action_routing_test.go` **(new, 68 lines)** — 1 test, reusing `rig`,
+  `atState` and `fire` from `ladder_test.go`.
 
-**Docs** — `DECISIONS.md` (D-025), `RISK.md` (new S1 item 15, §4 updated), `PHASES.md` (Now, the
-no-JDK queue, 1.29, a new board rule), `PROJECT_MAP.md` (gates, danger table ×2, coverage
-paragraph), `CLAUDE.md` (danger zone: `PutTimer`'s missing guard), this file.
+**Docs** — `DECISIONS.md` (D-025 addendum, D-026), `RISK.md` (item 15 closed, **new S1 item 16**,
+items 4 and 7 updated), `PHASES.md` (a blocker note at the top of Now, the W10-g paragraph, the
+no-JDK queue reordered with D-026 at #1, the W9 heading, 1.29, a new board rule), `PROJECT_MAP.md`
+(gate line, danger table ×3, coverage paragraph, the GOTMPDIR workaround), `CLAUDE.md`
+(Application Control, the `PutTimer` entry, a new D-026 danger zone, LOC, coverage), this file.
 
 ## Decisions made
 
-- **W10-f instead of W10-c** — `java` is not on PATH. Checked first, before picking the phase.
-- **D-025 — the ladder-reset hole is recorded, not patched.** Opposite call to D-024's, and the
-  reason is the location, not the severity. D-024 was one line inside the file already under test.
-  This fix belongs in `armTimers` (arm only what is not already on disk for that `(incident,
-  state)`), in a file at **963/1000 lines** whose package has **no behavioural test to hang a
-  characterization on**. A state guard in `PutTimer` instead would have to keep
-  `cancelTimers`' read-flip-write working, i.e. encode escalation's state rules in the persistence
-  layer. Full reasoning in `DECISIONS.md`.
-- **Both divergences from the migration are pinned as characterizations, not fixed.** `PutTimer`'s
-  missing state guard, and `FireTimer` being keyed by id with **no tenancy check** where the
-  migration has RLS (`0001_init.sql:433`). The second is not reachable today — the engine only
-  passes ids it just read from the same store — and the test says so, along with why a naive fix
-  would be worse: `engine.claim()` reads any non-nil error as "somebody else has it" and skips the
-  rung silently.
+- **W10-g instead of W10-c** — `java` is not on PATH. Checked first, before picking the phase.
+- **D-025 addendum — fixed, and the LOC budget was spent to do it.** 963 → 970 is an addition
+  without a removal, against the board's own instruction. The argument for doing it anyway: the
+  removal that would pay for it is `armTimers` itself, and whether that function should exist is
+  D-026's question. Leaving a proven safety bug in place to protect 7 lines of a 37-line budget is
+  the wrong trade.
+- **D-026 — recorded, not fixed.** It is a topology decision, not a bug fix: either `control-plane`
+  grows a durable subscriber on `fam.*.incident` feeding `engine.OnIncidentOpen`, or the two
+  binaries share a store — and the second is the thing ADR-002 exists to prevent. Whichever way it
+  goes decides whether `armTimers` and `tierFor` belong in the sacred binary at all. And
+  `cmd/control-plane` has zero tests, so the characterization this repo's rules demand does not
+  exist yet. Full reasoning in `DECISIONS.md`.
 
 ## Known broken / deliberately skipped
 
-- **⛔ Still nobody's phone has rung, and none can.** — *because* 1.35d. Unchanged and not touched
-  by this work: `KAVACH_FCM_CREDENTIALS` unset, `mobile/google-services.json` absent, no
-  `android.googleServicesFile` in `app.json`. RISK item 14.
-- **D-025's sos-ingest half is read, not executed.** Nothing in this repo demonstrates the
-  double-fire end to end. The severity above is an inference from four call sites
-  (`main.go:882`, `:942`, `:1002`, `:1019`) plus the coalescing branch at `:652`, not a measurement.
-  **Do not quote it as proven.** The store half *is* proven —
-  `TestPutTimerHasNoStateGuardAndOverwritesAClaimedRow`.
-- **`go test -race` was not run.** — *because* there is no gcc on this machine. CI gate 3 only. The
-  16-goroutine exclusivity test is exactly the one that would benefit; it passes without the
-  detector, which is not the same as being proven race-free.
-- **`escalation` is still not comprehensively covered.** `Cancel` and its duress twin, `Ack`,
-  `OnScene`, two-party `Resolve` and the HLC have nothing. `Reescalate` is touched by one assertion.
+- **⛔ D-026's topology half is read, not executed.** The routing half is proven by a passing test.
+  The store split and the missing subscriber are read from `main.go:264`,
+  `control-plane/main.go:71` and `:314`, `ops/docker-compose.yml:114` and `:140`, plus an exhaustive
+  grep for bus subscribers — **the compose stack has never been brought up on this machine.**
+  Do not quote "no rung ever fires" as measured. Read it yourself before acting on it.
+- **⛔ Still nobody's phone has rung, and none can** — 1.35d, RISK 14, unchanged and untouched:
+  `KAVACH_FCM_CREDENTIALS` unset, `mobile/google-services.json` absent, no
+  `android.googleServicesFile` in `app.json`.
+- **`go test -race` was not run** — no gcc on this machine. CI gate 3 only.
+- **`go test ./cmd/sos-ingest/` is blocked by Windows Application Control on every run here**, not
+  intermittently: three consecutive attempts failed identically on `sos-ingest.test.exe` while
+  `internal/store` passed. `GOTMPDIR=/d/Projects/Project_Kavach/backend/.gotmp go test …` is the
+  workaround, now in `CLAUDE.md`. CLAUDE.md's "re-run" advice is not sufficient for this package.
+- **`escalation` is still not comprehensively covered** — `Cancel` and its duress twin, `Ack`,
+  `OnScene`, two-party `Resolve` and the HLC have nothing.
 - **`internal/store`'s other nine tables are unpinned.** Two of eleven have tests.
-- **1.37 / 1.28 (W10-c) not started.** — *because* D-021. Unchanged.
+- **`cmd/sos-ingest`'s `replayWAL` and `refreshCache` are unpinned.**
+- **1.37 / 1.28 (W10-c) not started** — D-021, unchanged.
 - **1.35f(a/b/c) untouched** — no drill flag on the wire, headless alerts are English (D-020), a
   terminated-app action tap is still dropped.
 
@@ -98,22 +112,25 @@ paragraph), `CLAUDE.md` (danger zone: `PutTimer`'s missing guard), this file.
 - **Check `java -version` first.** With a JDK: **W10-c** — one `Activity` in
   `modules/kavach-t0/android/` (`showWhenLocked`, `turnScreenOn`, `excludeFromRecents`) posted via
   `setFullScreenIntent`, closing **1.37 and 1.28** together. **Without one, do not.**
-- **Without a JDK, in order:** (1) **D-025** — `cmd/sos-ingest`'s first behavioural test. Drive a
-  coalesced second open into `projectOpen` against a real store and assert what happens to the rungs
-  already armed. If it reproduces, the guard goes in `armTimers`, and **removals come before
-  additions: 963/1000**. If it does not, delete RISK item 15 and say why in D-025. (2) The rest of
-  `escalation` — `Cancel`'s duress twin deserves the care `verifyPin` got. (3) Phase 2's
-  `policyRepo.byVersion()`.
+- **Without a JDK, in order:** (1) **D-026** — and it now outranks everything else on that list,
+  because Phase 1's promise is trigger → transmit → notify → **escalate** and the last arrow is not
+  connected. Read RISK 16 and D-026 before writing anything. The honest first step is
+  `cmd/control-plane`'s **first test**, then a durable subscriber on `fam.*.incident` feeding
+  `engine.OnIncidentOpen`. If that lands, `armTimers` and `tierFor` come **out** of `sos-ingest` and
+  ~20 lines return to the budget. (2) The rest of `escalation` — `Cancel`'s duress twin deserves the
+  care `verifyPin` got. (3) Phase 2's `policyRepo.byVersion()`.
 - **First command:**
 
   ```
-  git checkout phase1-w10-remote-push && cd backend && go test ./internal/store/ -v
+  git checkout shivam
+  cd backend && GOTMPDIR=./.gotmp go test ./cmd/sos-ingest/ ./internal/escalation/ -v
   ```
 
   Nothing is outstanding once the branch is pushed.
-- **Watch out for:** **`PutTimer` has no state guard, and two callers disagree about whether that is
-  a feature.** `cancelTimers` needs the blind write; `armTimers` is bitten by it. Do not add a guard
-  in the store without reading both — the test that pins this says which one you broke.
+- **Watch out for:** **every ✅ in W9 is true of the escalation engine in isolation and untrue end
+  to end.** The ladder tests pass, the timer wheel tests pass, the claim is atomic and durable — and
+  none of it runs for an SOS that arrives at the front door. That is D-026, and it is the single
+  most consequential fact about this backend right now.
 
   Second trap, unchanged since W10-d: **`notify.Fanout` rebuilds `Step` by hand for the neighbour
   feed** (the `reduced` loop in `notify.go`). A field added to `Step` and not named there is dropped

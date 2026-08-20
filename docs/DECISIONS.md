@@ -377,3 +377,78 @@ on. (3) W10-f is a store phase. Absorbing an ingest fix would make it two.
 executed** — no test in this repo demonstrates the double-fire end to end, and the severity above is
 an inference from four call sites, not a measurement. Proving or disproving it is the next phase,
 and it is the first behavioural test `cmd/sos-ingest` would ever have.
+
+---
+
+## D-025 addendum (20 Aug, W10-g) — it reproduced; the guard went into `armTimers`
+
+**What changed.** D-025 above closed with *"proving or disproving it is the next phase"*. W10-g
+proved it. `cmd/sos-ingest/projector_test.go` drives a duress SOS through HTTP, the signature check,
+the F-04 flood guard, the WAL, the bus and the projector; has a worker claim the `NO_ACK` rung with
+`store.FireTimer`; then sends three more unverified reports inside the 60 s window. The fourth
+coalesces onto the first incident's id carrying its own HLC, passes `markSeen` and `projSeen` both,
+and lands in `projectOpen` with `exists == true`. The claimed rung comes back `pending`, `fired_at`
+0, `attempts` 0, `fire_at` 15 s further out, and due again. Every consequence D-025 inferred from
+four call sites is what the code does. That reproduction is commit `45663634`, kept as its own
+commit so the red is in the history and not only in prose.
+
+**The two bounds the characterization added, which D-025 did not know.**
+`TimeoutsFor(PENDING)` is **empty** — an ordinary open arms no rungs at all, so only an incident
+that has reached `ACTIVE_L1*` or `OWNED` has a ladder to reset. The way in through a *single* open
+record is therefore duress, which skips the cancel window in `projectOpen` itself.
+
+**The fix, and where it did NOT go.** Still not in the store: `PutTimer` remains a blind upsert
+because `engine.cancelTimers` reads-flips-writes through it, and a state guard there would mean
+encoding escalation's rules in the persistence layer. The guard is in `armTimers`, which reads the
+incident's rungs once and skips any id already on disk. **Per rung id, never per incident** —
+`project()` marks a record seen only when the whole projection succeeded, so a store failure inside
+`armTimers` means the bus redelivers and the second pass sees `exists == true`; skipping by incident
+would leave the ladder permanently unarmed on exactly the path that already went wrong once.
+`TestArmTimersStillArmsAfterAPartialFailure` is what holds that line. A **cancelled** rung is
+skipped too, which closes a second, smaller hole: a repeated open could previously resurrect a
+ladder the engine had deliberately cancelled.
+
+**Cost.** 963 → 970/1000 source lines (ADR-002). Additions without removals, against the board's own
+instruction, and here is the argument for doing it anyway: the removal that pays for it is
+`armTimers` itself, and whether that function should exist is D-026's question, not this one.
+Leaving a proven safety bug in place to protect 7 lines of a 37-line budget is the wrong trade.
+
+---
+
+## D-026 — The rungs `sos-ingest` arms are executed by nobody, and that is recorded, not fixed
+
+**Decision.** W10-g found, while proving D-025, that the escalation ladder `cmd/sos-ingest` arms is
+never climbed — and **left it alone**. It is written down as RISK item 16 and nothing else.
+
+**What the break is.** Three independent ones, any one of which is sufficient:
+1. **Different stores.** `sos-ingest` opens `<data>/store` (`main.go:264`); with
+   `KAVACH_SOS_DATA=/var/lib/kavach` that is `/var/lib/kavach/store`. `control-plane`, which owns
+   `escalation.Engine`, opens `KAVACH_DATA_DIR` directly (`control-plane/main.go:71`) —
+   `/var/lib/kavach/control-plane`. `engine.Run` polls its own store. The two never meet.
+2. **Nothing bridges the bus.** The shared bus directory is the documented seam
+   (`ops/docker-compose.yml:60`), and `sos-ingest` publishes every incident onto it. The only
+   subscriber to `fam.*.incident` is `sos-ingest`'s own projector (`main.go:274`). `control-plane`
+   subscribes to `cp.*` only, `realtime-gw` to the notify ticket and stream subjects, `canary` to
+   the notify stream. `engine.OnIncidentOpen` has exactly one caller, and it is the control plane's
+   own `POST /v1/incidents`.
+3. **The action names disagree.** `escalation.arm` names the *work* — `ESCALATE_L2`, `SMS_TIER`,
+   `REPEAT_L1` — with a minted UUID per rung. `sos-ingest.armTimers` names the *event*, straight
+   from the generated machine, with a derived id. Three of the four actions it can derive
+   (`AUTO_QUIESCE`, `PROBE_TIMEOUT`, `PROGRESS_WATCHDOG`) happen to collide with an action the
+   engine implements. The fourth is `NO_ACK` — the entire L1→L2→L3 climb — and `execute` has no case
+   for it. **Measured, not read:** `internal/escalation/action_routing_test.go` fires every derived
+   action from a state that derives it and partitions the results.
+
+**Why it is not fixed here.** Four reasons, in order. (1) It is a topology decision, not a bug fix:
+either `control-plane` grows a durable subscriber on `fam.*.incident` that feeds
+`engine.OnIncidentOpen`, or the two binaries share a store — and the second is the thing ADR-002
+exists to prevent. (2) Whichever way it goes decides whether `armTimers` and `tierFor` should exist
+in `sos-ingest` at all; if the engine arms its own ladder from the bus, ~20 lines come out of the
+sacred binary and the LOC pressure eases. (3) `cmd/control-plane` has **zero tests**, so the
+characterization this repo's rules demand does not exist yet. (4) It is well past one phase.
+
+**Stated honestly.** The routing half is proven by a passing test. The topology half is read from
+`main.go`, `control-plane/main.go` and `docker-compose.yml` — file and line given above — and from
+an exhaustive grep for bus subscribers. **Nothing here has been run against a live stack**, and the
+compose stack has never been brought up on this machine. Do not quote "no rung ever fires" as
+measured; quote it as read, and read it yourself before acting on it.

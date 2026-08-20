@@ -12,6 +12,12 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 
 ## Now
 
+> ⛔ **Read this before picking anything: D-026 / RISK 16 (found 20 Aug).** The escalation ladder
+> does not run for an SOS. `sos-ingest` records it, acks it, fans out the A′ alert — and the engine
+> that would climb L1→L2→L3 polls a different store, with nothing bridging the bus between them.
+> Every ✅ in W9 is true in isolation and untrue end to end. **This outranks W10-c on the board**;
+> W10-c stays "Now" only because it is the named phase, and it needs a JDK this machine lacks.
+
 **Phase 1 · W10-c — present the alert on a locked screen.** The receive half landed on 11 Aug
 (W10-b): a data-only FCM message now wakes the bundle, is read through an allowlist, and is
 presented on the bypass-DND alarm channel. **W10-d** followed the same day and closed **1.32** — a
@@ -27,7 +33,13 @@ same day, one layer down: 15 tests over `store.FireTimer` — the atomic claim t
 design rests on, which W10-e could only exercise through a hand-written double. It found the ladder
 can be **re-armed after it has already climbed** (RISK item 15, **D-025**) and recorded that rather
 than fixing it: the fix belongs in `sos-ingest`, which has 37 lines of headroom and no behavioural
-test to hang a characterization on.
+test to hang a characterization on. **W10-g** (20 Aug) executed it. D-025 reproduces exactly as
+written — a coalesced repeat SOS puts a rung an escalation worker is holding back to `pending` with
+`attempts` 0 and its deadline 15 s further out — and the guard now sits in `armTimers`
+(963 → 970/1000). While proving it, W10-g found something larger and did **not** fix it: **nothing
+executes the rungs `sos-ingest` arms.** The escalation engine polls a different store, no process
+subscribes to `fam.*.incident`, and `NO_ACK` is not an action `execute` implements. RISK item 16,
+**D-026** — the first thing a JDK-less session should read.
 
 > ⛔ **Two independent blockers, both outside code.**
 > 1. **No Firebase project.** `google-services.json`, an `android.googleServicesFile` line in
@@ -52,18 +64,25 @@ test to hang a characterization on.
    ever *scheduled*, so on a force-stopped app on an aggressive OEM nothing resurrects the agent.
    §4.12 names OEM battery managers as risk #3.
 
-**On a machine with no JDK, do these instead** — fully covered by the nine gates. **W10-e and W10-f
-did the first two on 11 Aug**: the escalation ladder and the timer wheel are pinned by 40 tests
-(`escalation/ladder_test.go` 24, `escalation/timer_test.go` 16), which found and closed D-024; and
-`store.FireTimer` is pinned by 15 more (`store/timer_test.go`), which found D-025. What is still
+**On a machine with no JDK, do these instead** — fully covered by the nine gates. **W10-e, W10-f and
+W10-g did the first three**: the escalation ladder and the timer wheel are pinned by 40 tests
+(`escalation/ladder_test.go` 24, `escalation/timer_test.go` 16), which found and closed D-024;
+`store.FireTimer` by 15 more (`store/timer_test.go`), which found D-025; and the projector's arming
+path by 4 (`sos-ingest/projector_test.go`), which proved D-025 and closed it. What is still
 unpinned in `escalation`: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, and
 the HLC.
 
 **The queue as it stands, no JDK required:**
-1. **`cmd/sos-ingest`'s first behavioural test, and D-025 with it.** The projector can re-arm a
-   ladder that has already climbed — a fired rung refires, a pending rung's deadline is pushed out.
-   Read, not yet executed; proving it is one test file, and the fix after it is a guard in
-   `armTimers`. **Budget removals first: 963/1000** (ADR-002).
+1. **D-026 — decide where the ladder is armed, then wire it.** ★ *This is the big one, and it is
+   ahead of everything else on this list.* An SOS that reaches `sos-ingest` is durably recorded,
+   acked and fanned out on the A′ path — and **no rung of the escalation ladder will ever fire for
+   it**: the engine polls `<data>/control-plane`, `sos-ingest` writes `<data>/store`, nothing
+   subscribes to `fam.*.incident`, and `NO_ACK` is not an action `execute` implements. Phase 1's
+   whole promise is trigger → transmit → notify → **escalate**, so this is a gate item, not a
+   cleanup. Read RISK 16 and D-026 first; the honest first step is a durable subscriber on
+   `fam.*.incident` in `cmd/control-plane` feeding `engine.OnIncidentOpen` — which needs
+   `cmd/control-plane`'s first test, since it has none. If that lands, `armTimers` and `tierFor`
+   come **out** of `sos-ingest` and ~20 lines return to the budget.
 2. **The rest of `escalation`** — `Cancel`'s duress twin is a constant-time sibling of `verifyPin`
    and deserves the same care.
 3. **Phase 2's `policyRepo.byVersion()`** — one repo method, and without it a six-month-old incident
@@ -156,8 +175,13 @@ Soak is W13–16: **four weeks, write no new features.**
 | 1.23–1.27 | Alarm at STREAM_ALARM max, torch strobe, native 112 handoff, black box, pre-allocated reserve | ✅ | `src/t0/alarm.ts` synthesises the siren at runtime (no bundled asset to lose); `blackbox.ts` claims `RESERVE_SLOTS` at init |
 | 1.28 | **MedicalCardActivity, `showWhenLocked`** | 🔨 | `app/medical-card.tsx` is a complete card — 21:1 contrast, tap-to-call ICE, keep-awake. But it is a **React route inside the app**, so a stranger holding a locked phone cannot reach it. The single most important property of this screen is the missing one |
 
-### W9 — Escalation engine ✅ (two gaps)
-| 1.29 | Durable timer rows, N workers, atomic claim, no leader | ✅ | `internal/escalation/engine.go` — the header refuses `time.AfterFunc` explicitly. **Pinned by `escalation/timer_test.go` (W10-e, 11 Aug):** claim exclusivity on both the transactional and the optimistic path, fire order, batch limit, the 60 s overdue P0 page (§2.11.5), re-arm-then-abandon, adaptive poll. **The claim itself is pinned by `store/timer_test.go` (W10-f):** 16 goroutines on one row yield one winner; the claim is on disk before it returns, so a restarted worker cannot re-fire it; the persisted key set and the three state literals match `migrations/0001_init.sql` column for column. Two divergences from that migration are recorded as-is — `PutTimer` has no state guard (**D-025**, RISK 15) and `FireTimer` has no tenancy check where Postgres has RLS |
+### W9 — Escalation engine ✅ (two gaps) — ⛔ **and not reachable from an SOS**
+
+> Every ✅ in this table is true of the engine in isolation and **untrue end to end**. `control-plane`
+> owns the engine and opens `<data>/control-plane`; `sos-ingest` projects incidents and rungs into
+> `<data>/store`; nothing subscribes to `fam.*.incident`. The ladder climbs only for incidents created
+> through the control plane's own `POST /v1/incidents`. **D-026 / RISK 16** — found 20 Aug, not fixed.
+| 1.29 | Durable timer rows, N workers, atomic claim, no leader | ✅ | `internal/escalation/engine.go` — the header refuses `time.AfterFunc` explicitly. **Pinned by `escalation/timer_test.go` (W10-e, 11 Aug):** claim exclusivity on both the transactional and the optimistic path, fire order, batch limit, the 60 s overdue P0 page (§2.11.5), re-arm-then-abandon, adaptive poll. **The claim itself is pinned by `store/timer_test.go` (W10-f):** 16 goroutines on one row yield one winner; the claim is on disk before it returns, so a restarted worker cannot re-fire it; the persisted key set and the three state literals match `migrations/0001_init.sql` column for column. Two divergences from that migration are recorded as-is — `PutTimer` has no state guard (**D-025**) and `FireTimer` has no tenancy check where Postgres has RLS. **D-025 was proved and closed in `sos-ingest`, not here (W10-g, 20 Aug):** `PutTimer` is still a blind upsert because `cancelTimers` needs it; the guard is in `armTimers`. ⬛ **But see D-026 / RISK 16: this engine polls a store `sos-ingest` never writes to, so for an SOS that arrives at the front door, none of the above ever runs.** |
 | 1.30 | LISTEN/NOTIFY + adaptive poll | 🔨 | In-process bus wake + polling. Semantics hold; the Postgres mechanism does not exist |
 | 1.31 | Ladder L1→L2→L3 as data | ✅ | `engine.go` + `src/core/policy.ts`. **Pinned by `ladder_test.go` (W10-e):** what `OnIncidentOpen` arms per entry state, every rung's tier/channels/state guard, `Ladder()` matching the timers actually armed, L3 anchored at L1 entry, terminal-and-merged disarm, F-02 auto-quiesce, the P-030 watchdog reclaim, t3 stamped once. Found **D-024** — the SMS rung was still billable at `RESOLVING` |
 | 1.32 | CLAIM / RELEASE broadcast over **both** WS and push | ⛔ | **Code complete both ends, exit criterion unmeetable.** Landed 11 Aug (W10-d). `Claim()` now calls `notifyStep` with WS+FCM+APNs+PushKit and no billable channel, so §2.6.4's "both channels simultaneously" is built rather than described. F-21 grew by two fields to make it expressible — `kind` and `ownerShortName` (D-022) — and the device presents `claimed` as a persistent quiet banner on a fourth channel (D-023) instead of a second alarm. Both the socket and push paths compose through one `notifyOwnership()`. `internal/escalation` got its first tests: `claim_test.go`, 6 characterization + 4 requirement. ⛔ for the same reason as 1.35e — no handset has received one (1.35d) |
@@ -405,11 +429,14 @@ Building them means writing ADRs that overturn prior ones, not just adding scree
   Definition of Done, of which items 2–5 are a **physical-device checklist** no CI can fake.
 - Anything touching `internal/{bus,wal,consent}` or `cmd/{control-plane,realtime-gw,canary}` needs
   a characterization test first — ~4,300 lines there still have no direct tests
-  ([RISK.md](RISK.md) §4). `store`, `notify` and `escalation` are partially pinned; the rule applies
-  to the parts of them that are not. **`cmd/sos-ingest` is on that list too** — its one test file
-  asserts the LOC budget, not a line of its behaviour.
-- `sos-ingest` has **37 lines of headroom** (963/1000). Budget removals before additions.
+  ([RISK.md](RISK.md) §4). `store`, `notify`, `escalation` and now `cmd/sos-ingest` are partially
+  pinned; the rule applies to the parts of them that are not.
+- `sos-ingest` has **30 lines of headroom** (970/1000). Budget removals before additions.
 - **A characterization pass that finds a gap does not have to close it in the same session.** D-024
-  was one line in the file already under test and was fixed on the spot; D-025 lands in a different
-  package with no test rig and 37 lines of headroom, so it was written down instead. Record where
-  the fix belongs and why it waited — an undocumented finding is worse than an unfixed one.
+  was one line in the file already under test and was fixed on the spot; D-025 landed in a different
+  package with no test rig, so it was written down and closed a session later. Record where the fix
+  belongs and why it waited — an undocumented finding is worse than an unfixed one.
+- **But it must be executed before it is quoted.** D-025 spent a session as an inference from four
+  call sites, correctly labelled "read, not executed". W10-g ran it and every word held — and the
+  same pass found D-026, which no amount of re-reading `armTimers` would have surfaced, because it
+  is in a different binary's `main()`. **Reading finds the bug; running finds the one next to it.**

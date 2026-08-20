@@ -34,30 +34,55 @@ delivery matrix says "unreachable by push" and nothing else complains, so a buil
 gate, install cleanly, and never be addressable. Dropping the JSON file into the repo is not
 sufficient on its own — see PHASES 1.35d for all four steps.
 
-**15. A repeated SOS can re-arm an escalation ladder that has already climbed.** *(added 11 Aug,
-W10-f. Numbered 15 for the same reason 14 was.)*
-`sos-ingest.armTimers` (`main.go:1019`) builds each rung's id as `incident|state|action`, and
-`projectOpen` calls it for an incident that **already exists** without advancing its state. `PutTimer`
-is a blind upsert with no state guard, so a second open record on a live incident rewrites the rungs
-armed for its current state back to `pending`, zeroes `fired_at` and `attempts`, and recomputes
-`fire_at` from the `ServerReceivedAt` that `main.go:942` has just moved forward. Two consequences,
-opposite in direction: **a rung that already fired can fire again**, and **a rung still pending has
-its deadline pushed out**, so pressing SOS repeatedly *delays* the ladder. The way in is F-04
-coalescing — past `floodThreshold` an unverified open is rewritten onto the first incident's id while
-keeping its own HLC, which passes both the request-path (`markSeen`) and projector (`projSeen`)
-dedupes. ADR-018 makes "unverified" the likely state during a stale key cache.
-**Confidence, stated plainly:** the store half is pinned by a passing test
-(`internal/store/timer_test.go` — `TestPutTimerHasNoStateGuardAndOverwritesAClaimedRow`); **the
-sos-ingest half is read, not executed.** Nothing in this repo demonstrates the double-fire end to
-end. Fix location and the reason it was not done in W10-f: [DECISIONS.md](DECISIONS.md) D-025.
+**15. ~~A repeated SOS can re-arm an escalation ladder that has already climbed.~~ CLOSED
+20 Aug (W10-g).** *(added 11 Aug, W10-f. Numbered 15 for the same reason 14 was; kept in place
+rather than deleted because `CLAUDE.md` and `PROJECT_MAP.md` cite these ids.)*
+It reproduced exactly as written. `cmd/sos-ingest/projector_test.go` drove a duress SOS through
+HTTP → the F-04 flood guard → the WAL → the bus → the projector, had a worker claim the `NO_ACK`
+rung with `FireTimer`, then sent three more unverified reports inside the 60 s window. The fourth
+coalesced onto the first incident's id carrying its own HLC, passed both dedupes, and the claimed
+rung came back `pending` with `fired_at` 0, `attempts` 0, a deadline 15 s further out, and a place
+back in `TimersDue`. The F-02 six-hour backstop moved with it.
+**The fix is a guard in `armTimers`**, not in the store: it reads the incident's rungs once and
+skips any id already on disk. Per rung id, never per incident — `project()` marks a record seen only
+on success, so a redelivery after a partial failure must still arm what is missing
+(`TestArmTimersStillArmsAfterAPartialFailure`). `PutTimer` is **still a blind upsert** and
+`engine.cancelTimers` still depends on that; see [DECISIONS.md](DECISIONS.md) D-025.
+963 → 970/1000 lines.
+
+**16. Nothing executes the escalation rungs `sos-ingest` arms.** *(added 20 Aug, W10-g.)*
+Two independent breaks between the binary that receives an SOS and the binary that climbs the ladder:
+- **Different stores.** `sos-ingest` opens `filepath.Join(<data>, "store")` (`main.go:264`), which
+  `ops/docker-compose.yml:114` makes `/var/lib/kavach/store`. The escalation engine lives in
+  `control-plane`, which opens `KAVACH_DATA_DIR` **directly** (`control-plane/main.go:71`), set to
+  `/var/lib/kavach/control-plane` (compose:140). `engine.Run` polls its own store; the incidents and
+  rungs `sos-ingest` projects are in a different directory and are never read.
+- **Nothing bridges the bus either.** The shared bus is the documented seam (compose:60–64), but the
+  only subscriber to `fam.*.incident` is `sos-ingest`'s own projector (`main.go:274`). `control-plane`
+  subscribes to `cp.*` only (`main.go:314`), `realtime-gw` to the notify ticket and stream subjects,
+  `canary` to the notify stream. `engine.OnIncidentOpen` has exactly one caller — the control plane's
+  own `POST /v1/incidents` (`main.go:797`).
+- **And the action names do not match.** Pinned by a passing test, not inferred:
+  `internal/escalation/action_routing_test.go` fires every action the projector can derive and finds
+  `NO_ACK` — the whole L1→L2→L3 climb — lands on `execute`'s `default` arm as an unknown action.
+  `escalation.arm` names the work (`ESCALATE_L2`), `armTimers` names the event (`NO_ACK`).
+**What this costs:** an SOS that reaches `sos-ingest` is durably recorded, acked, and fanned out on
+the A′ path — and no rung of the escalation ladder will ever fire for it. Item 14 is about a phone
+that cannot be reached; this is about a ladder that never starts climbing. It is the reason item 15
+could not ring anybody today, and the reason item 15 had to be fixed anyway: the wiring must close
+for Phase 1 to pass its gate, and the day it does, item 15 goes live.
+See [DECISIONS.md](DECISIONS.md) D-026. **Not fixed, and not a one-file fix** — it is a topology
+decision spanning `cmd/control-plane`, `ops/docker-compose.yml` and possibly ADR-002.
 
 ## S2 — will make a change unverifiable
 
 **4. ~4,300 LOC of backend has no direct tests.**
 `internal/{bus,wal,consent}` and all of `control-plane`, `realtime-gw`, `canary` — the append-only
 log, the durable stream every plane hangs off, and a hand-written WebSocket frame codec.
-`cmd/sos-ingest` belongs on this list too: its only test file asserts the **LOC budget**, not a line
-of its behaviour, and item 15 above is what that costs.
+`cmd/sos-ingest` came off this list on 20 Aug (W10-g): `projector_test.go` pins the arming path —
+what PENDING arms (nothing), what a duress open arms, and the D-025 rewrite — through the real
+front door. Its request path was already covered by `main_test.go`. What is still unpinned there:
+`replayWAL`, `handleSMSInbound`'s reconciliation beyond the five cases it has, and `refreshCache`.
 **Characterize before you change**: write a test asserting current behaviour, then change it and
 watch the test fail deliberately.
 
@@ -100,9 +125,11 @@ Do not quote its 59% / 70% / 52%. Those were measured once on 28 Jul and re-quot
 ten days without re-measurement ([history/SESSION-LOG.md](history/SESSION-LOG.md)).
 [PHASES.md](PHASES.md) replaces them.
 
-**7. `sos-ingest` has 37 lines of headroom.**
-`TestLOCBudget` reports **963/1000**; CI Gate 4 fails past 1000 (ADR-002, deliberate). Any feature
-touching the sacred binary must remove lines to add lines.
+**7. `sos-ingest` has 30 lines of headroom.**
+`TestLOCBudget` reports **970/1000** (963 before W10-g spent 7 on D-025's guard); CI Gate 4 fails
+past 1000 (ADR-002, deliberate). Any feature touching the sacred binary must remove lines to add
+lines. If item 16 is closed by moving the ladder to the control plane, `armTimers` and `tierFor`
+become deletable and about 20 lines come back.
 
 **8. `migrations/0001_init.sql` and `internal/store/store.go` must stay in sync, and nothing checks
 it.** The SQL is the target Postgres schema (ADR-006, not deployed); the store is the live

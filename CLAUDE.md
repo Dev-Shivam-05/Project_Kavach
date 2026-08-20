@@ -26,8 +26,12 @@ compiled here, and **no CI gate compiles it either** — the nine gates are Go, 
 Changes to the native Tier-0 plane are unverifiable from this checkout; say so rather than reporting
 Kotlin as done (D-021).
 
-Windows: `go test ./...` may fail once with *"An Application Control policy has blocked this
-file"* — that is the OS, not the code. Re-run.
+Windows: `go test ./...` may fail with *"An Application Control policy has blocked this file"* —
+that is the OS, not the code. Re-running sometimes clears it. **For `cmd/sos-ingest` it does not**:
+three consecutive runs failed identically on `sos-ingest.test.exe` while every other package passed.
+The fix is to build somewhere else —
+`GOTMPDIR=/d/Projects/Project_Kavach/backend/.gotmp go test ./cmd/sos-ingest/` — and delete
+`.gotmp` afterwards. Never report this package green without having actually run it.
 
 **`// @ts-expect-error` must sit on the line the import specifiers are on.** The tempting shape —
 a trailing comment inside the braces of a multi-line `import { … } from 'expo-notifications'` —
@@ -61,7 +65,7 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 
 ## Danger zones
 
-- `backend/cmd/sos-ingest/` — **963/1000 lines.** CI Gate 4 fails past 1000 (ADR-002). To add lines
+- `backend/cmd/sos-ingest/` — **970/1000 lines.** CI Gate 4 fails past 1000 (ADR-002). To add lines
   here you must first remove lines here.
 - The four generated files (`stateMachine.generated.ts`, `machine_gen.go`, `machine_gen_test.go`,
   `__generated__/fixtures.json`) — **never hand-edit.** Change `spec/state-machine.yaml`, `npm run gen`.
@@ -69,13 +73,14 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 - **`notify.Fanout` rebuilds `Step` by hand for the neighbour feed** (the `reduced` loop in
   `notify.go`). A field you add to `Step` and do not name there is silently dropped — for neighbours
   only, so every test on the main path still passes. Add the field *and* a neighbour-leg test.
-- `internal/{bus,wal,consent}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**, and
-  `cmd/sos-ingest` has one that asserts its LOC budget and no behaviour;
+- `internal/{bus,wal,consent}` and `cmd/{control-plane,realtime-gw,canary}` have **zero tests**;
   `internal/store` covers two seams (the device table, W10-a; the escalation_timer row and
   `FireTimer`, W10-f) out of eleven tables. `internal/notify`
-  and `internal/escalation` are the covered ones — escalation has 68 cases over CLAIM/RELEASE
-  (W10-d), the ladder and the timer wheel (W10-e), and still nothing on `Cancel`, `Ack`, `OnScene`,
-  `Resolve` or the HLC. Characterize current behaviour in a test *before* changing any of it. The
+  and `internal/escalation` are the covered ones — escalation has 69 cases over CLAIM/RELEASE
+  (W10-d), the ladder and the timer wheel (W10-e), action routing (W10-g), and still nothing on
+  `Cancel`, `Ack`, `OnScene`, `Resolve` or the HLC. `cmd/sos-ingest` has its request path
+  (`main_test.go`) and its projector's arming path (`projector_test.go`, W10-g); `replayWAL` and
+  `refreshCache` are still unpinned. Characterize current behaviour in a test *before* changing any of it. The
   shape that works: pin what the code already does, run it green, then add the new expectation and
   show it red before you make it pass. It is also how gaps get found — W10-e's characterization
   pass is what surfaced D-024.
@@ -86,9 +91,17 @@ directive above it, and read the actual `npm run typecheck` output before claimi
   is a place you must decide about.
 - **`store.PutTimer` is a blind upsert — `*old = t`, no guard on the row's current state.** Writing
   a timer id that already exists resets `state` to `pending` and zeroes `fired_at` and `attempts`.
-  `engine.cancelTimers` depends on that (read, flip, write back); `sos-ingest.armTimers` is bitten
-  by it, because its ids are `incident|state|action` and `projectOpen` re-arms an incident that
-  already exists (D-025, RISK 15). Do not add a guard here without reading both callers.
+  `engine.cancelTimers` depends on that (read, flip, write back). `sos-ingest.armTimers` **was**
+  bitten by it — proven, not inferred, in `projector_test.go` — and now carries the guard itself:
+  it reads the incident's rungs once and skips any id already on disk, **per rung id, never per
+  incident**, because a bus redelivery after a partial failure must still arm what is missing
+  (D-025). Do not move that guard into the store without reading both callers.
+- **Nothing executes the rungs `sos-ingest` arms (D-026, RISK 16).** The escalation engine lives in
+  `control-plane` and polls `<data>/control-plane`; `sos-ingest` writes `<data>/store`; the only
+  subscriber to `fam.*.incident` is `sos-ingest`'s own projector; and `NO_ACK` — the L1→L2→L3 climb
+  — is not an action `escalation.execute` implements (pinned by `action_routing_test.go`). Every ✅
+  in W9 is true of the engine in isolation and untrue end to end. Read D-026 before you touch
+  `armTimers`, `OnIncidentOpen`, or either binary's data directory.
 
 ## Do not "fix" these
 
