@@ -1,13 +1,30 @@
-// Package bus is an in-process, file-backed pub/sub with the subject semantics
-// ADR-007 assigns to NATS JetStream.
+// Package bus is a multi-process, file-backed pub/sub with the subject
+// semantics ADR-007 assigns to NATS JetStream.
 //
 // ADR-007 chose NATS because it is a 15 MB binary a family can run at home. The
 // stdlib-only constraint takes that reasoning one step further: at family scale
-// the broker and its only publisher live in the same process, so the network hop
-// buys nothing and costs an operational dependency. What we keep is everything
-// the architecture actually relies on — subjects namespaced fam.{id}.* (§15.4),
-// a durable replayable stream, cursors that survive restart, and at-least-once
+// the broker is a directory, not a daemon. What we keep is everything the
+// architecture actually relies on — subjects namespaced fam.{id}.* (§15.4), a
+// durable replayable stream, cursors that survive restart, and at-least-once
 // delivery with consumers deduping on (incident_id, hlc).
+//
+// ★ D-027. Until 20 Aug 2026 the word "multi-process" above was false, and the
+// four containers in ops/docker-compose.yml were four programs that each worked
+// alone: Open replayed stream.wal once into a slice, publish appended to that
+// slice, drain walked it, and nothing ever re-read the file. Two instances also
+// wrote every record at the same offset and overwrote each other. The seam is
+// now real and rests on two things, both in internal/wal:
+//
+//	writing — wal.OpenShared carries O_APPEND, so the kernel places each record
+//	at the end of the file under its own lock and one process cannot land on
+//	another's bytes.
+//	reading — poll() calls wal.Tail on the pollInterval ticker, which re-stats
+//	the file. That is the ONLY place records enter b.msgs. publish calls it too,
+//	so a publisher does not wait 250 ms to hear its own message.
+//
+// Seq is therefore the record's ordinal in the FILE, not a per-instance
+// counter, which is what makes a cursor written by one process mean the same
+// thing to another.
 //
 // ★ Class A′ (§2.4.6). PublishEphemeral delivers ONLY to ephemeral subscribers
 // and is never written to the stream file. Durable subscribers cannot receive it
@@ -17,6 +34,7 @@
 package bus
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -90,41 +108,115 @@ type Bus struct {
 	log     *wal.WAL
 	dir     string
 	msgs    []Msg
+	readOff int64
 	subs    []*Sub
 	eph     []*EphSub
 	cursors map[string]uint64
 	closed  bool
 	anon    uint64
 
+	stop    chan struct{}
+	stopped chan struct{}
+
 	ephDropped uint64
+	tailErrs   uint64
 }
 
-// Open loads (or creates) the stream in dir: stream.wal plus cursors.json.
+// Open loads (or creates) the stream in dir: stream.wal plus cursors.json, and
+// starts the poller that carries records written by other processes.
 func Open(dir string) (*Bus, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	lg, err := wal.Open(filepath.Join(dir, "stream.wal"))
+	lg, err := wal.OpenShared(filepath.Join(dir, "stream.wal"))
 	if err != nil {
 		return nil, err
 	}
-	b := &Bus{log: lg, dir: dir, cursors: map[string]uint64{}}
-	if err := lg.Replay(func(seq uint64, _ int64, payload []byte) error {
-		var m Msg
-		if err := json.Unmarshal(payload, &m); err != nil {
-			return nil // a record we cannot parse is skipped, never fatal at boot
-		}
-		m.Seq = seq
-		b.msgs = append(b.msgs, m)
-		return nil
-	}); err != nil {
+	b := &Bus{
+		log: lg, dir: dir, cursors: map[string]uint64{},
+		stop: make(chan struct{}), stopped: make(chan struct{}),
+	}
+	b.mu.Lock()
+	_, _ = b.tailLocked(nil)
+	failed := b.tailErrs > 0
+	b.mu.Unlock()
+	if failed {
+		// A read error at boot is not a torn tail — wal.Tail handles those — so it
+		// is a broken directory, and starting up to serve an empty stream would
+		// look exactly like a family with no incidents.
 		_ = lg.Close()
-		return nil, err
+		return nil, errors.New("bus: cannot read " + filepath.Join(dir, "stream.wal"))
 	}
 	if raw, err := os.ReadFile(filepath.Join(dir, "cursors.json")); err == nil {
 		_ = json.Unmarshal(raw, &b.cursors)
 	}
+	go b.poll()
 	return b, nil
+}
+
+// poll is the one thing in this package that notices another process. Records
+// enter b.msgs here and in publish, and nowhere else.
+func (b *Bus) poll() {
+	defer close(b.stopped)
+	t := time.NewTicker(pollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-b.stop:
+			return
+		case <-t.C:
+			b.mu.Lock()
+			added, _ := b.tailLocked(nil)
+			subs := make([]*Sub, len(b.subs))
+			copy(subs, b.subs)
+			b.mu.Unlock()
+			if added == 0 {
+				continue
+			}
+			for _, s := range subs {
+				s.notify()
+			}
+		}
+	}
+}
+
+// tailLocked reads every record that has appeared in the file since the last
+// call and appends it to b.msgs. It must be called with b.mu held for writing.
+//
+// If want is non-nil, the Seq of the first record whose bytes equal it is
+// returned — that is how a publisher learns where in the file its own record
+// landed, since with O_APPEND the writer is not told.
+func (b *Bus) tailLocked(want []byte) (added int, wantSeq uint64) {
+	next, err := b.log.Tail(b.readOff, func(_ int64, payload []byte) error {
+		var m Msg
+		if err := json.Unmarshal(payload, &m); err != nil {
+			// A record we cannot parse keeps its place and reaches nobody: an
+			// empty Subject matches no pattern. Dropping it would shift every
+			// later Seq by one, and Seq is the cursor two processes share.
+			m = Msg{}
+		}
+		m.Seq = uint64(len(b.msgs)) + 1
+		b.msgs = append(b.msgs, m)
+		added++
+		if wantSeq == 0 && want != nil && bytes.Equal(payload, want) {
+			wantSeq = m.Seq
+		}
+		return nil
+	})
+	b.readOff = next
+	if err != nil && !errors.Is(err, wal.ErrClosed) {
+		b.tailErrs++
+	}
+	return added, wantSeq
+}
+
+// TailErrors counts failures to read the stream file. Non-zero means this
+// process has stopped hearing the others, which no endpoint can infer from a
+// quiet stream.
+func (b *Bus) TailErrors() uint64 {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.tailErrs
 }
 
 // Subject builds fam.{id}.{leaf...} (§15.4). Every message on this bus is
@@ -179,7 +271,11 @@ func (b *Bus) publish(m Msg, sync bool) (uint64, error) {
 		b.mu.Unlock()
 		return 0, ErrClosed
 	}
-	m.Seq = uint64(len(b.msgs)) + 1
+	// Seq is not ours to choose. It is the record's position in the file, which
+	// is decided by where the kernel appends it, and it is assigned when the
+	// record is read back. Writing a guess here would give two processes two
+	// different names for the same record.
+	m.Seq = 0
 	payload, err := json.Marshal(m)
 	if err != nil {
 		b.mu.Unlock()
@@ -194,7 +290,10 @@ func (b *Bus) publish(m Msg, sync bool) (uint64, error) {
 		b.mu.Unlock()
 		return 0, err
 	}
-	b.msgs = append(b.msgs, m)
+	// Read our own record back out of the file. This is what assigns its Seq,
+	// and it is also why an in-process subscriber does not wait for the next
+	// poll tick to be told about a message published beside it.
+	_, seq := b.tailLocked(payload)
 	subs := make([]*Sub, len(b.subs))
 	copy(subs, b.subs)
 	b.mu.Unlock()
@@ -202,13 +301,17 @@ func (b *Bus) publish(m Msg, sync bool) (uint64, error) {
 	for _, s := range subs {
 		s.notify()
 	}
-	return m.Seq, nil
+	return seq, nil
 }
 
 // PublishMsg appends to the durable stream and wakes matching subscribers. The
 // fsync is deferred: the ingest WAL is the durability record of truth for an
 // incident, and paying a second fsync on the request path would spend the very
 // milliseconds ADR-002 exists to protect.
+//
+// The returned Seq is the record's position in the stream file, or 0 if this
+// instance could not read its own record back. The record is written either
+// way, and no caller in this repo reads the number.
 func (b *Bus) PublishMsg(m Msg) (uint64, error) { return b.publish(m, false) }
 
 // Publish is the subject+bytes form NATS clients expect. The dedupe identity is
@@ -274,8 +377,14 @@ func (b *Bus) PublishEphemeral(m Msg) int {
 	return delivered
 }
 
-// Replay walks retained messages matching pattern with Seq > from.
+// Replay walks retained messages matching pattern with Seq > from. It reads the
+// file first, so a caller replaying history is not limited to what this process
+// happened to publish.
 func (b *Bus) Replay(pattern string, from uint64, fn func(Msg) error) error {
+	b.mu.Lock()
+	_, _ = b.tailLocked(nil)
+	b.mu.Unlock()
+
 	b.mu.RLock()
 	snapshot := make([]Msg, len(b.msgs))
 	copy(snapshot, b.msgs)
@@ -483,9 +592,40 @@ func (s *Sub) persistCursor() {
 		return
 	}
 	b.cursors[s.durable] = cursor
-	raw, err := json.Marshal(b.cursors)
-	dir := b.dir
 	b.mu.Unlock()
+	b.writeCursors()
+}
+
+// writeCursors merges this process's cursors into the file rather than
+// replacing it.
+//
+// cursors.json is shared by every process on the directory, and each holds a
+// copy loaded at Open. Writing that whole copy back would reset another
+// process's durable to wherever it stood when we booted — for control-plane's
+// incidents durable that means replaying a resolved incident and re-arming a
+// ladder. So: re-read, overlay only the durables this process actually owns,
+// write. Two writers can still interleave between the read and the rename, and
+// the loser is one cursor tick behind; at-least-once already requires consumers
+// to dedupe on (incident_id, hlc).
+func (b *Bus) writeCursors() {
+	merged := map[string]uint64{}
+	if raw, err := os.ReadFile(filepath.Join(b.dir, "cursors.json")); err == nil {
+		_ = json.Unmarshal(raw, &merged)
+	}
+
+	b.mu.RLock()
+	subs := make([]*Sub, len(b.subs))
+	copy(subs, b.subs)
+	dir := b.dir
+	b.mu.RUnlock()
+
+	for _, s := range subs {
+		if s.persist {
+			merged[s.durable] = s.Cursor()
+		}
+	}
+
+	raw, err := json.Marshal(merged)
 	if err != nil {
 		return
 	}
@@ -510,9 +650,17 @@ func (s *Sub) DeadLetters() []Msg {
 
 // Drain blocks until the consumer has caught up with the stream. Tests and
 // shutdown use it; the request path never does.
+//
+// "The stream" means the file, not this instance's view of it, so each turn
+// reads what other processes have appended. Otherwise a shutdown drain would
+// return true while an incident published by sos-ingest a millisecond ago was
+// still unread on disk.
 func (s *Sub) Drain(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		s.bus.mu.Lock()
+		_, _ = s.bus.tailLocked(nil)
+		s.bus.mu.Unlock()
 		if s.Cursor() >= s.bus.LastSeq() {
 			return true
 		}
@@ -642,6 +790,11 @@ func (b *Bus) Close() error {
 	copy(eph, b.eph)
 	b.mu.Unlock()
 
+	// The poller stops before the subscribers do, so nothing arrives from the
+	// file after the last consumer has persisted where it got to.
+	close(b.stop)
+	<-b.stopped
+
 	for _, s := range subs {
 		s.Close()
 	}
@@ -649,12 +802,11 @@ func (b *Bus) Close() error {
 		e.Close()
 	}
 
+	b.writeCursors()
+
 	b.mu.Lock()
 	b.closed = true
-	raw, _ := json.Marshal(b.cursors)
-	dir := b.dir
 	b.mu.Unlock()
-	writeAtomic(filepath.Join(dir, "cursors.json"), raw)
 	return b.log.Close()
 }
 
