@@ -68,83 +68,18 @@ func main() {
 
 	log := logx.New(*dev)
 
-	st, err := store.Open(*dataDir)
-	if err != nil {
-		log.Error("store_open_failed", "dir", *dataDir, "err", err)
-		os.Exit(1)
-	}
-	b, err := bus.Open(*busDir)
-	if err != nil {
-		log.Error("bus_open_failed", "dir", *busDir, "err", err)
-		os.Exit(1)
-	}
-
-	proj := newProjections()
-	proj.restore(b, log)
-
-	// ★ W10 — the push leg. ★ Absent credentials are NOT a startup failure: SMS
-	// and the socket still work, and a control plane that refuses to boot rings
-	// nobody at all. But it is logged at WARN with the variable to set, because
-	// "no phone in this family can be reached with its app closed" is the single
-	// most consequential fact about a running deployment and must never be
-	// something an operator has to infer from silence.
-	var push notify.PushSender
-	if fcm, ferr := notify.NewFCMFromEnv(time.Now); ferr == nil {
-		push = fcm
-		log.Info("push_configured", "provider", "fcm")
-	} else if errors.Is(ferr, notify.ErrPushNotConfigured) {
-		log.Warn("push_not_configured",
-			"impact", "a closed app cannot be alerted; SMS is the last leg to a human",
-			"set", notify.EnvFCMCredentials)
-	} else {
-		log.Error("push_init_failed", "set", notify.EnvFCMCredentials, "err", ferr)
-	}
-
-	notifier, err := notify.New(notify.Deps{
-		Store:  st,
-		Bus:    b,
-		Log:    log.With("mod", "notify"),
-		Budget: notify.NewMemoryBudget(envInt("KAVACH_SMS_CEILING", notify.DefaultSMSCeiling), time.Now),
-		Drills: &drillResolver{st: st, proj: proj},
-		Push:   push,
-		NewID:  newID,
+	// Everything below the flags is wiring, and it lives in newServer so a test
+	// can build the same graph without a process, a listener or a signal
+	// handler. newServer logs the specific failure itself (D-026).
+	srv, err := newServer(serverConfig{
+		DataDir: *dataDir,
+		BusDir:  *busDir,
+		Workers: *workers,
+		Token:   os.Getenv("KAVACH_API_TOKEN"),
+		Log:     log,
 	})
 	if err != nil {
-		log.Error("notify_init_failed", "err", err)
 		os.Exit(1)
-	}
-
-	engine, err := escalation.New(escalation.Deps{
-		Store:  st,
-		Bus:    b,
-		Notify: notifier,
-		Log:    log.With("mod", "escalation"),
-		NewID:  newID,
-		Config: escalation.Config{Workers: *workers, NodeID: nodeID()},
-	})
-	if err != nil {
-		log.Error("escalation_init_failed", "err", err)
-		os.Exit(1)
-	}
-
-	cons, err := consent.New(consent.Deps{
-		Store:       st,
-		Publish:     b.Publish,
-		Log:         log.With("mod", "consent"),
-		NewID:       newID,
-		LoadCursors: proj.consentCursors,
-		SaveCursor:  func(familyID string, upTo int64) { proj.saveConsentCursor(b, familyID, upTo) },
-	})
-	if err != nil {
-		log.Error("consent_init_failed", "err", err)
-		os.Exit(1)
-	}
-
-	srv := &server{
-		log: log, st: st, bus: b, proj: proj,
-		engine: engine, notify: notifier, consent: cons,
-		token: os.Getenv("KAVACH_API_TOKEN"),
-		idem:  newIdemStore(),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -155,8 +90,8 @@ func main() {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	var bg sync.WaitGroup
 	bg.Add(2)
-	go func() { defer bg.Done(); engine.Run(bgCtx) }()
-	go func() { defer bg.Done(); cons.RunSurfacing(bgCtx) }()
+	go func() { defer bg.Done(); srv.engine.Run(bgCtx) }()
+	go func() { defer bg.Done(); srv.consent.RunSurfacing(bgCtx) }()
 
 	httpSrv := &http.Server{
 		Addr:              *addr,
@@ -191,11 +126,108 @@ func main() {
 	}
 	bgCancel()
 	bg.Wait()
-	notifier.Close()
-	if err := st.Flush(); err != nil {
+	srv.notify.Close()
+	if err := srv.st.Flush(); err != nil {
 		log.Error("store_flush_failed", "err", err)
 	}
 	log.Info("stopped")
+}
+
+// serverConfig is what main's flags resolve to.
+type serverConfig struct {
+	DataDir string
+	BusDir  string
+	Workers int
+	Token   string
+	Log     *slog.Logger
+}
+
+// newServer opens the store and the bus, builds the notifier, the escalation
+// engine and the consent service, and returns the assembled server. It is
+// separate from main so the wiring is reachable from a test: cmd/control-plane
+// had no test at all until D-026 needed one, and "does this binary subscribe to
+// anything" is a question about the wiring, not about a handler.
+func newServer(cfg serverConfig) (*server, error) {
+	log := cfg.Log
+
+	st, err := store.Open(cfg.DataDir)
+	if err != nil {
+		log.Error("store_open_failed", "dir", cfg.DataDir, "err", err)
+		return nil, err
+	}
+	b, err := bus.Open(cfg.BusDir)
+	if err != nil {
+		log.Error("bus_open_failed", "dir", cfg.BusDir, "err", err)
+		return nil, err
+	}
+
+	proj := newProjections()
+	proj.restore(b, log)
+
+	// ★ W10 — the push leg. ★ Absent credentials are NOT a startup failure: SMS
+	// and the socket still work, and a control plane that refuses to boot rings
+	// nobody at all. But it is logged at WARN with the variable to set, because
+	// "no phone in this family can be reached with its app closed" is the single
+	// most consequential fact about a running deployment and must never be
+	// something an operator has to infer from silence.
+	var push notify.PushSender
+	if fcm, ferr := notify.NewFCMFromEnv(time.Now); ferr == nil {
+		push = fcm
+		log.Info("push_configured", "provider", "fcm")
+	} else if errors.Is(ferr, notify.ErrPushNotConfigured) {
+		log.Warn("push_not_configured",
+			"impact", "a closed app cannot be alerted; SMS is the last leg to a human",
+			"set", notify.EnvFCMCredentials)
+	} else {
+		log.Error("push_init_failed", "set", notify.EnvFCMCredentials, "err", ferr)
+	}
+
+	notifier, err := notify.New(notify.Deps{
+		Store:  st,
+		Bus:    b,
+		Log:    log.With("mod", "notify"),
+		Budget: notify.NewMemoryBudget(envInt("KAVACH_SMS_CEILING", notify.DefaultSMSCeiling), time.Now),
+		Drills: &drillResolver{st: st, proj: proj},
+		Push:   push,
+		NewID:  newID,
+	})
+	if err != nil {
+		log.Error("notify_init_failed", "err", err)
+		return nil, err
+	}
+
+	engine, err := escalation.New(escalation.Deps{
+		Store:  st,
+		Bus:    b,
+		Notify: notifier,
+		Log:    log.With("mod", "escalation"),
+		NewID:  newID,
+		Config: escalation.Config{Workers: cfg.Workers, NodeID: nodeID()},
+	})
+	if err != nil {
+		log.Error("escalation_init_failed", "err", err)
+		return nil, err
+	}
+
+	cons, err := consent.New(consent.Deps{
+		Store:       st,
+		Publish:     b.Publish,
+		Log:         log.With("mod", "consent"),
+		NewID:       newID,
+		LoadCursors: proj.consentCursors,
+		SaveCursor:  func(familyID string, upTo int64) { proj.saveConsentCursor(b, familyID, upTo) },
+	})
+	if err != nil {
+		log.Error("consent_init_failed", "err", err)
+		return nil, err
+	}
+
+	return &server{
+		log: log, st: st, bus: b, proj: proj,
+		engine: engine, notify: notifier, consent: cons,
+		token: cfg.Token,
+		idem:  newIdemStore(),
+	}, nil
 }
 
 // ── Drill resolution (F-03) ──────────────────────────────────────────────────
