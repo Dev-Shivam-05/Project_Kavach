@@ -235,27 +235,28 @@ func TestDuressOpenArmsTheSilentLadder(t *testing.T) {
 
 // ── D-025, executed ──────────────────────────────────────────────────────────
 
-// TestCoalescedSecondOpenRewritesRungsAlreadyArmed is the reproduction D-025
-// asked for. Everything below goes through the real front door: HTTP, the
-// signature check, the F-04 flood guard, the WAL, the bus, and the projector.
+// coalesceOntoAClaimedRung stages D-025's exact story and returns the server,
+// the incident every report ends up on, the id of the rung a worker is holding,
+// and that rung as it looked the moment it was claimed.
 //
-// The story is the one D-025 describes. A duress SOS arrives from a phone whose
-// key the cache has not caught up with, so it is flagged and accepted. The
-// ladder arms. An escalation worker claims the NO_ACK rung — that claim is the
-// atomic primitive W10-f pinned, and it is what stops a second worker firing the
-// same rung. Then the frightened person keeps pressing SOS. Past the F-04
-// threshold those reports coalesce onto the FIRST incident's id while carrying
-// their own HLC, so they pass markSeen and projSeen both, and land in
-// projectOpen with exists == true.
+// Everything here goes through the real front door: HTTP, the signature check,
+// the F-04 flood guard, the WAL, the bus, and the projector.
 //
-// What this test asserts is what the code does today, not what it should do.
-func TestCoalescedSecondOpenRewritesRungsAlreadyArmed(t *testing.T) {
+// A duress SOS arrives from a phone whose key the cache has not caught up with,
+// so it is flagged and accepted (ADR-018). The ladder arms. An escalation worker
+// claims the NO_ACK rung — that claim is the atomic primitive W10-f pinned, and
+// it is what stops a second worker firing the same rung. Then the frightened
+// person keeps pressing SOS. Past the F-04 threshold those reports coalesce onto
+// the FIRST incident's id while carrying their own HLC, so they pass markSeen
+// and projSeen both, and land in projectOpen with exists == true.
+func coalesceOntoAClaimedRung(t *testing.T) (srv *Server, first, noAckID string, claimed store.Timer) {
+	t.Helper()
 	dir := t.TempDir()
 	priv := seed(t, dir)
 	clk := newProjClock(projT0)
-	srv := newClockedServer(t, dir, clk)
+	srv = newClockedServer(t, dir, clk)
 
-	first := "d0000000-0000-7000-8000-00000000000a"
+	first = "d0000000-0000-7000-8000-00000000000a"
 	rest := []string{
 		"d0000000-0000-7000-8000-00000000000b",
 		"d0000000-0000-7000-8000-00000000000c",
@@ -270,7 +271,7 @@ func TestCoalescedSecondOpenRewritesRungsAlreadyArmed(t *testing.T) {
 	drainProjector(t, srv)
 
 	armed := rungsFor(srv, first)
-	noAckID := first + "|ACTIVE_L1_SILENT|NO_ACK"
+	noAckID = first + "|ACTIVE_L1_SILENT|NO_ACK"
 	if armed["NO_ACK"].ID != noAckID {
 		t.Fatalf("the ladder did not arm: %+v", armed)
 	}
@@ -283,7 +284,7 @@ func TestCoalescedSecondOpenRewritesRungsAlreadyArmed(t *testing.T) {
 	if err := srv.st.FireTimer(noAckID); err != nil {
 		t.Fatalf("FireTimer: %v", err)
 	}
-	claimed := rungByID(t, srv, first, noAckID)
+	claimed = rungByID(t, srv, first, noAckID)
 	if claimed.State != store.TimerFired || claimed.FiredAt == 0 || claimed.Attempts != 1 {
 		t.Fatalf("the claim did not stick: %+v", claimed)
 	}
@@ -291,8 +292,8 @@ func TestCoalescedSecondOpenRewritesRungsAlreadyArmed(t *testing.T) {
 		t.Fatalf("%d rungs still due after the claim, want 0", n)
 	}
 
-	// 3. Three more reports inside the 60 s window. The 4th crosses the F-04
-	//    threshold and is rewritten onto the first incident's id.
+	// 3. Three more reports inside the 60 s window, 5 s apart. The 4th crosses
+	//    the F-04 threshold and is rewritten onto the first incident's id.
 	var last ack
 	for i, id := range rest {
 		clk.advance(5 * time.Second)
@@ -309,55 +310,58 @@ func TestCoalescedSecondOpenRewritesRungsAlreadyArmed(t *testing.T) {
 		t.Fatal("the coalesced report was not flagged UNVERIFIED_FLOOD")
 	}
 	drainProjector(t, srv)
+	return srv, first, noAckID, claimed
+}
 
-	// 4. What that second open record did to the rung a worker was holding.
-	reArmed := rungByID(t, srv, first, noAckID)
-	if reArmed.State != store.TimerPending {
-		t.Fatalf("state %q — expected the blind upsert to put the claimed rung back to "+
-			"%q. If this now fails, D-025 has been fixed; update the decision.",
-			reArmed.State, store.TimerPending)
+// TestCoalescedSecondOpenLeavesRungsAlreadyArmedAlone is D-025 closed.
+//
+// Before the guard in armTimers this test asserted the opposite at every line:
+// the claimed rung came back as pending with fired_at 0 and attempts 0, its
+// deadline pushed out by exactly the 15 s between the first report and the
+// last, and it was due again — a rung a worker had already fired, back in the
+// queue. That is what the reproduction commit pinned, and why this one exists.
+//
+// A second open record carries no new scheduling information. The rungs for the
+// incident's current state were armed when it entered that state; arming them
+// again can only destroy the evidence of a claim or move a deadline a worker is
+// already counting on.
+func TestCoalescedSecondOpenLeavesRungsAlreadyArmedAlone(t *testing.T) {
+	srv, first, noAckID, claimed := coalesceOntoAClaimedRung(t)
+
+	held := rungByID(t, srv, first, noAckID)
+	if held.State != store.TimerFired {
+		t.Fatalf("state %q, want %q — the second open record reset a rung a worker was holding",
+			held.State, store.TimerFired)
 	}
-	if reArmed.FiredAt != 0 {
-		t.Fatalf("fired_at %d, want 0 — the claim's evidence survived the rewrite", reArmed.FiredAt)
+	if held.FiredAt != claimed.FiredAt {
+		t.Fatalf("fired_at %d, want %d — the claim's evidence was rewritten",
+			held.FiredAt, claimed.FiredAt)
 	}
-	if reArmed.Attempts != 0 {
-		t.Fatalf("attempts %d, want 0", reArmed.Attempts)
+	if held.Attempts != claimed.Attempts {
+		t.Fatalf("attempts %d, want %d", held.Attempts, claimed.Attempts)
+	}
+	if want := int64(projT0) + 90_000; held.FireAt != want {
+		t.Fatalf("fire_at %d, want %d — a repeated SOS moved the deadline", held.FireAt, want)
 	}
 
-	// The deadline moved out by exactly the wall time between the two reports:
-	// fire_at is recomputed from the ServerReceivedAt the second record carried.
-	movedTo := int64(projT0) + 15_000 + 90_000
-	if reArmed.FireAt != movedTo {
-		t.Fatalf("fire_at %d, want %d (base moved from %d to %d)",
-			reArmed.FireAt, movedTo, projT0, projT0+15_000)
-	}
-	if reArmed.FireAt <= armed["NO_ACK"].FireAt {
-		t.Fatal("the deadline did not move; a repeated SOS is meant to be the bug here")
-	}
-
-	// And it is due again. A rung a worker already fired is back in the queue:
-	// the exclusivity FireTimer buys is exclusivity per claim, not per rung.
-	due := srv.st.TimersDue(movedTo)
-	found := false
-	for _, tm := range due {
+	// It is not due again. The exclusivity FireTimer buys must outlive the next
+	// report from the same frightened person.
+	for _, tm := range srv.st.TimersDue(int64(projT0) + 15_000 + 90_000) {
 		if tm.ID == noAckID {
-			found = true
+			t.Fatal("a rung a worker already fired is back in the queue")
 		}
 	}
-	if !found {
-		t.Fatalf("the re-armed rung is not due at %d: %+v", movedTo, due)
-	}
 
-	// The AUTO_QUIESCE backstop moved with it — F-02's six-hour ceiling is now
-	// six hours from the LAST report, not from the first.
-	if want := int64(projT0) + 15_000 + 21_600_000; rungsFor(srv, first)["AUTO_QUIESCE"].FireAt != want {
+	// The F-02 backstop did not move either: six hours from the FIRST report,
+	// not from the last. A ladder that resets on every repeat never finishes.
+	if want := int64(projT0) + 21_600_000; rungsFor(srv, first)["AUTO_QUIESCE"].FireAt != want {
 		t.Fatalf("AUTO_QUIESCE fire_at %d, want %d",
 			rungsFor(srv, first)["AUTO_QUIESCE"].FireAt, want)
 	}
 
-	// The incident itself is untouched in state, which is why armTimers derived
-	// the same three ids the second time: the id is a function of (incident,
-	// state) and the state did not move.
+	// What the second report IS allowed to change: the incident's own row. It
+	// really did receive another report, and the state did not move — which is
+	// why armTimers derived the same ids the second time round.
 	inc, _ := srv.st.Incident(first)
 	if inc.State != sm.StateActiveL1Silent {
 		t.Fatalf("incident state %q, want %q", inc.State, sm.StateActiveL1Silent)
@@ -368,5 +372,55 @@ func TestCoalescedSecondOpenRewritesRungsAlreadyArmed(t *testing.T) {
 	// The blast radius is still capped at the F-04 threshold.
 	if n := len(srv.st.Incidents(testFamily)); n != floodThreshold {
 		t.Fatalf("%d incidents, want %d", n, floodThreshold)
+	}
+}
+
+// TestArmTimersStillArmsAfterAPartialFailure is the other half of the guard.
+//
+// project() marks a record seen only when the whole projection succeeded, so a
+// store error inside armTimers means the bus redelivers the same record — and
+// the second pass finds exists == true. A guard that skipped arming for an
+// existing INCIDENT would leave the ladder permanently unarmed on exactly the
+// path that already went wrong once. Skipping per rung id, not per incident, is
+// what makes the retry safe.
+func TestArmTimersStillArmsAfterAPartialFailure(t *testing.T) {
+	dir := t.TempDir()
+	priv := seed(t, dir)
+	clk := newProjClock(projT0)
+	srv := newClockedServer(t, dir, clk)
+
+	id := "d0000000-0000-7000-8000-00000000000e"
+	if code, _ := post(t, srv, "/v1/incident/open", sealed(t, priv, duressEnv(id, projT0))); code != http.StatusOK {
+		t.Fatalf("open: status %d", code)
+	}
+	drainProjector(t, srv)
+
+	inc, ok := srv.st.Incident(id)
+	if !ok {
+		t.Fatal("incident was never projected")
+	}
+	// Stand in for "PutIncident landed, armTimers did not": the incident row
+	// exists and one of its two rungs never made it to disk.
+	for _, tm := range srv.st.TimersForIncident(id) {
+		if tm.Action == "NO_ACK" {
+			// "escalation_timer" is the migration's table name and the store's
+			// own key for it (0001_init.sql:194, store.go:329).
+			if err := srv.st.Delete("escalation_timer", tm.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// The redelivery: the same record, projected a second time.
+	if err := srv.armTimers(inc); err != nil {
+		t.Fatalf("armTimers on retry: %v", err)
+	}
+
+	got := rungsFor(srv, id)
+	if len(got) != 2 {
+		t.Fatalf("%d rungs after the retry, want 2 — the guard dropped a rung that was "+
+			"never armed in the first place: %+v", len(got), got)
+	}
+	if want := int64(projT0) + 90_000; got["NO_ACK"].FireAt != want {
+		t.Fatalf("the re-armed NO_ACK rung fires at %d, want %d", got["NO_ACK"].FireAt, want)
 	}
 }

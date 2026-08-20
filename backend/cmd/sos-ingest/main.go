@@ -1024,8 +1024,25 @@ func (s *Server) armTimers(inc store.Incident) error {
 	if base == 0 {
 		base = inc.OpenedAt
 	}
+	// ★ D-025 ★ The rung id is DERIVED, not minted, so a second open record for
+	// an incident whose state has not moved derives the same ids — and PutTimer
+	// is a blind upsert. Re-arming would put a rung an escalation worker is
+	// already holding back to pending with attempts 0, and push a live deadline
+	// out by the gap between the two reports. F-04 coalescing makes that
+	// reachable from a repeated SOS, which is what a frightened person sends.
+	// Skip per rung ID, never per incident: project() marks a record seen only
+	// on success, so a redelivery after a partial failure must still arm what
+	// is missing. A cancelled rung is skipped too — the engine cancelled it on
+	// purpose and this binary does not get to resurrect its ladder.
+	armed := make(map[string]bool, 2)
+	for _, tm := range s.st.TimersForIncident(inc.ID) {
+		armed[tm.ID] = true
+	}
 	for _, t := range sm.TimeoutsFor(inc.State) {
 		id := inc.ID + "|" + string(inc.State) + "|" + string(t.On)
+		if armed[id] {
+			continue
+		}
 		if err := s.st.PutTimer(store.Timer{
 			ID: id, FamilyID: inc.FamilyID, IncidentID: inc.ID,
 			Action: string(t.On), TargetTier: tierFor(t.To),
