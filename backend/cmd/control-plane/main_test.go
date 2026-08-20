@@ -1,21 +1,21 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// CHARACTERIZATION — what this binary is, and is not, listening to
-// (ADR-002 · §2.5.1 · §9.2 · docs/DECISIONS.md D-026)
+// What this binary listens to, and what happens when it hears it
+// (ADR-002 · §2.5.1 · §9.2 · docs/DECISIONS.md D-026, D-027)
 //
 // cmd/control-plane is 1,700 lines that own the escalation engine, and it had no
-// test at all (docs/RISK.md item 4). D-026 needs one, because the question it
+// test at all (docs/RISK.md item 4). D-026 needed one, because the question it
 // asks — "does anything here consume the incident sos-ingest publishes" — is a
 // question about wiring, and wiring is what a handler test never touches.
 //
-// The two tests below are deliberately a matched pair. The first opens an
-// incident through this binary's OWN front door and watches the ladder get
-// armed: the engine works, the store works, the rungs are real. The second puts
-// the same incident on the bus, in the shape cmd/sos-ingest publishes it, in the
-// most generous configuration that exists — one process, one *Bus instance, no
-// container boundary — and watches nothing happen at all.
+// This file started as the characterization: the first test opened an incident
+// through this binary's OWN front door and watched the ladder get armed, the
+// second published the same incident on the bus and watched nothing happen. The
+// second one now asserts the opposite, and the commit that flipped it shows the
+// red first (W10-h).
 //
-// ★ Nothing here is a new requirement. ★ Both assertions state what HEAD does.
-// The second one is the one that should stop being true.
+// ⛔ Read the block above the D-026 section before quoting any of this as
+// end-to-end. Every test here runs in one process on one *Bus instance, and
+// internal/bus does not cross a process boundary (D-027).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 package main
@@ -33,7 +33,9 @@ import (
 
 	"github.com/kavach/backend/internal/bus"
 	"github.com/kavach/backend/internal/envelope"
+	"github.com/kavach/backend/internal/incident"
 	"github.com/kavach/backend/internal/logx"
+	"github.com/kavach/backend/internal/notify"
 	"github.com/kavach/backend/internal/store"
 )
 
@@ -126,44 +128,239 @@ func TestOpeningAnIncidentOverHTTPArmsTheLadder(t *testing.T) {
 }
 
 // ── D-026 · the bus leg ──────────────────────────────────────────────────────
+//
+// Until W10-h these tests asserted that NOTHING happened — that was D-026's
+// second break, measured rather than read, and the assertions below are the
+// same ones inverted. What has not changed is the setup: the message is shaped
+// like the one cmd/sos-ingest.commit() publishes, and it is published on the
+// server's OWN bus instance.
+//
+// ⛔ That last part is not a shortcut, it is the limit of what this file can
+// prove. In the deployed topology the two binaries are separate processes with
+// separate *Bus instances, and internal/bus does not cross a process boundary
+// (D-027, internal/bus/crossprocess_test.go). Everything below is true and none
+// of it reaches a container.
 
-// TestAnIncidentPublishedOnTheFamilyStreamArmsNothing is D-026's second break,
-// measured instead of read.
-//
-// The message is shaped like the one cmd/sos-ingest.commit() publishes: subject
-// fam.{family}.incident, kind incident_open, data a record whose Body is a
-// canonical envelope. It is published on the server's OWN bus instance, so the
-// cross-process problem of D-027 cannot be what fails here — delivery is
-// possible and there is simply no consumer.
-//
-// engine.OnIncidentOpen has exactly one caller and it is the HTTP handler above.
-func TestAnIncidentPublishedOnTheFamilyStreamArmsNothing(t *testing.T) {
+// TestAnIncidentPublishedOnTheFamilyStreamArmsTheLadder is the arrow D-026
+// found missing: an SOS that cmd/sos-ingest accepted now reaches the only thing
+// in this system that climbs L1 → L2 → L3.
+func TestAnIncidentPublishedOnTheFamilyStreamArmsTheLadder(t *testing.T) {
 	srv := newPlane(t)
 
-	if _, err := srv.bus.PublishMsg(sosIngestOpen(t, testIncident)); err != nil {
+	if _, err := srv.bus.PublishMsg(sosIngestOpen(t, testIncident, true)); err != nil {
+		t.Fatal(err)
+	}
+	waitForRungs(t, srv, testIncident, 5)
+
+	inc, ok := srv.st.Incident(testIncident)
+	if !ok {
+		t.Fatal("the incident was not projected into the control plane's store")
+	}
+	// Duress opens silent (§7.5) and skips the cancel window outright, so the
+	// whole ladder is laid down at once — the same five rungs the HTTP front
+	// door produces for the same incident.
+	if inc.State != incident.StateActiveL1Silent {
+		t.Errorf("state = %s, want ACTIVE_L1_SILENT", inc.State)
+	}
+	if !inc.Duress {
+		t.Error("the duress bit did not survive the bus")
+	}
+	if inc.Inc8 == "" {
+		t.Error("Inc8 was not derived")
+	}
+	byAction := armedActions(srv, testIncident)
+	for _, want := range []string{"AUTO_QUIESCE", "REPEAT_L1", "SMS_TIER", "ESCALATE_L2", "ESCALATE_L3"} {
+		if !byAction[want] {
+			t.Errorf("no %s rung armed; armed = %v", want, byAction)
+		}
+	}
+	// ★ The action names are the engine's, not the generated machine's. This is
+	// the third break of D-026: sos-ingest.armTimers derives NO_ACK from the
+	// state machine and escalation.execute has no case for it
+	// (internal/escalation/action_routing_test.go). Arming through the engine is
+	// what makes the rung executable.
+	if byAction["NO_ACK"] {
+		t.Error("a NO_ACK rung was armed — escalation.execute has no case for it")
+	}
+}
+
+// TestANonDuressIncidentOpensIntoTheServersOwnCancelWindow pins the other half
+// of initialState. §2.5.6: the device runs its own copy of the window, and the
+// server arms it too because the device may be underwater by the time it would
+// have expired.
+func TestANonDuressIncidentOpensIntoTheServersOwnCancelWindow(t *testing.T) {
+	srv := newPlane(t)
+
+	if _, err := srv.bus.PublishMsg(sosIngestOpen(t, testIncident, false)); err != nil {
+		t.Fatal(err)
+	}
+	waitForRungs(t, srv, testIncident, 2)
+
+	inc, _ := srv.st.Incident(testIncident)
+	if inc.State != incident.StatePending {
+		t.Errorf("state = %s, want PENDING", inc.State)
+	}
+	byAction := armedActions(srv, testIncident)
+	if !byAction["CANCEL_WINDOW"] || !byAction["AUTO_QUIESCE"] {
+		t.Errorf("armed = %v, want the cancel window and the F-02 backstop", byAction)
+	}
+	if byAction["ESCALATE_L2"] {
+		t.Error("the ladder was laid before the cancel window expired")
+	}
+}
+
+// TestARedeliveredIncidentDoesNotLayASecondLadder is D-025's mirror image.
+//
+// sos-ingest derives its rung ids, so a redelivery there OVERWROTE a rung a
+// worker was holding. escalation.arm mints a fresh uuid per rung, so the same
+// redelivery here would append a whole second ladder — five more rungs, every
+// one of them due, every one of them able to wake a family twice.
+//
+// StartAll makes this the ordinary case, not the exotic one: every boot replays
+// the whole retained stream.
+func TestARedeliveredIncidentDoesNotLayASecondLadder(t *testing.T) {
+	srv := newPlane(t)
+
+	msg := sosIngestOpen(t, testIncident, true)
+	if _, err := srv.bus.PublishMsg(msg); err != nil {
+		t.Fatal(err)
+	}
+	waitForRungs(t, srv, testIncident, 5)
+	first := len(srv.st.TimersForIncident(testIncident))
+
+	if _, err := srv.bus.PublishMsg(msg); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(settle)
+
+	if got := len(srv.st.TimersForIncident(testIncident)); got != first {
+		t.Fatalf("%d rungs after redelivery, %d before — a second ladder was armed", got, first)
+	}
+}
+
+// TestAnIncidentRecordedButUnarmedIsArmedOnRedelivery is why the guard above is
+// "has rungs" and not "exists".
+//
+// A pass that dies between PutIncident and OnIncidentOpen leaves an incident on
+// disk with no ladder. Treating that as already-done would strand exactly the
+// incident whose projection has already gone wrong once — which is the mistake
+// D-025's fix in sos-ingest was written to avoid, one layer down.
+func TestAnIncidentRecordedButUnarmedIsArmedOnRedelivery(t *testing.T) {
+	srv := newPlane(t)
+
+	// The state deliberately is NOT the one a fresh projection would compute:
+	// re-arming must not rewind an incident the engine has already climbed.
+	if err := srv.st.PutIncident(store.Incident{
+		ID: testIncident, FamilyID: testFamily, SubjectMemberID: testMember,
+		State: incident.StateActiveL2, Trigger: "MANUAL", PolicyVersion: 1,
+		OpenedAt: 1_700_000_000_000, ServerReceivedAt: 1_700_000_000_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.bus.PublishMsg(sosIngestOpen(t, testIncident, true)); err != nil {
+		t.Fatal(err)
+	}
+	waitForRungs(t, srv, testIncident, 1)
+
+	inc, _ := srv.st.Incident(testIncident)
+	if inc.State != incident.StateActiveL2 {
+		t.Fatalf("state = %s, want ACTIVE_L2 — the redelivery rewound a climbing incident", inc.State)
+	}
+	if !armedActions(srv, testIncident)["AUTO_QUIESCE"] {
+		t.Error("no F-02 backstop armed for an incident that had none")
+	}
+}
+
+// TestAnIncidentForAnUnknownFamilyIsDroppedNotRetried matches the call
+// cmd/sos-ingest's projector makes on the same question. There is nobody to
+// escalate to, and returning an error would retry five times and then park the
+// record in front of every other family's incidents.
+func TestAnIncidentForAnUnknownFamilyIsDroppedNotRetried(t *testing.T) {
+	srv := newPlane(t)
+
+	msg := sosIngestOpen(t, testIncident, true)
+	msg.Subject = bus.Subject("99999999-9999-7999-8999-999999999999", "incident")
+	msg.FamilyID = "99999999-9999-7999-8999-999999999999"
+	var rec map[string]any
+	if err := json.Unmarshal(msg.Data, &rec); err != nil {
+		t.Fatal(err)
+	}
+	rec["family_id"] = msg.FamilyID
+	blob, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Data = blob
+
+	if _, err := srv.bus.PublishMsg(msg); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(settle)
 
 	if _, ok := srv.st.Incident(testIncident); ok {
-		t.Fatal("the control plane projected the incident — D-026's bus leg is closed; " +
-			"update this test to assert the rungs instead of their absence")
+		t.Fatal("an incident was projected for a family this binary has never heard of")
 	}
-	if got := srv.st.TimersForIncident(testIncident); len(got) != 0 {
-		t.Fatalf("%d rungs armed from the bus, want 0 at HEAD", len(got))
+	if n := len(srv.incidents.DeadLetters()); n != 0 {
+		t.Fatalf("%d dead letters — the record was retried instead of dropped", n)
 	}
+	if srv.incidents.Cursor() == 0 {
+		t.Fatal("the cursor did not advance past the dropped record")
+	}
+}
+
+// TestAFrameOnTheStreamSubjectIsNotAnIncident guards the subject filter. This
+// binary and the engine both publish notify frames on fam.{id}.stream and
+// fam.{id}.reduced; only cmd/sos-ingest publishes on fam.{id}.incident, and a
+// pattern that caught the others would feed this handler its own output.
+func TestAFrameOnTheStreamSubjectIsNotAnIncident(t *testing.T) {
+	srv := newPlane(t)
+
+	msg := sosIngestOpen(t, testIncident, true)
+	msg.Subject = notify.StreamSubject(testFamily)
+	if _, err := srv.bus.PublishMsg(msg); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(settle)
+
+	if _, ok := srv.st.Incident(testIncident); ok {
+		t.Fatal("a message on the stream subject was projected as an incident")
+	}
+}
+
+// armedActions is the set of rung actions on disk for an incident.
+func armedActions(srv *server, incidentID string) map[string]bool {
+	out := map[string]bool{}
+	for _, tm := range srv.st.TimersForIncident(incidentID) {
+		out[tm.Action] = true
+	}
+	return out
+}
+
+// waitForRungs polls instead of sleeping so a passing test is fast and a failing
+// one still waits the full settle before it says so.
+func waitForRungs(t *testing.T, srv *server, incidentID string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(settle)
+	for time.Now().Before(deadline) {
+		if len(srv.st.TimersForIncident(incidentID)) >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("only %d rungs armed after %s, want %d",
+		len(srv.st.TimersForIncident(incidentID)), settle, want)
 }
 
 // sosIngestOpen builds the bus message cmd/sos-ingest publishes for an incident
 // open. The record type is private to that binary and this one may not import it
 // (archlint: no cmd → cmd edge), so the shape is duplicated here and pinned
 // against the original by TestTheRecordShapeThisFileAssumesStillMatchesIngest.
-func sosIngestOpen(t *testing.T, incidentID string) bus.Msg {
+func sosIngestOpen(t *testing.T, incidentID string, duress bool) bus.Msg {
 	t.Helper()
 	e := envelope.Envelope{
 		V: 1, IncidentID: incidentID, FamilyID: testFamily, DeviceID: testDevice,
 		MemberID: testMember, ClientTsMs: 1_700_000_000_000, HLC: "0000018bcfe0000100aabbccdd",
-		Trigger: "MANUAL", ConfidencePct: 100, RiskContext: 2, Duress: true,
+		Trigger: "MANUAL", ConfidencePct: 100, RiskContext: 2, Duress: duress,
 		PolicyVersion: 1, CoarseCell: "c7:23.02:72.57", BatteryPct: 61,
 		SealedPayload: "AZ+sealed+ciphertext+placeholder",
 	}

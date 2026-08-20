@@ -35,6 +35,7 @@ import (
 
 	"github.com/kavach/backend/internal/bus"
 	"github.com/kavach/backend/internal/consent"
+	"github.com/kavach/backend/internal/envelope"
 	"github.com/kavach/backend/internal/escalation"
 	"github.com/kavach/backend/internal/incident"
 	"github.com/kavach/backend/internal/logx"
@@ -53,6 +54,18 @@ const (
 	subjCheckin     = "cp.checkin"
 	subjConsentCur  = "cp.consent_cursor"
 	subjAudit       = "cp.audit"
+
+	// ★ D-026 ★ The incident leg. cmd/sos-ingest is the front door for an SOS
+	// and publishes every accepted record on fam.{family}.incident; this binary
+	// owns the escalation engine. Until W10-h nothing joined the two, so the
+	// ladder was armed only for incidents opened through this binary's own HTTP
+	// endpoint — which is not the path a person in trouble takes.
+	//
+	// Durable, because a control plane that is "allowed to be down" (see the
+	// package comment) must climb the ladder for an incident that arrived while
+	// it was: the cursor is persisted and StartAll replays what it missed.
+	subjFamIncident  = "fam.*.incident"
+	incidentsDurable = "control-plane.incidents"
 )
 
 func main() {
@@ -126,6 +139,13 @@ func main() {
 	}
 	bgCancel()
 	bg.Wait()
+	// Drain the incident leg before the notifier closes under it: a rung armed
+	// half-way through shutdown is worse than one armed by the next boot's
+	// StartAll replay (D-026).
+	if srv.incidents != nil {
+		srv.incidents.Drain(2 * time.Second)
+		srv.incidents.Close()
+	}
 	srv.notify.Close()
 	if err := srv.st.Flush(); err != nil {
 		log.Error("store_flush_failed", "err", err)
@@ -222,12 +242,149 @@ func newServer(cfg serverConfig) (*server, error) {
 		return nil, err
 	}
 
-	return &server{
+	srv := &server{
 		log: log, st: st, bus: b, proj: proj,
 		engine: engine, notify: notifier, consent: cons,
 		token: cfg.Token,
 		idem:  newIdemStore(),
-	}, nil
+	}
+
+	// ★ D-026 ★ Subscribe LAST: the handler writes incidents and arms rungs, so
+	// nothing may be delivered to it until the store, the notifier and the
+	// engine above are all built.
+	if srv.incidents, err = b.SubscribeDurable(incidentsDurable, subjFamIncident, bus.StartAll, srv.onIngestedIncident); err != nil {
+		log.Error("incident_subscribe_failed", "durable", incidentsDurable, "err", err)
+		return nil, err
+	}
+	return srv, nil
+}
+
+// ── The incident leg (D-026) ─────────────────────────────────────────────────
+
+// ingestRecord is the subset of cmd/sos-ingest's `record` this binary reads off
+// the bus. It is duplicated rather than imported: archlint forbids a cmd → cmd
+// edge (I-12), and lifting the type into the kernel would change the WAL format
+// of the one binary ADR-002 exists to leave alone. main_test.go pins these tags
+// against the original's source text, so a rename there fails a test here rather
+// than silently unarming the ladder.
+type ingestRecord struct {
+	Kind       string `json:"kind"`
+	At         int64  `json:"at"`
+	FamilyID   string `json:"family_id"`
+	IncidentID string `json:"incident_id"`
+	DeviceID   string `json:"device_id"`
+	HLC        string `json:"hlc"`
+	Transport  string `json:"transport"`
+	EventType  string `json:"event_type,omitempty"`
+	Flags      int64  `json:"flags"`
+	Verified   bool   `json:"verified"`
+	Body       string `json:"body"`
+	Synthetic  bool   `json:"synthetic_from_sms,omitempty"`
+}
+
+// onIngestedIncident is the last arrow of Phase 1's trigger → transmit → notify
+// → escalate. An SOS accepted by cmd/sos-ingest is projected into this binary's
+// store and handed to the escalation engine, which is the only thing in the
+// system that climbs L1 → L2 → L3.
+//
+// ★ It does NOT re-derive the ladder from the generated machine the way
+// sos-ingest.armTimers does. The engine mints its own rungs with its own action
+// names, which is the half of D-026 that action_routing_test.go measured: the
+// projector's NO_ACK has no case in escalation.execute and never had one.
+//
+// Verification is not re-checked here. sos-ingest already decided, and ADR-018
+// says a bad signature flags and proceeds — re-litigating that decision on this
+// side could only ever turn an accepted alarm into a dropped one.
+func (s *server) onIngestedIncident(m bus.Msg) error {
+	if m.Kind != bus.KindIncidentOpen {
+		return nil
+	}
+	var rec ingestRecord
+	if err := json.Unmarshal(m.Data, &rec); err != nil {
+		// Unparseable is not retryable. Five more attempts produce the same
+		// bytes and then park a poison record in front of every other family's
+		// incidents (bus.go: maxDeliveryAttempts, then dead-letter).
+		s.log.Error("ingest_record_unparseable", "incident", m.IncidentID, "err", err)
+		return nil
+	}
+	if rec.IncidentID == "" || rec.FamilyID == "" {
+		s.log.Error("ingest_record_unaddressed", "seq", m.Seq)
+		return nil
+	}
+
+	// Already fully projected? StartAll replays the whole retained stream at
+	// every boot, and F-04 coalescing can publish one incident more than once.
+	// engine.arm mints a fresh uuid per rung, so a second unguarded pass would
+	// lay down a SECOND complete ladder — the mirror image of D-025, where
+	// sos-ingest's derived ids made the same redelivery an overwrite instead.
+	//
+	// The guard is "has rungs", not "exists", for D-025's own reason: a pass
+	// that died between PutIncident and OnIncidentOpen leaves an incident that
+	// is recorded and unarmed, and treating that as done would strand exactly
+	// the incident whose projection already went wrong once. Every incident the
+	// engine has opened has at least the F-02 backstop.
+	if cur, exists := s.st.Incident(rec.IncidentID); exists {
+		if len(s.st.TimersForIncident(rec.IncidentID)) > 0 {
+			return nil
+		}
+		s.log.Warn("ingest_incident_rearming", "incident", cur.ID, "state", string(cur.State))
+		_, err := s.engine.OnIncidentOpen(context.Background(), cur)
+		return err
+	}
+
+	env, _, err := envelope.Parse([]byte(rec.Body))
+	if err != nil {
+		s.log.Error("ingest_envelope_unparseable", "incident", rec.IncidentID, "err", err)
+		return nil
+	}
+	if _, ok := s.st.Family(rec.FamilyID); !ok {
+		// The same call cmd/sos-ingest's projector makes on the same question,
+		// for the same reason: an unknown family has nobody to escalate to, and
+		// retrying forever would stall the stream. It is WARN and not silence
+		// because a family this binary has never heard of sending an SOS is an
+		// operator's problem, and this binary is the one that creates families.
+		s.log.Warn("ingest_incident_unknown_family", "family", rec.FamilyID, "incident", rec.IncidentID)
+		return nil
+	}
+
+	inc := store.Incident{
+		ID:               rec.IncidentID,
+		FamilyID:         rec.FamilyID,
+		SubjectMemberID:  env.MemberID,
+		State:            s.initialState(env.Trigger, env.Duress, false),
+		Trigger:          strings.ToUpper(env.Trigger),
+		PolicyVersion:    int(env.PolicyVersion),
+		Duress:           env.Duress,
+		IsDrill:          env.IsDrill,
+		CoarseH3R7:       env.CoarseCell,
+		OpenedAt:         env.ClientTsMs,
+		ServerReceivedAt: rec.At,
+		ConfidencePct:    int(env.ConfidencePct),
+		RiskContext:      int(env.RiskContext),
+		SealedPayload:    env.SealedPayload,
+		SyntheticFromSms: rec.Synthetic,
+		Flags:            int(rec.Flags),
+		Inc8:             inc8(rec.IncidentID),
+	}
+	if inc.OpenedAt == 0 {
+		inc.OpenedAt = rec.At
+	}
+	if inc.PolicyVersion == 0 {
+		inc.PolicyVersion = incident.SpecVersion
+	}
+	if err := s.st.PutIncident(inc); err != nil {
+		// Retryable, and it must be: a store that is briefly unavailable may not
+		// cost an incident its ladder.
+		s.log.Error("ingest_incident_persist_failed", "incident", inc.ID, "err", err)
+		return err
+	}
+	if _, err := s.engine.OnIncidentOpen(context.Background(), inc); err != nil {
+		s.log.Error("ingest_incident_arm_failed", "incident", inc.ID, "err", err)
+		return err
+	}
+	s.log.Info("ingest_incident_projected", "incident", inc.ID, "state", string(inc.State),
+		"trigger", inc.Trigger, "verified", rec.Verified, "transport", rec.Transport)
+	return nil
 }
 
 // ── Drill resolution (F-03) ──────────────────────────────────────────────────
@@ -453,9 +610,11 @@ type server struct {
 	engine  *escalation.Engine
 	notify  *notify.Notifier
 	consent *consent.Service
-	token   string
-	idem    *idemStore
-	ready   atomicBool
+	// incidents is the durable subscription on fam.*.incident (D-026).
+	incidents *bus.Sub
+	token     string
+	idem      *idemStore
+	ready     atomicBool
 }
 
 func (s *server) routes() http.Handler {
@@ -789,13 +948,7 @@ func (s *server) openIncident(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	state := incident.StatePending
-	if in.SkipCancelWindow || s.engine.CancelWindow(strings.ToUpper(in.Trigger)) == 0 {
-		state = incident.StateActiveL1
-	}
-	if in.Duress {
-		state = incident.StateActiveL1Silent
-	}
+	state := s.initialState(in.Trigger, in.Duress, in.SkipCancelWindow)
 
 	inc := store.Incident{
 		ID:               in.ID,
@@ -834,6 +987,24 @@ func (s *server) openIncident(w http.ResponseWriter, r *http.Request) {
 		"incident":   inc,
 		"serverTsMs": time.Now().UnixMilli(),
 	})
+}
+
+// initialState is the one rule for the state an incident opens in, shared by the
+// HTTP front door above and the bus leg below so that the two cannot drift.
+//
+// DURESS wins outright and skips the window: a silent alarm that sat in a cancel
+// window would be a cancel window the person standing over the victim can watch
+// tick down (§7.5). Otherwise the server arms its own copy of the device's
+// window — not because the device is untrusted, but because the device may be
+// underwater by the time it would have expired (defaultCancelWindowS, §2.5.6).
+func (s *server) initialState(trigger string, duress, skipCancelWindow bool) incident.State {
+	if duress {
+		return incident.StateActiveL1Silent
+	}
+	if skipCancelWindow || s.engine.CancelWindow(strings.ToUpper(trigger)) == 0 {
+		return incident.StateActiveL1
+	}
+	return incident.StatePending
 }
 
 func (s *server) getIncident(w http.ResponseWriter, r *http.Request) {
