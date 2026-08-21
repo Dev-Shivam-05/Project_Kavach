@@ -10,18 +10,24 @@
 # door. It exists because every other piece of evidence for D-027 is a Go test,
 # and a Go test cannot answer "do the two BINARIES talk".
 #
-# What a good run looks like (~35 s):
+# What a good run looks like (~40 s):
 #
+#   enrolment                5 × 201 through the control plane's API (RISK 18)
+#   sos-ingest store         family.json + member.json + device.json, learnt
+#                            over the bus — nothing writes into that directory
 #   ack                      {"incidentId":…,"verified":false,"flags":1}
 #   control-plane log        ingest_incident_projected   <- it heard the other process
 #   control-plane store      AUTO_QUIESCE + CANCEL_WINDOW armed
 #   after the cancel window  transition PENDING -> ACTIVE_L1
 #                            REPEAT_L1, SMS_TIER, ESCALATE_L2, ESCALATE_L3 armed
-#   cursors.json             BOTH durables recorded, neither erased by the other
+#   fanout                   tier=1 label=L1 devices=1   <- Amit; Priya is the
+#                            subject and tierDevices skips her own phone
+#   cursors                  BOTH durables recorded, neither erased by the other
 #
 # Two things it does NOT prove, and neither is a defect in this script:
-#   - Nobody's phone rings. `devices 0` in the fanout line is correct: no device
-#     is enrolled and KAVACH_FCM_CREDENTIALS is unset (RISK 14).
+#   - Nobody's phone rings. `devices 1` means addressed, not delivered:
+#     KAVACH_FCM_CREDENTIALS is unset and the enrolled key is 32 zero bytes
+#     (RISK 14).
 #   - The four-container stack still has never been brought up. This is two of
 #     the four binaries on one host.
 #
@@ -40,27 +46,14 @@ BUS="$DATA/bus"           # the seam
 mkdir -p "$BIN" "$DATA/store" "$CP" "$BUS"
 
 FAM=f-e2e
-MEM=m-e2e
-DEV=d-e2e
+MEM=m-e2e                 # Priya, adult — the SOS subject
+DEV=d-e2e                 # Priya's phone, the one the envelope comes from
+RES=r-e2e                 # Amit, guardian — the responder
+RDEV=rd-e2e               # Amit's phone, the one the fan-out must reach
 INC=11111111-2222-4333-8444-555555555555
-
-# ⛔ RISK item 18: no running binary can create a family, and BOTH incident
-# projectors drop an incident whose family row is missing. So the rows are
-# written straight into the store's JSON tables here — the same two rows
-# cmd/control-plane/main_test.go's newPlane seeds through the API. When item 18
-# is closed (POST /v1/family, or a seed command), delete this function and call
-# that instead: a fixture that outlives the gap it works around becomes the
-# reason nobody closes it.
-seed_store() {
-  cat > "$1/family.json" <<JSON
-[{"id":"$FAM","display_name":"E2E Family","created_at":1,"policy_version":1,"current_epoch":1,"sms_hmac_key":"","sms_ceiling":10}]
-JSON
-  cat > "$1/member.json" <<JSON
-[{"id":"$MEM","family_id":"$FAM","display_name":"Priya","ascii_short_name":"PRIYA","role":"adult","phone_e164":"+919812345678","created_at":1}]
-JSON
-}
-seed_store "$DATA/store"
-seed_store "$CP"
+# 32 zero bytes: a well-formed Ed25519 public key that verifies nothing. The
+# envelope below is unsigned on purpose (ADR-018), so no real key is needed.
+PUBKEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 echo "== building both binaries =="
 cd "$ROOT" || exit 1
@@ -79,6 +72,31 @@ trap 'kill $SOS_PID $CP_PID 2>/dev/null' EXIT
 sleep 4
 echo "sos-ingest  /healthz: $(curl -s -m 3 http://127.0.0.1:18081/healthz | head -c 90)"
 echo "control-plane /readyz: $(curl -s -m 3 http://127.0.0.1:18080/readyz | head -c 90)"
+
+echo
+echo "== enrolment, through the control plane's API (RISK item 18) =="
+# Until 21 Aug this was a shell function that wrote family.json and member.json
+# straight into BOTH store directories, because no running binary could create a
+# family. It is four requests now.
+#
+# ★ sos-ingest is not written to at all. It learns every row over the bus
+# (bus.KindEnrolmentUpsert on fam.<id>.enrolment) — the same seam D-027 made real
+# for incidents — and until it has the family row it answers an SOS with 404
+# unknown family, which is why the sleep below is not decoration.
+cp_post() { # cp_post <path> <json>
+  curl -s -m 5 -o /dev/null -w "%{http_code} $1\n" -X POST "http://127.0.0.1:18080$1" \
+    -H 'Content-Type: application/json' -H "X-Family-Id: $FAM" \
+    -H "Idempotency-Key: e2e-$(echo "$1$2" | cksum | cut -d' ' -f1)" --data-binary "$2"
+}
+cp_post /v1/family  "{\"id\":\"$FAM\",\"displayName\":\"E2E Family\"}"
+cp_post /v1/members "{\"id\":\"$MEM\",\"displayName\":\"Priya\",\"asciiShortName\":\"PRIYA\",\"role\":\"adult\",\"phoneE164\":\"+919812345678\"}"
+cp_post /v1/members "{\"id\":\"$RES\",\"displayName\":\"Amit\",\"asciiShortName\":\"AMIT\",\"role\":\"guardian\",\"phoneE164\":\"+919812345679\"}"
+cp_post /v1/devices "{\"id\":\"$DEV\",\"memberId\":\"$MEM\",\"platform\":\"android\",\"signingPubkey\":\"$PUBKEY\"}"
+cp_post /v1/devices "{\"id\":\"$RDEV\",\"memberId\":\"$RES\",\"platform\":\"android\",\"signingPubkey\":\"$PUBKEY\"}"
+
+echo "-- waiting 2s for the rows to cross the bus into sos-ingest --"
+sleep 2
+echo "sos-ingest store now holds: $(ls "$DATA/store" | xargs echo)"
 
 echo
 echo "== POST a real SOS to sos-ingest =="
