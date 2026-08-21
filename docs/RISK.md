@@ -14,12 +14,12 @@ indistinguishable from real ones to the person holding the phone. `config.ts:31`
 in prose (`★ THIS IS NOT DONE UNTIL eas.json SETS THEM ★`); the fix was never made.
 
 **2. Auth silently disables itself.**
-`control-plane/main.go:1411` — if `KAVACH_API_TOKEN` is empty, `s.auth` becomes a pass-through and
+`control-plane/main.go:1826` — if `KAVACH_API_TOKEN` is empty, `s.auth` becomes a pass-through and
 every `/v1/*` endpoint is open. No warning, no startup refusal. `KAVACH_RT_ALLOW_NO_TICKET=1` does
 the same for realtime-gw and is compiled into the production binary.
 
 **3. The deploy gate is overridable by a request header.**
-`control-plane/main.go:1340` accepts a plain `X-Kavach-Deploy-Override` header, not only the env
+`control-plane/main.go:1756` accepts a plain `X-Kavach-Deploy-Override` header, not only the env
 var. F-02 exists to stop a deploy during a live incident; anyone who can reach the endpoint bypasses it.
 
 **14. No build this repo can produce is capable of receiving a push.** *(added 11 Aug, W10-b.

@@ -67,7 +67,7 @@ and **nothing but a fail-open Ed25519 signature** on sos-ingest (ADR-018, delibe
 | codegen (4 files, never hand-edit) | [tools/smgen.mjs](../tools/smgen.mjs) |
 | wire contract (frozen field numbers) | [proto/incident.proto](../proto/incident.proto) |
 | backend routes | `backend/cmd/*/main.go` — one `routes()` block each |
-| backend auth | `control-plane/main.go:1410` · `realtime-gw/main.go:318` |
+| backend auth | `control-plane/main.go:1826` · `realtime-gw/main.go:318` |
 | durable server state | `backend/internal/store/store.go` (JSON files, 11 tables) |
 | screens | `mobile/app/` (expo-router, 22 routes) |
 | client state | `mobile/src/state/{store,nodeStore,enrolStore}.ts` |
@@ -134,11 +134,11 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 
 | File | Why |
 |---|---|
-| `cmd/control-plane/main.go` (1911) | biggest file, ~30 routes. Its **first tests** landed 20 Aug (`main_test.go`, 9): the front door's ladder, the `fam.*.incident` leg, redelivery, an unknown family, the subject filter, and a source-text contract check on `sos-ingest`'s wire shape. ~30 routes are still unpinned. `newServer` now holds the wiring so it is reachable from a test |
-| `internal/store/store.go` (1170) | the durable record for everything; two seams have tests — the **device** table (`store_test.go`, W10-a) and the **escalation_timer** row plus `FireTimer` (`timer_test.go`, W10-f). The other nine tables are unpinned. `PutTimer` is still a blind upsert with no state guard — `cancelTimers` depends on that, so D-025 was fixed in `sos-ingest.armTimers` instead |
+| `cmd/control-plane/main.go` (2083) | biggest file, ~32 routes. Its **first tests** landed 20 Aug (`main_test.go`, 9): the front door's ladder, the `fam.*.incident` leg, redelivery, an unknown family, the subject filter, and a source-text contract check on `sos-ingest`'s wire shape. `enrolment_test.go` added 8 more on 21 Aug for **`POST /v1/family` and `POST /v1/members`** — the routes that close RISK 18 — plus the auth/idempotency wiring under them. ~28 routes are still unpinned. `newServer` holds the wiring so it is reachable from a test |
+| `internal/store/store.go` (1190) | the durable record for everything; two seams have tests — the **device** table (`store_test.go`, W10-a) and the **escalation_timer** row plus `FireTimer` (`timer_test.go`, W10-f). The other nine tables are unpinned. `PutTimer` is still a blind upsert with no state guard — `cancelTimers` depends on that, so D-025 was fixed in `sos-ingest.armTimers` instead |
 | `internal/escalation/engine.go` (1140) | decides whether a human is woken. CLAIM/RELEASE (`claim_test.go`, W10-d), the ladder and the timer wheel (`ladder_test.go` + `timer_test.go`, W10-e) are covered. Still unpinned: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, the HLC. ★ **It now climbs for a real SOS across two binaries** — W10-h connected it to the front door over the bus (D-026), W10-i made the bus cross a process (D-027), and `ops/e2e-two-binaries.sh` watched `PENDING → ACTIVE_L1` with all four rungs armed. Nobody's phone rang: `devices 0`, RISK 14 |
 | `cmd/realtime-gw/main.go` (1034) | hand-written WebSocket framing + backpressure, **zero tests** |
-| `cmd/sos-ingest/main.go` | **970/1000 LOC** — CI Gate 4 fails past 1000 (ADR-002). Request path pinned by `main_test.go`, projector arming path by `projector_test.go` (W10-g). `armTimers` now skips a rung already on disk (D-025 closed) — **and the rungs it writes are dead weight**: since W10-h the engine arms its own ladder from the bus, so `armTimers` and `tierFor` are ~20 deletable lines in the one file with a ceiling (D-026 addendum) |
+| `cmd/sos-ingest/main.go` | **995/1000 LOC** — CI Gate 4 fails past 1000 (ADR-002), and W10-j's `projectEnrolment` spent 25 of the 30 that were left. Request path pinned by `main_test.go`, projector arming path by `projector_test.go` (W10-g), the enrolment projection by `enrolment_test.go` (W10-j, 4). `armTimers` skips a rung already on disk (D-025 closed) — **and the rungs it writes are dead weight**: since W10-h the engine arms its own ladder from the bus, so `armTimers` and `tierFor` are ~20 deletable lines in the one file with a ceiling (D-026 addendum), and they are the obvious place to buy headroom back |
 | `src/state/store.ts` (2606) | consumed by 21 files; owns bootstrap and the L0 floor |
 | `src/t0/triggerRouter.ts` (999) | cancel window, PIN compare, 500 ms budget — only the *generated* table is tested |
 
@@ -146,7 +146,10 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 tests**. Four packages left that list on 20 Aug: `cmd/sos-ingest` (W10-g, `projector_test.go` on
 top of an already-covered request path), then `cmd/control-plane` and `internal/bus` (W10-h, 9 and 3
 tests, their first), then `internal/wal` (W10-i, 19 — ten characterizations written before D-027
-changed a line of it, nine for the new multi-process mode). `store` and `notify` are partially covered (W10-a, W10-f) and `escalation` is
+changed a line of it, nine for the new multi-process mode). W10-j added 12 more across the two
+`cmd` packages for the enrolment path — 8 in `cmd/control-plane/enrolment_test.go`, 4 in
+`cmd/sos-ingest/enrolment_test.go` — three of them written as the pre-fix characterization and shown
+red before they were inverted. `store` and `notify` are partially covered (W10-a, W10-f) and `escalation` is
 the best-covered package in the backend (W10-d + W10-e + W10-g, 69 cases); everything those three do
 outside the device table, the escalation_timer row, the FCM fan-out path, and the ladder / wheel /
 ownership transitions is still unpinned.
