@@ -189,6 +189,19 @@ the HLC.
 > **Build order:** 6-A (theme+nav+rebuild+family+mock-removal — all verifiable here) ships first and
 > fully; 6-B (MapLibre map) and 6-C (Family Watch camera/mic) need a device build + keys + infra
 > (D-021) and ship after, design+ADR locked. RISK 20 governs the surveillance-safety constraints.
+>
+> **★ Progress (22 Aug) — 7 commits on `shivam`, each verified (tsc/tests/go-gates):**
+>   - ✅ **A2** teal brand accent tokens + contrast-test coverage (the light-fill trap pinned).
+>   - ✅ **E4** `family.max_members` column + first family column-parity test (red→green).
+>   - ✅ **E2/E3** family size cap — (cap+1)th member → 409 `KV-1012`; go/vet/staticcheck/archlint, LOC 995.
+>   - ✅ **B / 6.7** centre SOS button + 4-tab custom bar (`src/ui/TabBar.tsx`); Consent → Settings › Privacy.
+>   - ✅ **E5** deterministic family crest + "private space" identity on Home/Settings (5 unit tests).
+>   - ✅ **E1** create/name a family + set size 2-20 (`app/create-family.tsx` + `store.createFamily` + `api.createFamily`).
+>   - The **family feature is end-to-end** now (create/name/size → server cap → identity crest).
+>   **Remaining in 6-A:** **A4** the fuller visual rebuild (typecheck-verifiable, but VISUALS need a
+>   device — D-021), and **G** 100% mock removal — user decision 22 Aug: **do G LAST, after the app
+>   runs on a device/backend** so real data fills the screens it empties. **6-B/6-C** unchanged
+>   (native + keys + infra + device).
 
 **Then, after the Phase 6 pull-forward above, the no-JDK queue as it stood:**
 1. **Bring `ops/docker-compose.yml` up.** ★ *Now that the transport works and a stack can enrol
