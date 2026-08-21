@@ -31,6 +31,18 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 > up` has still never been run on this machine** — Docker's daemon is not running, so the evidence
 > is two binaries on one host, not four containers. `realtime-gw`'s socket frames and the canary's
 > chain now rest on a transport that works, but nobody has watched either.
+>
+> ★ **W10-j (21 Aug) closed RISK 18: a running stack can now enrol itself, and that fanout line
+> reads `devices=1`.** `POST /v1/family` and `POST /v1/members` exist (`POST /v1/devices` always
+> did), every default and check copied from `migrations/0001_init.sql`, and each write publishes
+> `bus.KindEnrolmentUpsert` on `fam.<id>.enrolment` so `sos-ingest` — which keeps its own store
+> directory — learns the row over the bus instead of from a file somebody else writes.
+> `ops/e2e-two-binaries.sh` seeds nothing by hand any more: five requests, and two seconds later
+> sos-ingest's untouched directory holds `family.json`, `member.json` and `device.json`. The
+> characterization found something item 18 understated — an SOS for an unknown family is not dropped
+> quietly by the projector, it is refused at the front door with **404 unknown family** (F-04). It
+> also found **RISK 19**: nothing subscribes to `ops.alert`, including the P0 SMS-budget alarm.
+> `devices=1` is still not a phone ringing (RISK 14), and `cmd/sos-ingest` is now **995/1000**.
 
 **Phase 1 · W10-c — present the alert on a locked screen.** The receive half landed on 11 Aug
 (W10-b): a data-only FCM message now wakes the bundle, is read through an allowlist, and is
@@ -90,10 +102,11 @@ that nobody has run `docker compose up`.
 > in this repo can compile, run, or check, with every familiar green tick still green (D-021).
 >
 > ⛔ **And none of the three is the highest-value work available.** D-027 was the top of the board
-> on 20 Aug and is closed. What replaces it needs no JDK either: **bring the compose stack up**, the
-> one claim in this repo that has never once been executed, and then **enrolment (RISK 18)**, which
-> is what stands between a working ladder and a phone that rings. See "the queue as it stands"
-> below. This list stays as-is because these three are the *named* phases, not because they are next.
+> on 20 Aug and is closed; **enrolment (RISK 18) was the next one and closed on 21 Aug** — the
+> fan-out line reads `devices=1` now. What replaces both needs no JDK either: **bring the compose
+> stack up**, the one claim in this repo that has never once been executed. See "the queue as it
+> stands" below. This list stays as-is because these three are the *named* phases, not because they
+> are next.
 
 1. **W10-c (1.37 + 1.28)** — full-screen intent and the `showWhenLocked` medical card. *(above)*
 2. **Hardware trigger (1.16, 1.17)** — `PowerButtonWatcher` (5× in 3 s) and `VolumePatternWatcher`
@@ -105,38 +118,41 @@ that nobody has run `docker compose up`.
    §4.12 names OEM battery managers as risk #3.
 
 **On a machine with no JDK, do these instead** — fully covered by the nine gates. **W10-e, W10-f,
-W10-g, W10-h and W10-i did the first five**: the escalation ladder and the timer wheel are pinned by 40
+W10-g, W10-h, W10-i and W10-j did the first six**: the escalation ladder and the timer wheel are pinned by 40
 tests (`escalation/ladder_test.go` 24, `escalation/timer_test.go` 16), which found and closed D-024;
 `store.FireTimer` by 15 more (`store/timer_test.go`), which found D-025; the projector's arming path
 by 4 (`sos-ingest/projector_test.go`), which proved D-025 and closed it; and the control plane by 9
 (`cmd/control-plane/main_test.go`, its first), which closed D-026's bus leg — while three more
 (`internal/bus/crossprocess_test.go`, also its first) found D-027 underneath it. **W10-i** then gave
 `internal/wal` its first 19 — ten characterizations written before a line of it changed, nine for
-the new shared mode — and rewrote the bus's three into seven, closing D-027. What is still
+the new shared mode — and rewrote the bus's three into seven, closing D-027. **W10-j** closed
+RISK 18 the same way: three characterizations first (`POST /v1/family` and `POST /v1/members` were
+405s; an enrolment record on the bus reached sos-ingest's store not at all), each shown red before
+the code that inverted it, ending in eleven more tests across the two binaries. What is still
 unpinned in `escalation`: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, and
 the HLC.
 
 **The queue as it stands, no JDK required:**
-1. **Bring `ops/docker-compose.yml` up.** ★ *Now that the transport works, this is the last
-   unexecuted claim in the repo.* Every statement about the four-container topology — including the
-   ones written on 20 Aug — is either a Go test or two binaries on one host
-   (`ops/e2e-two-binaries.sh`). Docker's daemon is not running on this machine, so step one is
-   starting Docker Desktop, and the run will immediately hit **RISK 18**: nothing creates a family,
-   both projectors drop an incident without one, and the e2e script only gets past it by writing
-   `family.json` by hand. Expect to find things; W10-i's whole lesson is that a plausible sentence
-   about a deployment is worth nothing next to one run of it. `realtime-gw`'s socket frames and the
-   canary's chain have never been observed either.
-2. **Enrolment: `POST /v1/family` and a device (RISK 18, §W4).** The ladder climbs and `devices 0`
-   is the last line of the fanout. This is the difference between an incident that escalates
-   correctly and a phone that rings — and it is a decision about the enrolment flow before it is a
-   route.
-3. **Take `armTimers` and `tierFor` out of `sos-ingest`.** D-026's leftover. The engine arms the
+1. **Bring `ops/docker-compose.yml` up.** ★ *Now that the transport works and a stack can enrol
+   itself, this is the last unexecuted claim in the repo.* Every statement about the four-container
+   topology — including the ones written on 20 and 21 Aug — is either a Go test or two binaries on
+   one host (`ops/e2e-two-binaries.sh`). Docker's daemon is not running on this machine, so step one
+   is starting Docker Desktop. **RISK 18 no longer stops it**: the stack can now be brought up empty
+   and enrolled over its own API, which is what `ops/e2e-two-binaries.sh` does in five requests.
+   Expect to find other things; W10-i's whole lesson is that a plausible sentence about a deployment
+   is worth nothing next to one run of it. `realtime-gw`'s socket frames and the canary's chain have
+   never been observed either.
+2. **Take `armTimers` and `tierFor` out of `sos-ingest`.** D-026's leftover, and it costs more than
+   it did: the binary is at **995/1000** since W10-j's enrolment projection. The engine arms the
    ladder from the bus now, so the rungs the projector derives are written into a directory nothing
    polls: dead weight in the one binary with a LOC ceiling. ~20 lines back into the ADR-002 budget.
    `projector_test.go` pins the behaviour being deleted, so the phase is really "decide what those
    four tests become" — not a delete.
-4. **The rest of `escalation`** — `Cancel`'s duress twin is a constant-time sibling of `verifyPin`
+3. **The rest of `escalation`** — `Cancel`'s duress twin is a constant-time sibling of `verifyPin`
    and deserves the same care.
+4. **Decide what `ops.alert` is for (RISK 19, found 21 Aug).** Four kinds are published to it,
+   including `ops.budget_breached` marked `severity: P0`, and nothing in the repository subscribes.
+   A page-worthy alarm that nobody receives is not an alarm.
 5. **Phase 2's `policyRepo.byVersion()`** — one repo method, and without it a six-month-old incident
    renders under today's rules while labelled with yesterday's version.
 

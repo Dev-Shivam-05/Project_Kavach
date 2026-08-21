@@ -123,9 +123,19 @@ bash ops/e2e-two-binaries.sh /tmp/kavach-e2e
 
 It runs `sos-ingest` and `control-plane` as two processes on one `KAVACH_BUS_DIR`
 and posts a real SOS; the control plane should log `ingest_incident_projected`
-and then climb `PENDING → ACTIVE_L1`. Read its header before believing it: it
-seeds a family by writing `family.json` directly, because nothing in the system
-can create one yet.
+and then climb `PENDING → ACTIVE_L1`, ending in `fanout … devices=1`.
+
+Since 21 Aug (W10-j) it seeds nothing by hand. The family, two members and two
+devices are created with five requests to the running control plane — `POST
+/v1/family`, `POST /v1/members`, `POST /v1/devices` — and `sos-ingest`'s data
+directory is never written to: it learns all five rows over the bus
+(`bus.KindEnrolmentUpsert` on `fam.<id>.enrolment`) and only then stops
+answering an SOS with `404 unknown family`. The two binaries keep **separate
+store directories** on the shared volume, which is deliberate: `store.persist`
+rewrites a whole JSON table, so pointing both at one directory reopens D-027 in
+the table that decides whether a signature verifies.
+
+`devices=1` is still not a phone ringing — no FCM credentials (RISK 14).
 
 The volume is **named**, not a bind mount, so `docker compose down` does not
 erase the incident log. An append-only log that a container teardown can delete
