@@ -879,6 +879,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // ── projector: everything that touches the store, off the request path ───────
 
 func (s *Server) project(m bus.Msg) error {
+	if m.Kind == bus.KindEnrolmentUpsert {
+		return s.projectEnrolment(m) // its payload is a row, not a record
+	}
 	if m.IncidentID != "" && s.projSeen.Has(m.IncidentID, m.HLC) {
 		return nil
 	}
@@ -903,6 +906,35 @@ func (s *Server) project(m bus.Msg) error {
 	}
 	s.projSeen.Seen(m.IncidentID, m.HLC)
 	s.m.Projected.Add(1)
+	return nil
+}
+
+// projectEnrolment applies one family, member or device row published by
+// cmd/control-plane (★ RISK item 18). Both binaries keep their own store
+// directory — two processes rewriting one whole JSON table is D-027 in the table
+// that decides whether a signature verifies — so the row crosses the bus and
+// this is where it lands. Returning the error is deliberate: the durable retries
+// it and then dead-letters it onto /healthz rather than losing it silently.
+func (s *Server) projectEnrolment(m bus.Msg) error {
+	var up store.EnrolmentUpsert
+	if json.Unmarshal(m.Data, &up) != nil {
+		return nil // unparseable cannot become parseable on retry
+	}
+	var err error
+	if up.Family != nil {
+		err = s.st.PutFamily(*up.Family)
+	}
+	if err == nil && up.Member != nil {
+		err = s.st.PutMember(*up.Member)
+	}
+	if err == nil && up.Device != nil {
+		err = s.st.PutDevice(*up.Device)
+	}
+	if err != nil {
+		s.m.ProjectFailures.Add(1)
+		return err
+	}
+	s.refreshCache() // a device key is worth nothing until the cache holds it
 	return nil
 }
 
