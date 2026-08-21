@@ -52,6 +52,12 @@ const (
 	KindIncidentOpen  = "incident_open"
 	KindIncidentEvent = "incident_event"
 	KindAccessLog     = "access_log"
+	// KindEnrolmentUpsert carries a family, member or device row from the binary
+	// that owns enrolment writes to the ones that only read them (RISK item 18).
+	// Every process keeps its own store directory — two processes rewriting one
+	// whole JSON table is the D-027 failure mode in the table that decides
+	// whether a signature verifies — so the row travels instead of the file.
+	KindEnrolmentUpsert = "enrolment_upsert"
 	// KindLocationPrecise is Class A′ and may only ever travel via
 	// PublishEphemeral. Publish rejects it.
 	KindLocationPrecise = "location_precise"

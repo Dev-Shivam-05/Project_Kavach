@@ -114,6 +114,24 @@ type Device struct {
 	RevokedAt       int64  `json:"revoked_at"`
 }
 
+// EnrolmentUpsert is one enrolment row on the wire (★ RISK item 18 · D-027).
+//
+// The binary that owns enrolment writes is cmd/control-plane; cmd/sos-ingest
+// gates every incident on a family row and verifies every envelope against a
+// device key, and it holds BOTH in its own separate store directory. This is
+// the shape that crosses the bus between them: whichever fields are set are
+// applied, the rest are left alone.
+//
+// It is a shared type rather than a struct each side rebuilds by hand, because
+// a field added on the writing side and forgotten on the reading side is
+// invisible — the writer's tests all still pass. See the notify.Fanout
+// neighbour-leg trap in CLAUDE.md for the version of this bug that shipped.
+type EnrolmentUpsert struct {
+	Family *Family `json:"family,omitempty"`
+	Member *Member `json:"member,omitempty"`
+	Device *Device `json:"device,omitempty"`
+}
+
 type Incident struct {
 	ID               string   `json:"id"`
 	FamilyID         string   `json:"family_id"`

@@ -66,6 +66,11 @@ const (
 	// it was: the cursor is persisted and StartAll replays what it missed.
 	subjFamIncident  = "fam.*.incident"
 	incidentsDurable = "control-plane.incidents"
+
+	// subjEnrolmentLeaf carries family, member and device rows the other way:
+	// this binary owns enrolment writes, and cmd/sos-ingest holds its own store
+	// directory that nothing else may write into (RISK item 18, D-027).
+	subjEnrolmentLeaf = "enrolment"
 )
 
 func main() {
@@ -625,6 +630,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("OPTIONS /", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
 	mux.HandleFunc("GET /v1/family", s.auth(s.getFamily))
+	mux.HandleFunc("POST /v1/family", s.auth(s.idempotent(s.createFamily)))
+	mux.HandleFunc("POST /v1/members", s.auth(s.idempotent(s.createMember)))
 
 	mux.HandleFunc("GET /v1/incidents", s.auth(s.listIncidents))
 	mux.HandleFunc("POST /v1/incidents", s.auth(s.idempotent(s.openIncident)))
@@ -726,6 +733,167 @@ func (s *server) getFamily(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ── enrolment: family and member ─────────────────────────────────────────────
+//
+// ★ RISK item 18 · §W4 · F-18 · P-033 · ADR-006 · docs/spec/w10-j-enrolment.md
+//
+// Until W10-j, store.PutFamily and store.PutMember had zero non-test call sites.
+// A family existed only inside a test's t.TempDir(), and BOTH incident
+// projectors drop an incident whose family row is missing — silently, at WARN,
+// which on a freshly deployed stack is every incident there will ever be.
+//
+// Every default below is migrations/0001_init.sql's default. Nothing runs that
+// file (ADR-006), which is exactly why it has to stay the authority: the day
+// something does, these rows must already match it.
+
+type familyReq struct {
+	ID            string `json:"id"`
+	DisplayName   string `json:"displayName"`
+	SMSHMACKeyB64 string `json:"smsHmacKey"`
+	SMSCeiling    int    `json:"smsCeiling"`
+	PolicyVersion int    `json:"policyVersion"`
+}
+
+func (s *server) createFamily(w http.ResponseWriter, r *http.Request) {
+	var in familyReq
+	if !readJSON(w, r, &in) {
+		return
+	}
+	name := strings.TrimSpace(in.DisplayName)
+	if name == "" {
+		problem(w, http.StatusBadRequest, "KV-1001", "displayName is required", "")
+		return
+	}
+	f := store.Family{
+		ID: in.ID, DisplayName: name, SMSHMACKeyB64: in.SMSHMACKeyB64,
+		SMSCeiling: in.SMSCeiling, PolicyVersion: in.PolicyVersion,
+		CreatedAt: time.Now().UnixMilli(),
+	}
+	if f.ID == "" {
+		f.ID = uuidv7()
+	}
+	if f.SMSCeiling == 0 {
+		f.SMSCeiling = 2000 // family.sms_ceiling DEFAULT 2000 (F-04)
+	}
+	if f.PolicyVersion == 0 {
+		f.PolicyVersion = 1 // family.policy_version DEFAULT 1
+	}
+	if err := s.st.PutFamily(f); err != nil {
+		problem(w, http.StatusServiceUnavailable, "KV-5001", err.Error(), f.ID)
+		return
+	}
+	s.publishEnrolment(f.ID, store.EnrolmentUpsert{Family: &f})
+	writeJSON(w, http.StatusCreated, f)
+}
+
+type memberReq struct {
+	ID                  string `json:"id"`
+	DisplayName         string `json:"displayName"`
+	ASCIIShortName      string `json:"asciiShortName"`
+	Role                string `json:"role"`
+	Locale              string `json:"locale"`
+	DOB                 string `json:"dob"`
+	PhoneE164           string `json:"phoneE164"`
+	IdentityPubkey      string `json:"identityPubkey"`
+	MembershipExpiresAt int64  `json:"membershipExpiresAt"`
+	AvatarColor         string `json:"avatarColor"`
+}
+
+// memberRoles is the member_role enum, character for character.
+var memberRoles = map[string]bool{
+	"guardian": true, "adult": true, "minor": true, "elder": true,
+	"relative": true, "neighbour": true, "staff": true, "guest": true,
+}
+
+// validShortName is the migration's CHECK (ascii_short_name ~ '^[A-Za-z]{1,8}$')
+// and P-033 underneath it: one non-ASCII character flips the whole SMS to UCS-2
+// and cuts the payload from 160 characters to 70, which does not fit. Written
+// out rather than compiled as a regexp because that is the only regexp this
+// binary would own.
+func validShortName(v string) bool {
+	if v == "" || len(v) > 8 {
+		return false
+	}
+	for _, c := range v {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *server) createMember(w http.ResponseWriter, r *http.Request) {
+	var in memberReq
+	if !readJSON(w, r, &in) {
+		return
+	}
+	name := strings.TrimSpace(in.DisplayName)
+	short := strings.TrimSpace(in.ASCIIShortName)
+	role := strings.ToLower(strings.TrimSpace(in.Role))
+	if name == "" || !validShortName(short) || !memberRoles[role] {
+		problem(w, http.StatusBadRequest, "KV-1001",
+			"displayName, an asciiShortName of 1-8 ASCII letters and a member_role are required", short)
+		return
+	}
+	m := store.Member{
+		ID: in.ID, FamilyID: s.familyID(r), DisplayName: name,
+		ASCIIShortName: short, Role: role, Locale: in.Locale, DOB: in.DOB,
+		PhoneE164: in.PhoneE164, IdentityPubkey: in.IdentityPubkey,
+		MembershipExpiresAt: in.MembershipExpiresAt, AvatarColor: in.AvatarColor,
+		CreatedAt: time.Now().UnixMilli(),
+	}
+	if m.ID == "" {
+		m.ID = uuidv7()
+	}
+	if m.Locale == "" {
+		m.Locale = "en" // member.locale DEFAULT 'en'
+	}
+	// ★ F-18. Two members called PRIYA produce two identical SMS alerts, and the
+	// person reading one at 2 a.m. cannot tell which of them is in trouble.
+	// Case-insensitive, because PRIYA and Priya are the same name to a human
+	// under stress — the migration's unique index says lower(ascii_short_name).
+	for _, other := range s.st.Members(m.FamilyID) {
+		if other.ID != m.ID && strings.EqualFold(other.ASCIIShortName, short) {
+			problem(w, http.StatusConflict, "KV-1008",
+				"another member of this family already uses that short name", short)
+			return
+		}
+	}
+	if err := s.st.PutMember(m); err != nil {
+		problem(w, http.StatusBadRequest, "KV-1006", err.Error(), m.FamilyID)
+		return
+	}
+	s.publishEnrolment(m.FamilyID, store.EnrolmentUpsert{Member: &m})
+	writeJSON(w, http.StatusCreated, m)
+}
+
+// publishEnrolment hands one enrolment row to every other process on the bus.
+//
+// cmd/sos-ingest gates every incident on a family row and verifies every
+// envelope against a device key, and it holds both in its OWN store directory —
+// which this process must never write into: two processes rewriting one whole
+// JSON table is the D-027 failure mode, in the table that decides whether a
+// signature verifies. So the row travels, never the file.
+//
+// Best effort by design. The row is already persisted here; a family that does
+// not reach sos-ingest costs verification and a projection, not this request.
+func (s *server) publishEnrolment(familyID string, up store.EnrolmentUpsert) {
+	if familyID == "" {
+		return
+	}
+	blob, err := json.Marshal(up)
+	if err != nil {
+		s.log.Error("enrolment_marshal_failed", "family", familyID, "err", err)
+		return
+	}
+	if _, err := s.bus.PublishMsg(bus.Msg{
+		Subject: bus.Subject(familyID, subjEnrolmentLeaf), Kind: bus.KindEnrolmentUpsert,
+		FamilyID: familyID, At: time.Now().UnixMilli(), Data: blob,
+	}); err != nil {
+		s.log.Error("enrolment_publish_failed", "family", familyID, "err", err)
+	}
+}
+
 func (s *server) listDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"devices": s.st.Devices(s.familyID(r))})
 }
@@ -780,6 +948,10 @@ func (s *server) enrolDevice(w http.ResponseWriter, r *http.Request) {
 	s.publishOps("device.key.changed", d.FamilyID, map[string]any{
 		"deviceId": d.ID, "memberId": d.MemberID, "signingPubkey": d.SigningPubkey,
 	})
+	// ⛔ The line above goes to ops.alert, which NOTHING in this repository
+	// subscribes to — so it has never refreshed anybody's cache. The line below
+	// is the one that reaches cmd/sos-ingest (RISK item 18, W10-j).
+	s.publishEnrolment(d.FamilyID, store.EnrolmentUpsert{Device: &d})
 	writeJSON(w, http.StatusCreated, d)
 }
 
