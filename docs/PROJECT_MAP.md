@@ -16,13 +16,13 @@ Status board: [PHASES.md](PHASES.md) · Risks: [RISK.md](RISK.md) · History: [h
 | run stack | `docker compose -f ops/docker-compose.yml up --build -d` | root |
 | release APK | `npx eas build --platform android --profile preview` | `mobile/` |
 
-**Verified green 2026-08-20 (after W10-g):** `go build` ✅ · `go vet ./...` ✅ · `staticcheck ./...`
-✅ · `go test ./...` ✅ (`internal/escalation` **69 cases**, `internal/store` **21**,
-`cmd/sos-ingest` **27**) · `archlint` ✅ (14 packages, **47** edges — +5 over W10-f, exactly the
-internal imports in the two new test files (4 + 1): archlint counts an edge per file per import and
-reads `_test.go` files too) · `tsc --noEmit` ✅ · `npm test` **165/165** ✅ · `gen:check` in
-sync (14 states · 20 events · 35 transitions · 16 fixtures) · `schema-lint` ✅ · `protolint` ✅ ·
-`logx` deny-list ✅ · `TestLOCBudget` **970/1000**.
+**Verified green 2026-08-21 (after W10-j):** `go build` ✅ · `go vet ./...` ✅ · `staticcheck ./...`
+✅ · `go test ./...` ✅ (`internal/escalation` **69 cases**, `internal/notify` **28**,
+`cmd/sos-ingest` **31**, `cmd/control-plane` **26**, `internal/store` **21**, `internal/wal` **19**,
+`internal/bus` **10**) · `archlint` ✅ (14 packages, **59** edges) · `tsc --noEmit` ✅ ·
+`npm test` **165/165** ✅ · `gen:check` in sync (14 states · 20 events · 35 transitions ·
+16 fixtures) · `schema-lint` ✅ · `protolint` ✅ · `logx` deny-list ✅ ·
+`TestLOCBudget` **995/1000**.
 `go test -race` needs `CGO_ENABLED=1` **and a C compiler**; there is no gcc on this machine, so the
 race gate runs in CI only.
 
@@ -134,7 +134,7 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 
 | File | Why |
 |---|---|
-| `cmd/control-plane/main.go` (2083) | biggest file, ~32 routes. Its **first tests** landed 20 Aug (`main_test.go`, 9): the front door's ladder, the `fam.*.incident` leg, redelivery, an unknown family, the subject filter, and a source-text contract check on `sos-ingest`'s wire shape. `enrolment_test.go` added 8 more on 21 Aug for **`POST /v1/family` and `POST /v1/members`** — the routes that close RISK 18 — plus the auth/idempotency wiring under them. ~28 routes are still unpinned. `newServer` holds the wiring so it is reachable from a test |
+| `cmd/control-plane/main.go` (2083) | biggest file, ~32 routes. Its **first tests** landed 20 Aug (`main_test.go`, 9): the front door's ladder, the `fam.*.incident` leg, redelivery, an unknown family, the subject filter, and a source-text contract check on `sos-ingest`'s wire shape. `enrolment_test.go` added 9 more on 21 Aug for **`POST /v1/family` and `POST /v1/members`** — the routes that close RISK 18 — plus the auth/idempotency wiring under them. ~28 routes are still unpinned. `newServer` holds the wiring so it is reachable from a test |
 | `internal/store/store.go` (1190) | the durable record for everything; two seams have tests — the **device** table (`store_test.go`, W10-a) and the **escalation_timer** row plus `FireTimer` (`timer_test.go`, W10-f). The other nine tables are unpinned. `PutTimer` is still a blind upsert with no state guard — `cancelTimers` depends on that, so D-025 was fixed in `sos-ingest.armTimers` instead |
 | `internal/escalation/engine.go` (1140) | decides whether a human is woken. CLAIM/RELEASE (`claim_test.go`, W10-d), the ladder and the timer wheel (`ladder_test.go` + `timer_test.go`, W10-e) are covered. Still unpinned: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, the HLC. ★ **It now climbs for a real SOS across two binaries** — W10-h connected it to the front door over the bus (D-026), W10-i made the bus cross a process (D-027), and `ops/e2e-two-binaries.sh` watched `PENDING → ACTIVE_L1` with all four rungs armed. Nobody's phone rang: `devices 0`, RISK 14 |
 | `cmd/realtime-gw/main.go` (1034) | hand-written WebSocket framing + backpressure, **zero tests** |
@@ -146,8 +146,8 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 tests**. Four packages left that list on 20 Aug: `cmd/sos-ingest` (W10-g, `projector_test.go` on
 top of an already-covered request path), then `cmd/control-plane` and `internal/bus` (W10-h, 9 and 3
 tests, their first), then `internal/wal` (W10-i, 19 — ten characterizations written before D-027
-changed a line of it, nine for the new multi-process mode). W10-j added 12 more across the two
-`cmd` packages for the enrolment path — 8 in `cmd/control-plane/enrolment_test.go`, 4 in
+changed a line of it, nine for the new multi-process mode). W10-j added 13 more across the two
+`cmd` packages for the enrolment path — 9 in `cmd/control-plane/enrolment_test.go`, 4 in
 `cmd/sos-ingest/enrolment_test.go` — three of them written as the pre-fix characterization and shown
 red before they were inverted. `store` and `notify` are partially covered (W10-a, W10-f) and `escalation` is
 the best-covered package in the backend (W10-d + W10-e + W10-g, 69 cases); everything those three do
