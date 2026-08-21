@@ -680,6 +680,17 @@ export default function SettingsScreen(): ReactElement {
 
         {/* ── The rest of the app ────────────────────────────────────────────── */}
         <Section title="More">
+          {/*
+            Consent left the tab bar in the Phase-6 nav (Spec B1 / 6.7). It is the
+            anti-stalkerware surface - every grant, every access-log row, the
+            autonomy ramp - so it leads the "More" list rather than trailing it.
+          */}
+          <ListItem
+            glyph="⊘"
+            title={t('tab.consent')}
+            subtitle="Who can see your location, vitals, camera and documents - and every time any of it was read."
+            onPress={() => router.push('/consent')}
+          />
           <ListItem
             glyph="✚"
             title={t('diag.title')}

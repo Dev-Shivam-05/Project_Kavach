@@ -153,6 +153,10 @@ export default function RootLayout() {
               once each screen adds `insets.top` it joins the block above. */}
           <Stack.Screen name="journeys" options={{ headerShown: true, title: 'Journeys' }} />
           <Stack.Screen name="drills" options={{ headerShown: true, title: 'Drills' }} />
+          {/* Consent left the tab bar in the Phase-6 nav (Spec B1 / 6.7). It is
+              reached from Settings > Privacy now; a native header gives the way
+              back a tab never needed. */}
+          <Stack.Screen name="consent" options={{ headerShown: true, title: t('tab.consent') }} />
 
           {/* Enrolment owns the whole screen and cannot be escaped sideways —
               a half-enrolled device has no keys and cannot raise an alarm. */}

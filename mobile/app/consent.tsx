@@ -45,11 +45,11 @@ import type {
   ConsentScope,
   Member,
   UUID,
-} from '../../src/core/types';
-import { relativeTime, t } from '../../src/i18n';
-import { useKavach } from '../../src/state/store';
-import { Button, Card, EmptyState, ListItem, Pill, Section } from '../../src/ui/components';
-import { colors, font, leading, radius, space, tracking, weight } from '../../src/ui/theme';
+} from '../src/core/types';
+import { relativeTime, t } from '../src/i18n';
+import { useKavach } from '../src/state/store';
+import { Button, Card, EmptyState, ListItem, Pill, Section } from '../src/ui/components';
+import { colors, font, leading, radius, space, tracking, weight } from '../src/ui/theme';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;

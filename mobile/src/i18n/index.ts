@@ -62,6 +62,8 @@ const en = {
   'tab.incidents': 'Incidents',
   'tab.consent': 'Privacy',
   'tab.settings': 'Settings',
+  'tab.sos': 'SOS',
+  'tab.sosHint': 'Opens the emergency screen',
 
   // Home
   'home.everyoneOk': 'Everyone is okay',
@@ -149,6 +151,8 @@ const hi: Partial<Record<StringKey, string>> = {
   'tab.incidents': 'घटनाएँ',
   'tab.consent': 'निजता',
   'tab.settings': 'सेटिंग्स',
+  'tab.sos': 'SOS',
+  'tab.sosHint': 'आपातकालीन स्क्रीन खोलता है',
   'home.everyoneOk': 'सब सुरक्षित हैं',
   'home.activeIncident': 'आपातकाल',
   'home.checkIn': 'मैं सुरक्षित हूँ',
@@ -186,6 +190,8 @@ const gu: Partial<Record<StringKey, string>> = {
   'tab.incidents': 'ઘટનાઓ',
   'tab.consent': 'ગોપનીયતા',
   'tab.settings': 'સેટિંગ્સ',
+  'tab.sos': 'SOS',
+  'tab.sosHint': 'કટોકટી સ્ક્રીન ખોલે છે',
   'home.everyoneOk': 'બધા સુરક્ષિત છે',
   'home.activeIncident': 'કટોકટી',
   'home.checkIn': 'હું સુરક્ષિત છું',

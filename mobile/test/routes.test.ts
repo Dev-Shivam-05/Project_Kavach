@@ -58,7 +58,10 @@ function routeFor(file: string): string {
  *   · dynamic segments are pushed with a template literal
  *   · onboarding is the redirect target of the entry route
  */
-const NAVIGATOR_REACHED = new Set(['/', '/home', '/map', '/incidents', '/consent', '/settings']);
+// /consent left the tab bar in the Phase-6 nav (Spec B1 / 6.7); it is now a
+// root-Stack route reached from Settings > Privacy, so it must prove that link
+// like any other pushed screen rather than being whitelisted as a tab.
+const NAVIGATOR_REACHED = new Set(['/', '/home', '/map', '/incidents', '/settings']);
 
 test('★ every screen has a way in', () => {
   const orphans: string[] = [];
