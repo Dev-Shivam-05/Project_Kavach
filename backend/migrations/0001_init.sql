@@ -46,6 +46,10 @@ CREATE TABLE family (
     -- Per-family copy of the notify_budget ceiling, read on the SMS path so a
     -- fan-out never waits on a join (F-04).
     sms_ceiling     int  NOT NULL DEFAULT 2000,
+    -- phase6-pull-forward E2/E3: the family size cap. Members past this are
+    -- refused by cmd/control-plane with 409 KV-1012 (the live guard; this CHECK
+    -- is spec-only, nothing runs the migration - ADR-006/D-003).
+    max_members     int  NOT NULL DEFAULT 6 CHECK (max_members BETWEEN 2 AND 20),
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 

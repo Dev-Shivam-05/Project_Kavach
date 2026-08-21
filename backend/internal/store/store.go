@@ -61,6 +61,10 @@ type Family struct {
 	// family's app".
 	SMSHMACKeyB64 string `json:"sms_hmac_key"`
 	SMSCeiling    int    `json:"sms_ceiling"`
+	// MaxMembers is the family size cap (phase6-pull-forward E2). Enforced on the
+	// writer in cmd/control-plane (E3), not here - the store stays a dumb
+	// persister, as it is for every other CHECK the migration declares.
+	MaxMembers int `json:"max_members"`
 }
 
 type Member struct {

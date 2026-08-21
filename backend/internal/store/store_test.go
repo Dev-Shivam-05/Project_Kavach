@@ -131,6 +131,51 @@ func TestDeviceJSONKeysMatchTheMigration(t *testing.T) {
 	}
 }
 
+// TestFamilyJSONKeysMatchTheMigration pins every persisted key of Family against
+// the family columns in migrations/0001_init.sql. Until phase6-pull-forward there
+// was NO such test for family - only device (above) and escalation_timer had one
+// (RISK.md section 8), so a family column rename was caught nowhere. This closes
+// that gap and, per the danger-zone rule, is the reviewable place a new family
+// column (E4 max_members) is expected to fail first.
+func TestFamilyJSONKeysMatchTheMigration(t *testing.T) {
+	want := []string{
+		"created_at",
+		"current_epoch",
+		"display_name",
+		"id",
+		"max_members",
+		"policy_version",
+		// family.mls_group_id is in the migration too and deliberately absent here:
+		// store.Family is a subset (the server never holds the MLS group secret),
+		// exactly as Device omits push_token_apns/voip.
+		"sms_ceiling",
+		"sms_hmac_key",
+	}
+
+	raw, err := json.Marshal(Family{ID: "fam-1"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := make([]string, 0, len(decoded))
+	for k := range decoded {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+
+	if len(got) != len(want) {
+		t.Fatalf("family has %d persisted keys, expected %d; every key must be a column in migrations/0001_init.sql (RISK.md section 8). got=%v want=%v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("persisted key %d is %q, expected %q. got=%v want=%v", i, got[i], want[i], got, want)
+		}
+	}
+}
+
 func TestPutDeviceSurvivesAReopen(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)
