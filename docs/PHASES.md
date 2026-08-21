@@ -175,10 +175,20 @@ the HLC.
 >    "truly offline video" is off the table — no app carries video across a city with no network. It
 >    becomes WebRTC over the internet with a TURN relay ("works on bad networks"), not Wi-Fi Direct.
 >
-> **Next action, before any code: a `spec-lock` pass** — theme tokens, tab-bar geometry + the centre
-> button, map provider per layer, camera/mic session UX + the live indicator, exact colours / sizes /
-> timings — proposed as a numbered table, then one word to start. `6.1` (delete mock data) is NOT in
-> this pull-forward; it stays sequenced after push lands so it does not empty every screen.
+> **SPEC LOCKED + APPROVED 21 Aug** → [spec/phase6-pull-forward.md](spec/phase6-pull-forward.md).
+> Three additions folded in on approval:
+>   - **Family creation + a size cap** (E) — create a family, set `max_members` (2–20, default 6),
+>     and the (cap+1)th enrolment is refused server-side with 409 `KV-1012 family_full`. New column
+>     in `0001_init.sql` + `store.Family` + store_test (ADR-006/D-003).
+>   - **A family "private space" identity** (E5) — `display_name` + deterministic crest + Family ID +
+>     a shield line, so it is unmistakable this space is one family's and private.
+>   - **100% mock-data removal now IN scope** (G) — user override of the earlier "sequence after
+>     push" call. `demo.ts` deleted, `demoMode` default → false. **Consequence, flagged and
+>     accepted:** every screen empties unless the real-data path lands with it, so G is the LAST step
+>     of 6-A and rides the family-create flow (E). Honest empty states replace fabricated ones.
+> **Build order:** 6-A (theme+nav+rebuild+family+mock-removal — all verifiable here) ships first and
+> fully; 6-B (MapLibre map) and 6-C (Family Watch camera/mic) need a device build + keys + infra
+> (D-021) and ship after, design+ADR locked. RISK 20 governs the surveillance-safety constraints.
 
 **Then, after the Phase 6 pull-forward above, the no-JDK queue as it stood:**
 1. **Bring `ops/docker-compose.yml` up.** ★ *Now that the transport works and a stack can enrol

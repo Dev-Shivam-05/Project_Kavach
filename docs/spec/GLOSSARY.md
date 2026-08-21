@@ -68,6 +68,25 @@ binary's store directory; see D-028 and [w10-j-enrolment.md](w10-j-enrolment.md)
 indistinguishable by packet size and timing (I-7) — hence fixed 1024-byte envelope padding and a
 constant-time compare over **both** PINs on every attempt.
 
+**Family size cap (`max_members`).** A `family`-table column (added 21 Aug, W-P6). Range 2–20,
+default 6, set at family creation. `cmd/control-plane` counts live members and refuses the
+(`max_members`+1)th enrolment with 409 `KV-1012 family_full`. Added to `0001_init.sql`, `store.Family`
+and store_test in one commit (ADR-006/D-003). See [phase6-pull-forward.md](phase6-pull-forward.md) E.
+
+**Family identity / "private space".** The visible surface that marks the app as one family's private
+space: `display_name` + a deterministic crest (colour+monogram from `family.id`) + the Family ID + a
+shield line. The Family ID is discovery/identity only — the SAS fingerprint still admits a device
+(E5/E6). Not a security boundary.
+
+**Brand accent (teal).** `accent #2DD4BF` and friends (`accentText`/`accentSoft`/`accentBorder`),
+added in the Phase-6 rebuild. The one non-semantic brand colour; used for nav/active/primary-safe
+actions only, never on an SOS or an active incident, so alarm red stays the loudest colour (A2/A3).
+
+**Family Watch.** The 6.4 camera+mic feature (1↔1 live view, no recording). Auto-allow within a
+family BUT every session carries a mandatory non-suppressible on-device indicator + a Class-A
+access-log row, and the viewed person always holds a kill the viewer cannot overrule (D3–D5). The
+inversion of `camera-view.tsx`'s kill-switch and ADR-017; needs a superseding ADR.
+
 ## Where the words are defined in full
 
 PRD Part 22 is the product glossary. [docs/01-Analysis-and-Core-Requirements.md](../01-Analysis-and-Core-Requirements.md)
