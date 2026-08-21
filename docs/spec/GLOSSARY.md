@@ -57,6 +57,13 @@ from the `/internal/active-incidents` deploy gate (F-02, F-03).
 **inc8 / sig8.** Eight-character truncations used in the 160-char ASCII SMS payload (ADR-020) —
 `inc8` indexes back to an incident id via UUIDv5 synthesis, `sig8` is the inbound HMAC (F-09).
 
+**Enrolment (server side).** A family, its members and their devices, created only through
+`cmd/control-plane` — `POST /v1/family`, `POST /v1/members`, `POST /v1/devices`. Each successful
+write publishes an **`enrolment_upsert`** record (`bus.KindEnrolmentUpsert`, payload
+`store.EnrolmentUpsert`) on `fam.<id>.enrolment`, which is how `cmd/sos-ingest` — a separate process
+with its own store directory — learns the rows it gates incidents on. Never write into the other
+binary's store directory; see D-028 and [w10-j-enrolment.md](w10-j-enrolment.md).
+
 **Duress.** One bit inside the ciphertext (F-01). Duress and normal-cancel must be
 indistinguishable by packet size and timing (I-7) — hence fixed 1024-byte envelope padding and a
 constant-time compare over **both** PINs on every attempt.
