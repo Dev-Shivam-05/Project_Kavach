@@ -57,6 +57,7 @@ import {
   Button,
   Card,
   EmptyState,
+  FamilyIdentity,
   ListItem,
   MemberRow,
   Pill,
@@ -152,6 +153,7 @@ export default function HomeScreen(): React.ReactElement {
 
   // One selector per field: zustand v5 compares by reference, and a selector that
   // builds an object would re-render this screen on every store write.
+  const familyId = useKavach((s) => s.familyId);
   const bootstrap = useKavach((s) => s.bootstrap);
   const ready = useKavach((s) => s.ready);
   const me = useKavach((s) => s.me);
@@ -451,6 +453,15 @@ export default function HomeScreen(): React.ReactElement {
             {headline}
           </Text>
           <Text style={styles.screenSubtitle}>{signedInAs}</Text>
+        </View>
+
+        {/* ── whose space this is (Spec E5) ─────────────────────────────────────
+            A quiet, persistent reminder that this screen belongs to one family and
+            is private to it (P-008). It sits below the status headline so it never
+            competes with F-02, and the crest is derived on-device from familyId —
+            nothing about it is fetched or stored. */}
+        <View style={styles.familyIdentity}>
+          <FamilyIdentity familyId={familyId} compact />
         </View>
 
         {/* ── degradation strip: which rung of §4.4 we are actually on ──────── */}
@@ -1004,6 +1015,7 @@ function JourneySheet({ visible, onStart, onClose, bottomInset }: JourneySheetPr
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const styles = StyleSheet.create({
+  familyIdentity: { marginTop: space.lg },
   screen: { flex: 1, backgroundColor: colors.bg },
   scroll: { flex: 1 },
   content: {

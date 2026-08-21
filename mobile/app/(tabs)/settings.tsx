@@ -57,6 +57,7 @@ import { setPins } from '../../src/t0/triggerRouter';
 import {
   Button,
   Card,
+  FamilyIdentity,
   ListItem,
   MemberAvatar,
   Pill,
@@ -420,6 +421,13 @@ export default function SettingsScreen(): ReactElement {
         >
           <Text style={styles.screenTitle}>{t('tab.settings')}</Text>
           <Text style={styles.screenSubtitle}>{subtitle}</Text>
+        </View>
+
+        {/* ── This family's private space (Spec E5) ──────────────────────────
+            Above Profile on purpose: the family precedes "me". Settings already
+            owns identity, and this card has no status headline to fight with. */}
+        <View style={styles.familyIdentity}>
+          <FamilyIdentity familyId={familyId} />
         </View>
 
         {/* ── Profile ────────────────────────────────────────────────────────── */}
@@ -832,6 +840,7 @@ export default function SettingsScreen(): ReactElement {
 }
 
 const styles = StyleSheet.create({
+  familyIdentity: { marginBottom: space.lg },
   screen: { flex: 1, backgroundColor: colors.bg },
   content: {
     paddingHorizontal: space.lg,

@@ -30,6 +30,7 @@ export * from './EmptyState';
 // ── emergency & family surfaces ───────────────────────────────────────────────
 export * from './CountdownRing';
 export * from './MemberAvatar';
+export * from './FamilyIdentity';
 export * from './MemberRow';
 export * from './BigCoordinates';
 export * from './Call112Button';

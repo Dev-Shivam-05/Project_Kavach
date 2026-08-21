@@ -108,6 +108,22 @@ export const colors = {
   transparent: 'transparent',
 } as const;
 
+/**
+ * ★ Spec E5 — family crest hues. A family has no name of its own (only members
+ * do), so its identity is a stable colour+monogram derived from `familyId`. These
+ * are the fills a crest hashes into; `crestFor` picks the monogram colour by
+ * contrast so it clears §6.4 on whichever hue it lands on. Distinct from `risk`
+ * (danger) and from the alarm — a crest is identity, never status.
+ */
+export const crestHues = [
+  '#3B5BDB',
+  '#1F7A5A',
+  '#B5462B',
+  '#7048E8',
+  '#0E7490',
+  '#B02A6F',
+] as const;
+
 // ── Spacing: a strict 4 pt grid ───────────────────────────────────────────────
 // Every gap in the product is one of these. Arbitrary numbers are how a layout
 // stops looking like one system and starts looking like six people's opinions.
