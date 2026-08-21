@@ -79,6 +79,19 @@ export const colors = {
   infoSoft: '#101F2E',
   infoBorder: '#1D3E5E',
 
+  // ── Brand accent ──────────────────────────────────────────────────────────
+  // ★ phase6-pull-forward A2 — the ONE non-semantic brand colour, added in the
+  // Phase-6 rebuild for nav / active / "you" (the primary-safe, non-alarm action).
+  // Teal sits clear of every reserved hue (red=alarm, blue=info/focus, violet=
+  // duress, green=ok, amber=warn), so it can carry "primary" without colliding.
+  // It is a LIGHT fill: white on it is 1.86:1, so — UNLIKE danger/warn/ok/info —
+  // it carries `textInverse` (near-black) text, not white (11.28:1). It never sits
+  // on an SOS or an active incident; alarm red stays the one loud colour (A3, §6.4).
+  accent: '#2DD4BF',
+  accentText: '#5EEAD4',
+  accentSoft: '#0C2622',
+  accentBorder: '#155E56',
+
   /** Duress never appears in the UI. Reserved so nothing else claims the hue. */
   duress: '#7A4BC4',
 

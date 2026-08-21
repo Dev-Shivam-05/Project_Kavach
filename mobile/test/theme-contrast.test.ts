@@ -72,6 +72,8 @@ test('★ every *Text token clears AAA on its own soft panel', () => {
     ['warnText', colors.warnText, colors.warnSoft],
     ['okText', colors.okText, colors.okSoft],
     ['infoText', colors.infoText, colors.infoSoft],
+    // ★ phase6-pull-forward A2 — the brand accent's text token on its own soft panel.
+    ['accentText', colors.accentText, colors.accentSoft],
   ];
   for (const [name, fg, bg] of pairs) {
     const r = contrast(fg, bg);
@@ -85,6 +87,7 @@ test('★ every *Text token clears AAA on EVERY surface', () => {
     ['warnText', colors.warnText],
     ['okText', colors.okText],
     ['infoText', colors.infoText],
+    ['accentText', colors.accentText], // phase6-pull-forward A2
   ];
   for (const [name, fg] of semantic) {
     for (const [sname, bg] of SURFACES) {
@@ -107,6 +110,22 @@ test('★ every FILL token carries white text at AA-large or better', () => {
     const r = contrast(colors.white, bg);
     assert.ok(r >= AAA_LARGE, `white on ${name}: ${report(colors.white, bg)}, need ${AAA_LARGE}`);
   }
+});
+
+test('★ the brand accent is a LIGHT fill and carries dark text, not white', () => {
+  // accent (#2DD4BF) is the one deliberate exception to the fill-carries-white rule
+  // (phase6-pull-forward A2/A3). White on it is only ~1.86:1 and would fail; the
+  // near-black textInverse clears AAA-large with room. This test pins BOTH halves so
+  // nobody "fixes" the accent by putting white on it or by darkening it into a
+  // white-bearing fill.
+  assert.ok(
+    contrast(colors.white, colors.accent) < AAA_LARGE,
+    `accent is a light fill — white on it should be too low to use: ${report(colors.white, colors.accent)}`,
+  );
+  assert.ok(
+    contrast(colors.textInverse, colors.accent) >= AAA_LARGE,
+    `textInverse on accent: ${report(colors.textInverse, colors.accent)}, need ${AAA_LARGE}`,
+  );
 });
 
 test('a fill is never mistaken for a text token', () => {
