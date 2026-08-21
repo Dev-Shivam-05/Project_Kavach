@@ -752,6 +752,7 @@ type familyReq struct {
 	SMSHMACKeyB64 string `json:"smsHmacKey"`
 	SMSCeiling    int    `json:"smsCeiling"`
 	PolicyVersion int    `json:"policyVersion"`
+	MaxMembers    int    `json:"maxMembers"`
 }
 
 func (s *server) createFamily(w http.ResponseWriter, r *http.Request) {
@@ -767,7 +768,8 @@ func (s *server) createFamily(w http.ResponseWriter, r *http.Request) {
 	f := store.Family{
 		ID: in.ID, DisplayName: name, SMSHMACKeyB64: in.SMSHMACKeyB64,
 		SMSCeiling: in.SMSCeiling, PolicyVersion: in.PolicyVersion,
-		CreatedAt: time.Now().UnixMilli(),
+		MaxMembers: in.MaxMembers,
+		CreatedAt:  time.Now().UnixMilli(),
 	}
 	if f.ID == "" {
 		f.ID = uuidv7()
@@ -777,6 +779,9 @@ func (s *server) createFamily(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.PolicyVersion == 0 {
 		f.PolicyVersion = 1 // family.policy_version DEFAULT 1
+	}
+	if f.MaxMembers == 0 {
+		f.MaxMembers = 6 // family.max_members DEFAULT 6 (phase6-pull-forward E2)
 	}
 	if err := s.st.PutFamily(f); err != nil {
 		problem(w, http.StatusServiceUnavailable, "KV-5001", err.Error(), f.ID)
@@ -848,11 +853,35 @@ func (s *server) createMember(w http.ResponseWriter, r *http.Request) {
 	if m.Locale == "" {
 		m.Locale = "en" // member.locale DEFAULT 'en'
 	}
+	// existing is read once and used for both the size cap and the F-18 uniqueness
+	// check below — cmd/control-plane is the only place a whole family's members
+	// are visible at once, which is why both live here and not in the store.
+	existing := s.st.Members(m.FamilyID)
+
+	// ★ phase6-pull-forward E3 — the family size cap. A re-PUT of this same id is
+	// idempotent, not a new member, so it is excluded from the count. Families
+	// created before max_members existed carry 0 and are treated as uncapped
+	// rather than locked out. The migration's CHECK never runs (ADR-006/D-003), so
+	// this writer-side count is the live guard.
+	if fam, ok := s.st.Family(m.FamilyID); ok && fam.MaxMembers > 0 {
+		count := 0
+		for _, other := range existing {
+			if other.ID != m.ID {
+				count++
+			}
+		}
+		if count >= fam.MaxMembers {
+			problem(w, http.StatusConflict, "KV-1012",
+				"this family is full: max_members reached", m.FamilyID)
+			return
+		}
+	}
+
 	// ★ F-18. Two members called PRIYA produce two identical SMS alerts, and the
 	// person reading one at 2 a.m. cannot tell which of them is in trouble.
 	// Case-insensitive, because PRIYA and Priya are the same name to a human
 	// under stress — the migration's unique index says lower(ascii_short_name).
-	for _, other := range s.st.Members(m.FamilyID) {
+	for _, other := range existing {
 		if other.ID != m.ID && strings.EqualFold(other.ASCIIShortName, short) {
 			problem(w, http.StatusConflict, "KV-1008",
 				"another member of this family already uses that short name", short)

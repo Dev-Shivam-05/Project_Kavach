@@ -161,8 +161,9 @@ func TestPostFamilyCreatesAFamilyThatOutlivesTheProcess(t *testing.T) {
 		t.Fatal("no id was minted for a family created without one")
 	}
 	// ADR-006: migrations/0001_init.sql is the naming authority, and these are
-	// its defaults — sms_ceiling 2000, policy_version 1, current_epoch 0.
-	if fam.SMSCeiling != 2000 || fam.PolicyVersion != 1 || fam.CurrentEpoch != 0 {
+	// its defaults — sms_ceiling 2000, policy_version 1, current_epoch 0, and
+	// max_members 6 (phase6-pull-forward E2).
+	if fam.SMSCeiling != 2000 || fam.PolicyVersion != 1 || fam.CurrentEpoch != 0 || fam.MaxMembers != 6 {
 		t.Fatalf("defaults do not match the migration: %+v", fam)
 	}
 	if fam.CreatedAt == 0 {
@@ -340,5 +341,43 @@ func TestEnrolmentIsPublishedOnTheFamilySubject(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("no %s row travelled; seen = %v", want, seen)
 		}
+	}
+}
+
+// TestPostMemberEnforcesTheFamilySizeCap is phase6-pull-forward E3. A family is
+// created with room for two; the third member is refused with 409 KV-1012. The
+// cap is counted on the writer because cmd/control-plane is the only place all of
+// a family's members are visible at once (the migration's CHECK never runs,
+// ADR-006/D-003). Written red: before the guard the third POST returned 201.
+func TestPostMemberEnforcesTheFamilySizeCap(t *testing.T) {
+	srv := newEmptyPlane(t)
+
+	rec := post(t, srv, "/v1/family", "", `{"displayName":"Sharma","maxMembers":2}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /v1/family = %d: %s", rec.Code, rec.Body.String())
+	}
+	var fam store.Family
+	decode(t, rec, &fam)
+	if fam.MaxMembers != 2 {
+		t.Fatalf("maxMembers was not stored: %+v", fam)
+	}
+
+	for i, body := range []string{
+		`{"displayName":"Amit","asciiShortName":"AMIT","role":"guardian"}`,
+		`{"displayName":"Bina","asciiShortName":"BINA","role":"adult"}`,
+	} {
+		r := post(t, srv, "/v1/members", fam.ID, body)
+		if r.Code != http.StatusCreated {
+			t.Fatalf("member %d = %d, want 201: %s", i+1, r.Code, r.Body.String())
+		}
+	}
+
+	r := post(t, srv, "/v1/members", fam.ID,
+		`{"displayName":"Chaya","asciiShortName":"CHAYA","role":"adult"}`)
+	if r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "KV-1012") {
+		t.Fatalf("the third member of a max-2 family = %d %s, want 409 KV-1012", r.Code, r.Body.String())
+	}
+	if n := len(srv.st.Members(fam.ID)); n != 2 {
+		t.Fatalf("a refused member was still stored: family has %d members", n)
 	}
 }
