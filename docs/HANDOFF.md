@@ -1,6 +1,6 @@
 # HANDOFF — Kavach — Phase 1 (W10-j, RISK 18 closed; a stack can enrol itself) — 2026-08-21
 
-Branch **`shivam`**, 10 new commits on top of `389f5e46`, pushed. W10-i's handoff is superseded by
+Branch **`shivam`**, 13 new commits on top of `389f5e46`, pushed. W10-i's handoff is superseded by
 this one; its content is in commit `389f5e46`.
 
 **`java -version` was the first command of the session.** Not found, `JAVA_HOME` and `ANDROID_HOME`
