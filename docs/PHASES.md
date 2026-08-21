@@ -132,7 +132,55 @@ the code that inverted it, ending in eleven more tests across the two binaries. 
 unpinned in `escalation`: `Cancel` and its duress twin, `Ack`, `OnScene`, two-party `Resolve`, and
 the HLC.
 
-**The queue as it stands, no JDK required:**
+> ★★★ **#1 PRIORITY — 21 Aug user decision: pull Phase 6 forward. It is now the top of the queue,
+> ahead of everything below.** This overrides the 11-Aug "Phase 6 runs after the Phase 1 gate"
+> sequencing. §4.12 names scope-creep-before-the-gate as the single most likely way this project
+> dies — flagged in one line, and it is the user's call; recorded, not argued. **Not yet
+> spec-locked, no code written.** Scope, in the user's own words:
+>
+> - **A big centre panic button in the tab bar** — voice-assistant style, sits in the middle of the
+>   bottom tabs, easy to hit with a thumb. → Phase 6 **6.6**.
+> - **Every member sees every other member's EXACT LIVE LOCATION** on a real map. Worked example the
+>   user gave: a 5-person family scattered across Surat / Gonda Devi / Lunsikui / Kabilpore / home;
+>   the Kabilpore member opens the tab and sees exactly where the other four are. → Phase 6 **6.5**.
+> - **A real basemap** with **satellite / street / traffic / standard** layers, zoomable and pannable
+>   "like iPhone Maps". → Phase 6 **6.5**.
+> - **Every member can reach every other member's CAMERA and MICROPHONE** (the user's example: the
+>   Kabilpore member viewing the Surat member's live camera). → Phase 6 **6.4**.
+> - **A new theme and a total UI rebuild** — the user rates the current UI −5/10. → Phase 6 **6.8**.
+>
+> **Four hard collisions this must resolve with NEW ADRs, not by ignoring the old ones** (see the
+> Phase 6 table and "★ How to build Phase 6 without breaking the product" further down):
+>
+> 1. **Exact-location-always vs ADR-010 / P-008 / F-14.** "Always exact" removes the consent-grant
+>    gate the map exists to enforce. Build it on the existing `live_location` grants — mutual,
+>    revocable, logged, freshness shown — so it is exact AND honest, not a silent tracker. The
+>    plumbing is already there; the grants just have to be mutual by default within a family.
+> 2. **Satellite/street/traffic basemap vs ADR-010.** Every third-party tile is a silent precise-
+>    location disclosure with no grant and no access-log row, and tiles need network in the one
+>    moment the map matters (ZERO_INFRA). Phase 6's stated path: pre-cached open imagery
+>    (Sentinel-2 / Landsat) for the family's own box + `react-native-gesture-handler` for pinch/pan;
+>    Google/Mapbox terms forbid caching. Street/traffic are online-only third-party feeds — decide
+>    per layer whether they are worth the leak.
+> 3. **Mutual camera + mic vs P-024 / ADR-017.** Today `camera-view.tsx` is a KILL SWITCH by design:
+>    you can only turn a camera OFF from another phone, ON needs physical presence, "an objection can
+>    never be overruled from another room." Remote view + listen is the exact inversion, and the
+>    app's own threat model says the person most likely to be filmed by a family camera is a family
+>    member. **Non-negotiable build constraint:** every remote camera/mic session carries a mandatory,
+>    non-suppressible on-device live indicator + an access-log row + a per-target consent grant. That
+>    is the line between a consented family feature and stalkerware — and it is exactly the user's own
+>    stated value ("kuch chhupā nahi, koi privacy problem nahi"). Push notifications stay optional as
+>    the user asked; the on-device indicator does not.
+> 4. **The user's own example answers 6.4's one open question.** Kabilpore→Surat is across-city, so
+>    "truly offline video" is off the table — no app carries video across a city with no network. It
+>    becomes WebRTC over the internet with a TURN relay ("works on bad networks"), not Wi-Fi Direct.
+>
+> **Next action, before any code: a `spec-lock` pass** — theme tokens, tab-bar geometry + the centre
+> button, map provider per layer, camera/mic session UX + the live indicator, exact colours / sizes /
+> timings — proposed as a numbered table, then one word to start. `6.1` (delete mock data) is NOT in
+> this pull-forward; it stays sequenced after push lands so it does not empty every screen.
+
+**Then, after the Phase 6 pull-forward above, the no-JDK queue as it stood:**
 1. **Bring `ops/docker-compose.yml` up.** ★ *Now that the transport works and a stack can enrol
    itself, this is the last unexecuted claim in the repo.* Every statement about the four-container
    topology — including the ones written on 20 and 21 Aug — is either a Go test or two binaries on

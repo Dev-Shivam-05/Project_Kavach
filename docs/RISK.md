@@ -165,6 +165,31 @@ tree, minus tests and `internal/bus` itself.
 **Not fixed:** what `ops.alert` is *for* — the canary, a log sink, an operator route — is a decision
 about paging, not a hole to plug on the way past. Left with a note at the `enrolDevice` call site.
 
+**20. The Phase 6 pull-forward can ship a surveillance tool built out of the safety app.**
+*(added 21 Aug — the 21 Aug user decision to pull Phase 6 to #1; see [PHASES.md](PHASES.md) "#1
+PRIORITY".)* The requested feature set — every family member reaching every other member's **exact
+live location**, **camera** and **microphone** — is, built naively, the exact capability this app's
+threat model (`docs/04` §4.12, `camera-view.tsx`, ADR-010) was designed to deny: intra-family
+coercive surveillance. Three specific ways it ships wrong:
+- **A remote camera/mic session with no on-device indicator is stalkerware**, family or not. The
+  constraint that keeps it a consented feature — a **mandatory, non-suppressible on-device live
+  indicator + an access-log row + a per-target consent grant** — is invisible in a demo and easy to
+  drop under "notifications are optional." Notifications *are* optional per the user; the indicator
+  is **not**. Inverts P-024 (`camera-view.tsx` is a kill switch, not a viewer) and ADR-017 (no media
+  plane) — both need a superseding ADR, not a silent screen.
+- **"Exact location, always" without the `live_location` grant gate is a silent tracker** — exactly
+  the failure `FamilyMapView` and ADR-010 / P-008 / F-14 exist to prevent. Must ride the existing
+  consent grants (mutual, revocable, logged, freshness shown), not bypass them.
+- **A satellite/street/traffic basemap from Google/Mapbox is a silent precise-location disclosure**
+  per tile, with no grant and no log — the leak ADR-010 forbids — and needs network in the one moment
+  the map matters. Pre-cached open imagery for the family's own box is the leak-free path; each
+  online layer is a per-layer decision to accept the leak.
+**Not a reason to refuse the feature** — it is a family-safety feature with legitimate framings. It
+is a reason the build must resolve these with new ADRs and the indicator/grant/log constraints, and
+why it is spec-locked before a line is written. **Sequencing also reversed:** §4.12 calls
+scope-creep-before-the-Phase-1-gate the most likely way this project dies; the user has accepted that
+and pulled it forward anyway.
+
 ## S2 — will make a change unverifiable
 
 **4. ~4,000 LOC of backend has no direct tests.**
