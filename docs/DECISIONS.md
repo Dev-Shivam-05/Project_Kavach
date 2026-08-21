@@ -623,3 +623,59 @@ is not running on this machine; `docker compose up` has still never been execute
 single-writer mode `sos.wal` uses — is untouched: ADR-002's durability file writes exactly as it
 did, and `internal/wal`'s ten characterization tests were written before any of this and still pass
 unmodified.
+
+---
+
+## D-028 — Enrolment is two routes and a bus projection, not a seed command
+
+**Decided and executed** 21 Aug (W10-j), from the spec-lock table in
+[spec/w10-j-enrolment.md](spec/w10-j-enrolment.md). Closes **RISK item 18**.
+
+**The choice.** Item 18 said the fix was "one route (`POST /v1/family`) or one seed command, but
+which of the two is an enrolment-flow decision (§W4)". It is the route, and it is **two** of them:
+`POST /v1/family` and `POST /v1/members`, both `s.auth(s.idempotent(…))`. `POST /v1/devices` already
+existed and was already correct — it only ever failed because `PutDevice → requireFamily` had
+nothing to find. A seed command would have lived outside all nine CI gates and would still have been
+a fixture.
+
+**The part that was not obvious: the two binaries do not share a store.** In
+`ops/docker-compose.yml` `sos-ingest` writes `/var/lib/kavach/store` and `control-plane` writes
+`/var/lib/kavach/control-plane/store` — one volume, two directories. Pointing both at one directory
+is the tempting one-line fix and it is **D-027 again**: `store.persist` rewrites a whole JSON table
+under an in-process mutex, so two processes would overwrite each other in the table that decides
+whether a signature verifies. So the **row** crosses the bus, never the file:
+`bus.KindEnrolmentUpsert` carrying a shared `store.EnrolmentUpsert` on `fam.<id>.enrolment`,
+published by the control plane after each successful write and applied by `sos-ingest.project`,
+which then calls `refreshCache`.
+
+The type is shared rather than rebuilt on each side on purpose — a field added by the writer and
+forgotten by the reader is invisible, and every one of the writer's tests still passes. That bug has
+shipped in this repo before (`notify.Fanout`'s neighbour leg).
+
+**What the characterization found, which item 18 understates.** Item 18 says both projectors "drop
+an incident whose family row is missing — silently, at WARN". They do, but **the request never gets
+that far**: `ingestEnvelope` resolves the family from the in-memory cache and answers **404 unknown
+family** (F-04 — "an unknown family is nobody to help"). On a freshly deployed stack the phone does
+not receive a flagged ack, it receives an error. That is deliberate and it is now pinned by
+`TestEnrolmentTurnsARejectedSOSIntoAProjectedOne`.
+
+**Cost.** `cmd/sos-ingest` went 970 → **995/1000**. The spec locked ≤30 lines of headroom for the
+projection and it took 25, so `armTimers`/`tierFor` were **not** deleted to pay for it — that is
+still its own queue item, and `projector_test.go`'s four tests still pin what it would delete.
+
+**Observed, not argued** (`ops/e2e-two-binaries.sh`, one run, 21 Aug): five 201s through the control
+plane's API; two seconds later `sos-ingest`'s store directory — which nothing wrote into — holds
+`family.json`, `member.json` and `device.json`; the SOS is accepted and projected; the ladder climbs
+`PENDING → ACTIVE_L1`; and the fan-out line reads **`devices=1`**, where every previous run in this
+repo read `devices=0`.
+
+`devices=1` and not 2 because `notify.tierDevices` skips the incident subject's own phone: Priya
+sent the SOS, Amit is the guardian who is told about it. **Still nobody's phone rings** —
+`KAVACH_FCM_CREDENTIALS` is unset and the enrolled key is 32 zero bytes (RISK 14).
+
+**Recorded, not fixed.** `publishOps("device.key.changed", …)` sends to `notify.OpsSubject`
+(`ops.alert`), which **nothing in this repository subscribes to** — a grep across the whole tree
+finds four publishers and zero subscribers. Its comment claims sos-ingest refreshes its key cache on
+that event; sos-ingest subscribes to `fam.*.>` and has never seen it. The line is left in place with
+a note at the call site, because deciding what `ops.alert` is for is not a thing to do while closing
+item 18.
