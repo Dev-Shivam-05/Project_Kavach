@@ -118,21 +118,52 @@ The remaining per-pair claims (`realtime-gw`'s socket frames, the canary's chain
 transport now being correct, not on anybody having watched them.
 See [DECISIONS.md](DECISIONS.md) D-027 and its W10-i addendum.
 
-**18. No running binary can create a family, so every store starts empty and stays empty.**
-*(added 20 Aug, W10-h.)* `store.PutFamily` has **zero non-test call sites** in the repository, and
-`cmd/control-plane` serves `GET /v1/family` with no `POST`. There is no seed script
-(`ops/run-backend.ps1` starts processes and nothing else) and nothing runs `migrations/0001_init.sql`
-(ADR-006). A family therefore exists only inside a test's `t.TempDir()`.
-**What this costs:** both incident projectors gate on the family row and drop when it is missing —
-`sos-ingest.projectOpen` ("the control plane owns family creation") and, since W10-h,
-`control-plane.onIngestedIncident`. On a freshly deployed stack that is *every* incident, silently,
-at WARN. `server.familyID` also falls back to `""` when `st.Families()` is empty, so the tenant of
-an unheadered request is the empty string.
-**Verified**, not inferred: an exhaustive grep for `PutFamily` across `.go`/`.mjs`/`.ps1`/`.yml`, plus
-the route table in `cmd/control-plane/main.go:627`. **Not verified against a running stack** — like
-items 16 and 17, this has never been observed on a live deployment, because there has not been one.
-**Not fixed:** it is one route (`POST /v1/family`) or one seed command, but which of the two is an
-enrolment-flow decision (§W4) and not a hole to plug on the way past.
+**18. ~~No running binary can create a family, so every store starts empty and stays empty.~~
+CLOSED 21 Aug (W10-j).**
+*(added 20 Aug, W10-h; fixed the next day.)* `store.PutFamily` and `store.PutMember` had **zero
+non-test call sites**, and `cmd/control-plane` served `GET /v1/family` with no `POST`. A family
+existed only inside a test's `t.TempDir()`.
+**What it cost, and this is worse than the entry originally said.** Both projectors do gate on the
+family row and drop when it is missing — but the request never gets that far: `ingestEnvelope`
+resolves the family from the in-memory cache and answers **404 unknown family** (F-04, "an unknown
+family is nobody to help"). On a freshly deployed stack the phone got an error, not a flagged ack.
+Measured, not read: `cmd/sos-ingest/enrolment_test.go`
+`TestEnrolmentTurnsARejectedSOSIntoAProjectedOne`.
+**What closed it:** `POST /v1/family` and `POST /v1/members`, both `s.auth(s.idempotent(…))`, with
+every default and every validation rule taken from `migrations/0001_init.sql` — `sms_ceiling` 2000,
+`policy_version` 1, `locale` `en`, `ascii_short_name ^[A-Za-z]{1,8}$` (P-033), the eight
+`member_role` values, and F-18's case-insensitive uniqueness as a 409. `POST /v1/devices` needed no
+change; it was always correct and had nothing to attach to.
+**And the row crosses the bus.** The two binaries keep separate store directories on one volume, so
+`cmd/control-plane` publishes `bus.KindEnrolmentUpsert` on `fam.<id>.enrolment` and
+`sos-ingest.projectEnrolment` applies it and refreshes its cache. Pointing both binaries at one
+store directory was the tempting one-liner and it is D-027 again — `store.persist` rewrites a whole
+JSON table under an in-process mutex.
+**Observed on a running pair**, which items 16 and 17 could not claim when they were closed:
+`ops/e2e-two-binaries.sh` now seeds nothing by hand — five 201s through the API, sos-ingest's
+directory (untouched by anything else) holding `family.json`, `member.json` and `device.json` two
+seconds later, the SOS projected, the ladder climbing, and the fan-out line reading **`devices=1`**
+where every earlier run read `devices=0`.
+**⛔ What this still does not buy: a phone that rings.** `devices=1` means addressed, not delivered
+(RISK 14). And `docker compose up` has still never been run here.
+See [DECISIONS.md](DECISIONS.md) D-028 and [spec/w10-j-enrolment.md](spec/w10-j-enrolment.md).
+
+**19. Nothing subscribes to `ops.alert`, including the P0 budget alarm.**
+*(added 21 Aug, W10-j, while closing item 18.)* Four kinds are published to `notify.OpsSubject`
+(`"ops.alert"`) — `ops.budget_breached` (marked `severity: P0`, F-04), `ops.timer_overdue`,
+`ops.deploy_override`, `device.key.changed` — plus every `consent.Service.emit` with no family.
+**There is no subscriber.** The repository has six non-test subscriptions
+(`cmd/{canary,control-plane,realtime-gw,sos-ingest}`), and their patterns are
+`fam.<id>.stream`, `fam.*.incident`, `fam.*.>`, `fam.*.<fanout>` and `TicketSubject`. `ops.alert` is
+family-scoped by nothing and matched by none of them.
+**What this costs:** the SMS budget breach that §16.2 calls page-worthy is written to a log file and
+into `stream.wal`, and no process reads it. `enrolDevice`'s comment claiming sos-ingest refreshes
+its key cache on `device.key.changed` has never been true — that is why W10-j added a separate
+enrolment record rather than trusting it.
+**Verified**, not inferred: `grep -rn "Subscribe(Durable|Ephemeral)?(" --include=*.go` across the
+tree, minus tests and `internal/bus` itself.
+**Not fixed:** what `ops.alert` is *for* — the canary, a log sink, an operator route — is a decision
+about paging, not a hole to plug on the way past. Left with a note at the `enrolDevice` call site.
 
 ## S2 — will make a change unverifiable
 
