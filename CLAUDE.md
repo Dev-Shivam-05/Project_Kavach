@@ -72,8 +72,9 @@ directive above it, and read the actual `npm run typecheck` output before claimi
 
 ## Danger zones
 
-- `backend/cmd/sos-ingest/` — **970/1000 lines.** CI Gate 4 fails past 1000 (ADR-002). To add lines
-  here you must first remove lines here.
+- `backend/cmd/sos-ingest/` — **995/1000 lines.** CI Gate 4 fails past 1000 (ADR-002). To add lines
+  here you must first remove lines here. W10-j's `projectEnrolment` spent 25 of the 30 that were
+  left; `armTimers`/`tierFor` are ~20 dead lines and the obvious place to buy headroom back.
 - The four generated files (`stateMachine.generated.ts`, `machine_gen.go`, `machine_gen_test.go`,
   `__generated__/fixtures.json`) — **never hand-edit.** Change `spec/state-machine.yaml`, `npm run gen`.
 - `proto/incident.proto` — additive only; field numbers are frozen (`tools/protolint.mjs`, Gate 9).
@@ -81,14 +82,16 @@ directive above it, and read the actual `npm run typecheck` output before claimi
   `notify.go`). A field you add to `Step` and do not name there is silently dropped — for neighbours
   only, so every test on the main path still passes. Add the field *and* a neighbour-leg test.
 - `internal/consent` and `cmd/{realtime-gw,canary}` have **zero tests**; `cmd/control-plane`
-  (9 tests) and `internal/bus` (now 7) got their first in W10-h, `internal/wal` (19) in W10-i, and
-  ~30 control-plane routes are still unpinned. `internal/store` covers two seams (the device table, W10-a; the escalation_timer row and
+  (9 tests, now 18 with W10-j's enrolment file) and `internal/bus` (now 10) got their first in
+  W10-h, `internal/wal` (19) in W10-i, and ~28 control-plane routes are still unpinned.
+  `internal/store` covers two seams (the device table, W10-a; the escalation_timer row and
   `FireTimer`, W10-f) out of eleven tables. `internal/notify`
   and `internal/escalation` are the covered ones — escalation has 69 cases over CLAIM/RELEASE
   (W10-d), the ladder and the timer wheel (W10-e), action routing (W10-g), and still nothing on
   `Cancel`, `Ack`, `OnScene`, `Resolve` or the HLC. `cmd/sos-ingest` has its request path
-  (`main_test.go`) and its projector's arming path (`projector_test.go`, W10-g); `replayWAL` and
-  `refreshCache` are still unpinned. Characterize current behaviour in a test *before* changing any of it. The
+  (`main_test.go`), its projector's arming path (`projector_test.go`, W10-g) and its enrolment
+  projection (`enrolment_test.go`, W10-j); `replayWAL` is still unpinned and `refreshCache` is only
+  reached through enrolment. Characterize current behaviour in a test *before* changing any of it. The
   shape that works: pin what the code already does, run it green, then add the new expectation and
   show it red before you make it pass. It is also how gaps get found — W10-e's characterization
   pass is what surfaced D-024.
@@ -124,6 +127,19 @@ directive above it, and read the actual `npm run typecheck` output before claimi
   until its timeout with no failing assertion to read. Publishing more messages than a test
   channel's buffer is the easy way to cause it; `subscribeInto` sends non-blocking for that reason.
   Always pass `-timeout` when a bus change is under test.
+- **Enrolment rows cross the bus; the two binaries do NOT share a store (D-028, RISK 18).**
+  `cmd/control-plane` owns every enrolment write — `POST /v1/family`, `POST /v1/members`,
+  `POST /v1/devices` — and publishes `bus.KindEnrolmentUpsert` on `fam.<id>.enrolment`;
+  `sos-ingest.projectEnrolment` applies it and calls `refreshCache`. Pointing both binaries at one
+  store directory is the tempting one-liner and it reopens D-027: `store.persist` rewrites a *whole*
+  JSON table under an in-process mutex, in the table that decides whether a signature verifies. The
+  payload type is **shared** (`store.EnrolmentUpsert`) for the same reason `notify.Fanout`'s
+  neighbour leg is a trap — a field the writer adds and the reader forgets is invisible, and every
+  test on the writing side still passes.
+  Two things that will surprise you: an SOS for a family `sos-ingest` has not been told about is
+  **refused at the front door with 404** (`ingestEnvelope`, F-04) rather than dropped quietly by the
+  projector; and `publishOps("device.key.changed", …)` goes to `ops.alert`, which **nothing in this
+  repository subscribes to** (RISK 19) — it has never refreshed anybody's cache.
 - **The rungs `sos-ingest` arms are executed by nobody, and are now redundant too (D-026 +
   addendum).** W10-h gave `cmd/control-plane` a durable subscription on `fam.*.incident` that
   projects the incident and calls `engine.OnIncidentOpen` — so the ladder is armed by the engine,
