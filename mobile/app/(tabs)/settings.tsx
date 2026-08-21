@@ -100,6 +100,8 @@ export default function SettingsScreen(): ReactElement {
   const devices = useKavach((s) => s.devices);
   const deviceId = useKavach((s) => s.deviceId);
   const familyId = useKavach((s) => s.familyId);
+  const familyName = useKavach((s) => s.familyName);
+  const familyMaxMembers = useKavach((s) => s.familyMaxMembers);
   const locale = useKavach((s) => s.locale);
   const presence = useKavach((s) => s.presence);
   const grants = useKavach((s) => s.grants);
@@ -427,7 +429,7 @@ export default function SettingsScreen(): ReactElement {
             Above Profile on purpose: the family precedes "me". Settings already
             owns identity, and this card has no status headline to fight with. */}
         <View style={styles.familyIdentity}>
-          <FamilyIdentity familyId={familyId} />
+          <FamilyIdentity familyId={familyId} name={familyName} />
         </View>
 
         {/* ── Profile ────────────────────────────────────────────────────────── */}
@@ -761,6 +763,13 @@ export default function SettingsScreen(): ReactElement {
             phone and sealed to nobody, so "family" is a single-device word and
             every fan-out above it has one recipient.
           */}
+          {/* ★ Spec E1 — name/size the family this device founded. */}
+          <ListItem
+            glyph="✎"
+            title={familyName ? 'Edit family name and size' : 'Name your family and set its size'}
+            subtitle={familyName ? `${familyName} · up to ${familyMaxMembers} members` : `Up to ${familyMaxMembers} members`}
+            onPress={() => router.push('/create-family')}
+          />
           <ListItem
             glyph="⇄"
             title="Add a phone to this family"

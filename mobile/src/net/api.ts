@@ -680,6 +680,36 @@ export async function getFamily(): Promise<ApiResponse<FamilyPayload>> {
   return control<FamilyPayload>('/v1/family');
 }
 
+/** The identity fields POST /v1/family returns (snake_case, straight from the
+ *  server row). */
+export interface FamilyIdentity {
+  id: UUID;
+  display_name: string;
+  max_members: number;
+}
+
+/**
+ * ★ Spec E1 — name a family and set its size, server-side. The founding phone
+ * already holds `familyId` (store.identity()), so it is sent as `id`: the server
+ * row, the enrolment bus and sos-ingest's gate all key on the SAME id the phone
+ * uses, and a retry over a second transport is idempotent on it. The SAS pairing
+ * still admits devices (E6); this only names and sizes the family. Fail-soft like
+ * every call here — a dead network is data, not an exception.
+ */
+export async function createFamily(
+  displayName: string,
+  maxMembers: number,
+): Promise<ApiResponse<FamilyIdentity>> {
+  if (CONFIG.demoMode) {
+    return ok({ id: familyId, display_name: displayName, max_members: maxMembers }, 'local', 200);
+  }
+  return control<FamilyIdentity>('/v1/family', {
+    method: 'POST',
+    body: { id: familyId, displayName, maxMembers },
+    idempotencyKey: `family:${familyId}`,
+  });
+}
+
 export async function getIncidents(
   sinceHlc?: string,
   limit = 50,

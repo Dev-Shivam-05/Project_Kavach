@@ -150,6 +150,7 @@ import {
   vaultRepo,
 } from '../db/repos';
 import {
+  createFamily as apiCreateFamily,
   getFamily,
   getIncidents,
   getPolicy,
@@ -251,6 +252,10 @@ export interface KavachState {
    */
   onboarded: boolean;
   familyId: UUID;
+  /** ★ Spec E1 — the family's display name and size cap. A family is a UUID
+   *  first; naming/sizing it is a separate act (createFamily). '' until named. */
+  familyName: string;
+  familyMaxMembers: number;
   deviceId: UUID;
   me: Member | null;
   members: Member[];
@@ -314,6 +319,8 @@ export interface KavachState {
   runDiagnostics(): Promise<DiagnosticsReport>;
   startDrill(kind: DrillRun['kind']): Promise<void>;
   changeLocale(l: Locale): Promise<void>;
+  /** ★ Spec E1 — name this family and set its size (2-20). */
+  createFamily(name: string, maxMembers: number): Promise<void>;
   pauseMonitoring(paused: boolean): Promise<void>;
   /**
    * Persist that onboarding finished, so subsequent launches go straight to the
@@ -375,6 +382,8 @@ export const useKavach = create<KavachState>()((set, get) => ({
   onboarded: false,
   rehearsalSkipped: false,
   familyId: isDemo() ? demoFamilyId : '',
+  familyName: '',
+  familyMaxMembers: 6,
   deviceId: isDemo() ? demoMeDeviceId : '',
   me: null,
   members: [],
@@ -865,6 +874,24 @@ export const useKavach = create<KavachState>()((set, get) => ({
   },
 
   /**
+   * ★ Spec E1 — name this family and set its size. The founding device already
+   * minted familyId (identity()); this gives it a display name and a size cap,
+   * persists both locally, and registers the row server-side under the SAME id so
+   * sos-ingest's gate and the enrolment bus agree with the phone. Best effort on
+   * the network: the name/size are already local, and the whole api surface is
+   * fail-soft. The SAS pairing still admits devices (E6) — this only names/sizes.
+   */
+  async createFamily(name: string, maxMembers: number): Promise<void> {
+    const displayName = name.trim();
+    if (!displayName) return;
+    const size = Math.max(2, Math.min(20, Math.round(maxMembers) || 6));
+    set({ familyName: displayName, familyMaxMembers: size });
+    await safe(() => t0ConfigRepo.set('familyName', displayName), undefined);
+    await safe(() => t0ConfigRepo.set('familyMaxMembers', String(size)), undefined);
+    void safe(() => apiCreateFamily(displayName, size), undefined);
+  },
+
+  /**
    * P-066. An adult switching monitoring off is exercising a right, and the
    * system's only job is to make it VISIBLE rather than silently
    * indistinguishable from a dead agent. Not an alarm — just honesty.
@@ -993,6 +1020,10 @@ async function doBootstrap(): Promise<void> {
     const ids = await identity();
     useKavach.setState({ familyId: ids.familyId, deviceId: ids.deviceId });
     setIdentity({ deviceId: ids.deviceId, familyId: ids.familyId });
+    // ★ Spec E1 — the family's name/size persist separately from the id triple.
+    const familyName = (await safe(() => t0ConfigRepo.get('familyName'), null)) ?? '';
+    const maxRaw = await safe(() => t0ConfigRepo.get('familyMaxMembers'), null);
+    useKavach.setState({ familyName, familyMaxMembers: maxRaw ? Number(maxRaw) : 6 });
     await stage('session', () => restoreSession());
 
     // Read the onboarding flag back BEFORE `ready` flips. The entry route waits

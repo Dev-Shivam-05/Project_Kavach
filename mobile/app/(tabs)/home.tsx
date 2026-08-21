@@ -154,6 +154,7 @@ export default function HomeScreen(): React.ReactElement {
   // One selector per field: zustand v5 compares by reference, and a selector that
   // builds an object would re-render this screen on every store write.
   const familyId = useKavach((s) => s.familyId);
+  const familyName = useKavach((s) => s.familyName);
   const bootstrap = useKavach((s) => s.bootstrap);
   const ready = useKavach((s) => s.ready);
   const me = useKavach((s) => s.me);
@@ -461,7 +462,7 @@ export default function HomeScreen(): React.ReactElement {
             competes with F-02, and the crest is derived on-device from familyId —
             nothing about it is fetched or stored. */}
         <View style={styles.familyIdentity}>
-          <FamilyIdentity familyId={familyId} compact />
+          <FamilyIdentity familyId={familyId} name={familyName} compact />
         </View>
 
         {/* ── degradation strip: which rung of §4.4 we are actually on ──────── */}

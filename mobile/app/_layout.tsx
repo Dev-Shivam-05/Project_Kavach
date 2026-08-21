@@ -157,6 +157,8 @@ export default function RootLayout() {
               reached from Settings > Privacy now; a native header gives the way
               back a tab never needed. */}
           <Stack.Screen name="consent" options={{ headerShown: true, title: t('tab.consent') }} />
+          {/* Spec E1 — name/size a family. Reached from Settings; native header. */}
+          <Stack.Screen name="create-family" options={{ headerShown: true, title: t('family.createTitle') }} />
 
           {/* Enrolment owns the whole screen and cannot be escaped sideways —
               a half-enrolled device has no keys and cannot raise an alarm. */}
