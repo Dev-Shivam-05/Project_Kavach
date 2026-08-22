@@ -17,7 +17,7 @@
  * objection can never be overruled from another room.
  *
  * ★★★ IT WORKS WITH NO BACKEND ★★★
- * Everything here is local state (CONFIG.demoMode). A kill applied to a node on
+ * Everything here is local node state. A kill applied to a node on
  * another phone is recorded as an instruction rather than reported as done — the
  * screen says which it is, because "switched off" and "asked to switch off" are
  * not the same sentence to somebody who does not want to be filmed.

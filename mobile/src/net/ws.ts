@@ -299,7 +299,6 @@ function flushOutbound(): void {
  * is a fast path, never the record of truth (§2.10.4).
  */
 export function sendFrame(frame: WsFrame): boolean {
-  if (CONFIG.demoMode) return false;
   if (rawSend(frame)) return true;
   enqueueOutbound(frame);
   return false;
@@ -362,7 +361,7 @@ function teardownSocket(): void {
 }
 
 async function openSocket(): Promise<void> {
-  if (!wantConnection || CONFIG.demoMode) return;
+  if (!wantConnection) return;
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     return;
   }
@@ -465,14 +464,9 @@ function startHeartbeat(): void {
 
 /**
  * Connect, and keep reconnecting until disconnectWs(). Safe to call repeatedly.
- * In demo mode this is a clean no-op: there is no gateway, the store drives its
- * own frames locally, and nothing here spins or retries.
+ * Idempotent: a call while already connected or connecting is a no-op.
  */
 export function connectWs(): void {
-  if (CONFIG.demoMode) {
-    setStatus('disabled');
-    return;
-  }
   wantConnection = true;
   if (socket || reconnectTimer) return;
   attempt = 0;
@@ -487,7 +481,7 @@ export function disconnectWs(): void {
   // this is the deliberate final cursor flush, awaited by nobody.
   teardownSocket();
   void flushCursor();
-  setStatus(CONFIG.demoMode ? 'disabled' : 'idle');
+  setStatus('idle');
 }
 
 /**

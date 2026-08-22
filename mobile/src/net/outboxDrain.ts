@@ -260,22 +260,18 @@ export async function drainOnce(reason = 'manual'): Promise<DrainResult> {
   }
   draining = true;
   try {
-    // Demo mode delivers locally and synthetically, so connectivity is irrelevant
-    // — the queue must still drain or the outbox depth grows forever (hard rule 8).
-    if (!CONFIG.demoMode) {
-      const level = await currentDegradation();
-      if (level < DegradationLevel.HTTP_ONLY) {
-        // No data path. SMS and BLE are the T0 dispatcher's job, not the outbox's;
-        // retrying HTTP into a dead network only burns battery.
-        lastResult = {
-          attempted: 0,
-          delivered: 0,
-          failed: 0,
-          skipped: true,
-          reason: `no data path (L${level})`,
-        };
-        return lastResult;
-      }
+    const level = await currentDegradation();
+    if (level < DegradationLevel.HTTP_ONLY) {
+      // No data path. SMS and BLE are the T0 dispatcher's job, not the outbox's;
+      // retrying HTTP into a dead network only burns battery.
+      lastResult = {
+        attempted: 0,
+        delivered: 0,
+        failed: 0,
+        skipped: true,
+        reason: `no data path (L${level})`,
+      };
+      return lastResult;
     }
 
     const now = Date.now();

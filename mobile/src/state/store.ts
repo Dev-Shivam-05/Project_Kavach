@@ -199,17 +199,6 @@ import {
   type RouteSample,
 } from '../domain/journey';
 import {
-  DEMO_CANCEL_PIN,
-  DEMO_DURESS_PIN,
-  demoFamilyId,
-  demoMeDeviceId,
-  demoMeMemberId,
-  isDemo,
-  seedDemoData,
-  simulateResponders,
-  type DemoResponderEvent,
-} from '../domain/demo';
-import {
   acquireDevicePushToken,
   clearIncident as clearIncidentNotification,
   initNotifications,
@@ -348,7 +337,6 @@ let cachedIds: { familyId: UUID; deviceId: UUID; memberId: UUID } | null = null;
 /** Named stage failures from the last bootstrap. Surfaced, not swallowed. */
 const bootFailures: string[] = [];
 const subscriptions: (() => void)[] = [];
-const demoStops = new Map<UUID, () => void>();
 
 /**
  * ★ The cached fix that T0 reads synchronously (T0Deps.lastKnownLocation).
@@ -381,10 +369,10 @@ export const useKavach = create<KavachState>()((set, get) => ({
   t0Ready: false,
   onboarded: false,
   rehearsalSkipped: false,
-  familyId: isDemo() ? demoFamilyId : '',
+  familyId: '',
   familyName: '',
   familyMaxMembers: 6,
-  deviceId: isDemo() ? demoMeDeviceId : '',
+  deviceId: '',
   me: null,
   members: [],
   devices: [],
@@ -457,7 +445,6 @@ export const useKavach = create<KavachState>()((set, get) => ({
     }
 
     const id = result.incidentId ?? preallocated;
-    if (!result.suppressed && isDemo()) startDemoResponders(id);
     // Refresh risk in the background: an incident is itself evidence that the
     // context is not normal, and the next trigger should score accordingly.
     void refreshRisk();
@@ -1055,7 +1042,6 @@ async function doBootstrap(): Promise<void> {
 
     policy = (await safe(() => policyRepo.current(), DEFAULT_POLICY)) ?? DEFAULT_POLICY;
 
-    await stage('seed', () => seedIfEmpty(ids));
     await stage('load', () => loadEverything(ids));
     await stage('caches', () => primeCaches(ids.memberId));
     await stage('risk', () => refreshRisk());
@@ -1167,9 +1153,7 @@ async function identity(): Promise<{ familyId: UUID; deviceId: UUID; memberId: U
     return cachedIds;
   }
 
-  const fresh = isDemo()
-    ? { familyId: demoFamilyId, deviceId: demoMeDeviceId, memberId: demoMeMemberId }
-    : { familyId: uuidv7(), deviceId: uuidv7(), memberId: uuidv7() };
+  const fresh = { familyId: uuidv7(), deviceId: uuidv7(), memberId: uuidv7() };
   const ids = {
     familyId: existingFamily ?? fresh.familyId,
     deviceId: existingDevice ?? fresh.deviceId,
@@ -1306,77 +1290,8 @@ async function loadKeyMaterial(): Promise<void> {
     await secureSet(STORAGE_KEYS.groupSecret, bytesToBase64(groupSecret));
   }
 
-  // Demo PINs, only when nothing is enrolled. An unexercisable duress path is
-  // worse than none: you find out it never worked during the emergency.
-  if (isDemo()) {
-    if (!(await secureGet(STORAGE_KEYS.cancelPin))) await secureSet(STORAGE_KEYS.cancelPin, DEMO_CANCEL_PIN);
-    if (!(await secureGet(STORAGE_KEYS.duressPin))) await secureSet(STORAGE_KEYS.duressPin, DEMO_DURESS_PIN);
-  }
 }
 
-async function seedIfEmpty(ids: { familyId: UUID; memberId: UUID }): Promise<void> {
-  const existing = await safe(() => memberRepo.list(ids.familyId), []);
-  if ((existing?.length ?? 0) > 0) return;
-  if (!isDemo()) return; // a real install waits for onboarding; it invents nothing
-
-  const seed = seedDemoData();
-
-  // ★ One transaction, one commit. Dozens of individually-committed inserts on
-  //   first launch is dozens of fsyncs in front of a blank entry screen. Each
-  //   write keeps its own safe() so one bad row still lets the rest land —
-  //   a half-seeded demo is fine, a boot that stalls on it is not.
-  const seedAll = async (): Promise<void> => {
-    await safe(() => memberRepo.upsertMany(seed.members), undefined);
-    await safe(() => deviceRepo.upsertMany(seed.devices), undefined);
-    for (const i of seed.incidents) await safe(() => incidentRepo.upsert(i), undefined);
-    for (const rows of Object.values(seed.incidentEvents)) {
-      for (const r of rows) {
-        const { id: _rowId, ...rest } = r;
-        await safe(() => incidentRepo.appendEvent(rest), 0);
-      }
-    }
-    for (const p of Object.values(seed.presence)) await safe(() => presenceRepo.upsert(p), undefined);
-    for (const g of seed.grants) await safe(() => consentRepo.upsert(g), undefined);
-    for (const a of seed.accessLog) {
-      const { id: _logId, ...rest } = a;
-      await safe(() => consentRepo.addLogEntry(rest), 0);
-    }
-    for (const j of seed.journeys) await safe(() => journeyRepo.upsert(j), undefined);
-    for (const f of seed.geofences) await safe(() => geofenceRepo.upsert(f), undefined);
-    for (const v of seed.vault) await safe(() => vaultRepo.upsert(v), undefined);
-    await safe(() => usageRepo.upsertMany(seed.usage), undefined);
-    await safe(() => medicalRepo.save(seed.meMemberId, seed.familyId, seed.medical), undefined);
-    for (const d of seed.drills) await safe(() => drillRepo.upsert(d), undefined);
-    for (const e of seed.haEvents) await safe(() => haRepo.upsert(e), undefined);
-    await safe(() => diagnosticsRepo.record(seed.diagnostics), undefined);
-
-    // A last-known fix so the very first trigger has coordinates to seal, without
-    // ever asking for a GNSS acquisition on the hot path.
-    const home = seed.presence[seed.meMemberId]?.location;
-    if (home) {
-      await safe(
-        () =>
-          locationRepo.append({
-            familyId: seed.familyId,
-            memberId: seed.meMemberId,
-            at: home.at,
-            lat: home.lat,
-            lon: home.lon,
-            accuracyM: home.accuracyM,
-            speed: 0,
-            heading: null,
-            batteryPct: 82,
-            incidentId: null,
-          }),
-        0,
-      );
-    }
-  };
-
-  const db = await safe(() => requireDb(), null);
-  if (db) await safe(() => db.withTransactionAsync(seedAll), undefined);
-  else await seedAll();
-}
 
 /**
  * Every read the first frame needs.
@@ -1720,8 +1635,6 @@ export function teardownStore(): void {
       /* a failing unsubscribe must not block the rest */
     }
   }
-  for (const stop of demoStops.values()) stop();
-  demoStops.clear();
   setOutboxSink(null);
   setHeartbeatSender(null);
   setWatchdogSink(null);
@@ -1941,10 +1854,6 @@ async function reactToOwnState(incident: Incident, event: IncidentEvent): Promis
     await safe(() => incidentRepo.setOutcome(incident.id, 'real', 'Duress PIN entered'), undefined);
   }
 
-  if (isTerminal(incident.state)) {
-    demoStops.get(incident.id)?.();
-    demoStops.delete(incident.id);
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2197,8 +2106,6 @@ async function reactToRemoteState(incident: Incident): Promise<void> {
     case 'IDLE':
       stopAlarm();
       void safe(() => clearIncidentNotification(incident.id), undefined);
-      demoStops.get(incident.id)?.();
-      demoStops.delete(incident.id);
       break;
     default:
       break;
@@ -2259,46 +2166,6 @@ async function markFirstNotified(incident: Incident): Promise<void> {
   const at = Date.now();
   await safe(() => incidentRepo.setFirstNotified(incident.id, at), undefined);
   putIncident({ ...incident, firstNotifiedAt: at });
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Demo responders
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Feed simulated responder traffic through EXACTLY the same path a real
- * WebSocket frame would take: state events go into the state machine, receipts
- * become log rows. Nothing downstream is special-cased, which is what makes demo
- * mode a test of the real machinery rather than a puppet show.
- */
-function startDemoResponders(incidentId: UUID): void {
-  demoStops.get(incidentId)?.();
-  const stop = simulateResponders(incidentId, (e) => {
-    void handleDemoEvent(e);
-  });
-  demoStops.set(incidentId, stop);
-}
-
-async function handleDemoEvent(e: DemoResponderEvent): Promise<void> {
-  const incident = findIncident(e.incidentId);
-  if (!incident || isTerminal(incident.state)) return;
-
-  if (!EVENT_SET.has(e.eventType)) {
-    // A receipt. It changes no state and is already "sent" by definition, so it
-    // is logged and nothing more.
-    await appendRow(incident, e.eventType, { detail: { ...e.detail, memberId: e.memberId }, at: e.atMs });
-    if (e.eventType === 'DELIVERED' && incident.firstNotifiedAt === null) {
-      await markFirstNotified(incident);
-    }
-    return;
-  }
-
-  const event = e.eventType as IncidentEvent;
-  const applied = await driveEvent(e.incidentId, event, { actorMemberId: e.memberId });
-  if (applied && event === 'CLAIM' && e.memberId) {
-    await safe(() => incidentRepo.setOwner(e.incidentId, e.memberId as UUID), undefined);
-    await refreshIncident(e.incidentId, { ownerMemberId: e.memberId, firstAckAt: Date.now() });
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

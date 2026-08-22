@@ -137,7 +137,6 @@
       "apiBase": "http://10.0.2.2:8081",
       "apiDirect": "http://10.0.2.2:8081",
       "wsBase": "ws://10.0.2.2:8082",
-      "demoMode": "true",
       "eas": {
         "projectId": "0329ef85-108d-443b-a3e1-9aeafc94e78f"
       },

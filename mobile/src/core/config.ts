@@ -14,7 +14,6 @@ type Extra = {
   apiDirect?: string;
   wsBase?: string;
   familyId?: string;
-  demoMode?: string;
 };
 
 const extra = (Constants.expoConfig?.extra ?? {}) as Extra;
@@ -40,7 +39,6 @@ const env = (name: string): string | undefined => {
 };
 
 const apiBase = env('EXPO_PUBLIC_KAVACH_API') ?? extra.apiBase ?? 'http://10.0.2.2:8081';
-const demoRaw = env('EXPO_PUBLIC_KAVACH_DEMO') ?? extra.demoMode;
 
 export const CONFIG = {
   /** Primary ingest, behind the CDN. */
@@ -50,20 +48,6 @@ export const CONFIG = {
   /** Control plane + realtime. */
   controlBase: env('EXPO_PUBLIC_KAVACH_CONTROL') ?? extra.apiBase ?? 'http://10.0.2.2:8080',
   wsBase: env('EXPO_PUBLIC_KAVACH_WS') ?? extra.wsBase ?? 'ws://10.0.2.2:8082',
-
-  /**
-   * DEMO MODE. With no backend reachable the app runs fully standalone:
-   * incidents open locally, the state machine runs, the alarm sounds, the
-   * escalation ladder advances on local timers, and simulated family responders
-   * claim. This is what makes the build testable in Expo Go with zero infra —
-   * and it is an honest implementation of the L0 floor, not a mock.
-   *
-   * It is also the single most dangerous flag in the app to ship enabled: it
-   * short-circuits roughly fifteen endpoints in net/api.ts into synthetic local
-   * responses. Opt OUT is deliberate (`!== 'false'`) so a missing value in a dev
-   * environment never silently points a test build at production.
-   */
-  demoMode: demoRaw !== 'false',
 
   /** Timing budgets from the PRD, enforced in code. */
   t2BudgetMs: 500,

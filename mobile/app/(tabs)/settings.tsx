@@ -48,7 +48,6 @@ import * as SecureStore from 'expo-secure-store';
 import { CONFIG, STORAGE_KEYS } from '../../src/core/config';
 import type { Locale, Member } from '../../src/core/types';
 import { memberRepo } from '../../src/db/repos';
-import { DEMO_CANCEL_PIN, DEMO_DURESS_PIN, isDemo } from '../../src/domain/demo';
 import { LOCALES, relativeTime, t } from '../../src/i18n';
 import { useNodes } from '../../src/state/nodeStore';
 import { useKavach } from '../../src/state/store';
@@ -182,10 +181,9 @@ export default function SettingsScreen(): ReactElement {
   const [cancelPin, setCancelPin] = useState<string>('');
   const [duressPin, setDuressPin] = useState<string>('');
   const [pinError, setPinError] = useState<string | null>(null);
-  const [pinState, setPinState] = useState<{ cancelSet: boolean; duressSet: boolean; demoDefaults: boolean }>({
+  const [pinState, setPinState] = useState<{ cancelSet: boolean; duressSet: boolean }>({
     cancelSet: false,
     duressSet: false,
-    demoDefaults: false,
   });
 
   useEffect(() => {
@@ -198,8 +196,6 @@ export default function SettingsScreen(): ReactElement {
         setPinState({
           cancelSet: c !== null && c.length > 0,
           duressSet: d !== null && d.length > 0,
-          // Only claim the demo PINs are in force if they actually are.
-          demoDefaults: isDemo() && c === DEMO_CANCEL_PIN && d === DEMO_DURESS_PIN,
         });
       } catch {
         // A phone with no keystore still runs; it simply has no PIN set.
@@ -238,7 +234,7 @@ export default function SettingsScreen(): ReactElement {
       // Rotate them inside T0 without a restart, so the very next trigger uses
       // the new numbers rather than the ones loaded at boot.
       setPins(cancelPin, duressPin);
-      setPinState({ cancelSet: true, duressSet: true, demoDefaults: false });
+      setPinState({ cancelSet: true, duressSet: true });
       // Never leave a duress PIN sitting in a field for the next person who
       // picks the phone up.
       setCancelPin('');
@@ -615,13 +611,6 @@ export default function SettingsScreen(): ReactElement {
               accessibilityLabel="Save the cancel PIN and the duress PIN"
             />
 
-            {pinState.demoDefaults ? (
-              <Text style={styles.warnLine}>
-                This build is still using the demo PINs — cancel {DEMO_CANCEL_PIN}, duress{' '}
-                {DEMO_DURESS_PIN}. They exist so the duress path can be practised before you rely on
-                it. Replace both before this phone protects anyone.
-              </Text>
-            ) : null}
           </Card>
         </Section>
 
@@ -837,7 +826,7 @@ export default function SettingsScreen(): ReactElement {
             </Text>
           </Card>
 
-          <ListItem title={CONFIG.appName} subtitle={`Version ${version}`} right={isDemo() ? <Pill label="Demo data" tone="info" /> : undefined} />
+          <ListItem title={CONFIG.appName} subtitle={`Version ${version}`} />
           <ListItem
             title="Identifiers"
             subtitle={`Family ${familyId.slice(0, 8) || 'unknown'} · device ${deviceId.slice(0, 8) || 'unknown'} · ${members.length} members · ${devices.length} devices`}

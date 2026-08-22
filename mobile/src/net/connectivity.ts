@@ -117,15 +117,7 @@ async function computeLevel(): Promise<DegradationLevel> {
    * DEMO MODE (hard rule 8). There is no /healthz to probe: the "server" is the
    * local synthetic responder in ./api.ts, which is always reachable. Probing
    * would report SMS_ONLY on a perfectly healthy phone and make the ladder lie.
-   * The OS validation bit is still honoured, so a demo build on hotel Wi-Fi still
-   * correctly shows the captive-portal degradation.
    */
-  if (CONFIG.demoMode) {
-    return state.isInternetReachable === false
-      ? DegradationLevel.SMS_ONLY
-      : DegradationLevel.FULL;
-  }
-
   const validated = state.isInternetReachable !== false;
   const probeOk = await probeHealthz(CONFIG.apiBase);
 
@@ -316,7 +308,7 @@ export async function connectivitySnapshot(): Promise<ConnectivitySnapshot> {
   } catch {
     /* reported as disconnected below */
   }
-  const probeOk = CONFIG.demoMode ? true : await probeHealthz(CONFIG.apiBase);
+  const probeOk = await probeHealthz(CONFIG.apiBase);
   return {
     level: await currentDegradation(),
     osConnected: state.isConnected === true,

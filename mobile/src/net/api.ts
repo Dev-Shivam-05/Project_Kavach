@@ -262,7 +262,6 @@ async function control<T>(path: string, opts: ControlOptions = {}): Promise<ApiR
  * call here: it never throws, and a dead network is data, not an exception.
  */
 export function controlRequest<T>(path: string, opts: ControlOptions = {}): Promise<ApiResponse<T>> {
-  if (CONFIG.demoMode) return Promise.resolve(ok(null as T, 'local', 200));
   return control<T>(path, opts);
 }
 
@@ -421,20 +420,6 @@ export interface IngestOptions {
   rebuild?: (flags: number) => SignedEnvelope | null;
 }
 
-function demoAck(signed: SignedEnvelope): IngestResult {
-  return {
-    ok: true,
-    status: 202,
-    code: null,
-    data: { incidentId: signed.incidentId, serverTsMs: Date.now(), verified: true },
-    escalate: false,
-    via: 'local',
-    message: null,
-    verified: true,
-    retriedUnverified: false,
-    retriedMinimal: false,
-  };
-}
 
 async function ingest(
   path: string,
@@ -444,7 +429,6 @@ async function ingest(
   // Hard rule 8: with no backend the app is still fully functional. The incident
   // is already committed to the local database by the caller; this acknowledges
   // it so nothing upstream waits on a server that was never meant to be running.
-  if (CONFIG.demoMode) return demoAck(signed);
 
   let retriedUnverified = false;
   let retriedMinimal = false;
@@ -534,9 +518,6 @@ export async function postClaim(
   incidentId: UUID,
   memberId: UUID,
 ): Promise<ApiResponse<ClaimAck>> {
-  if (CONFIG.demoMode) {
-    return ok({ incidentId, ownerMemberId: memberId, at: Date.now() }, 'local', 200);
-  }
   return control<ClaimAck>(`/v1/incidents/${encodeURIComponent(incidentId)}/claim`, {
     method: 'POST',
     body: { memberId },
@@ -549,9 +530,6 @@ export async function postRelease(
   incidentId: UUID,
   memberId: UUID,
 ): Promise<ApiResponse<ClaimAck>> {
-  if (CONFIG.demoMode) {
-    return ok({ incidentId, ownerMemberId: null, at: Date.now() }, 'local', 200);
-  }
   return control<ClaimAck>(`/v1/incidents/${encodeURIComponent(incidentId)}/release`, {
     method: 'POST',
     body: { memberId },
@@ -564,7 +542,6 @@ export async function postResolve(
   memberId: UUID,
   note: string | null = null,
 ): Promise<ApiResponse<{ incidentId: UUID; at: number }>> {
-  if (CONFIG.demoMode) return ok({ incidentId, at: Date.now() }, 'local', 200);
   return control(`/v1/incidents/${encodeURIComponent(incidentId)}/resolve`, {
     method: 'POST',
     body: { memberId, note },
@@ -581,7 +558,6 @@ export async function postClassify(
   outcome: IncidentOutcome,
   note: string | null = null,
 ): Promise<ApiResponse<{ incidentId: UUID; outcome: IncidentOutcome }>> {
-  if (CONFIG.demoMode) return ok({ incidentId, outcome }, 'local', 200);
   return control(`/v1/incidents/${encodeURIComponent(incidentId)}/classify`, {
     method: 'POST',
     body: { outcome, note },
@@ -599,7 +575,6 @@ export interface CheckInInput {
 
 /** "I'm fine." The cheapest, most-used write in the product. */
 export async function postCheckIn(input: CheckInInput): Promise<ApiResponse<{ at: number }>> {
-  if (CONFIG.demoMode) return ok({ at: input.at }, 'local', 200);
   return control('/v1/checkins', {
     method: 'POST',
     body: input,
@@ -626,7 +601,6 @@ export interface HeartbeatInput {
 export async function postHeartbeat(
   input: HeartbeatInput,
 ): Promise<ApiResponse<{ at: number }>> {
-  if (CONFIG.demoMode) return ok({ at: input.at }, 'local', 200);
   return control(`/v1/devices/${encodeURIComponent(input.deviceId)}/heartbeat`, {
     method: 'POST',
     body: input,
@@ -656,7 +630,6 @@ export async function putDevicePushToken(
   deviceId: UUID,
   token: string,
 ): Promise<ApiResponse<Device>> {
-  if (CONFIG.demoMode) return ok(null as unknown as Device, 'local', 200);
   return control<Device>(`/v1/devices/${encodeURIComponent(deviceId)}`, {
     method: 'PATCH',
     body: { pushTokenFcm: token },
@@ -676,7 +649,6 @@ export async function getFamily(): Promise<ApiResponse<FamilyPayload>> {
   // Demo mode owns no family data — the store seeds and holds it locally. An
   // empty, successful response means "nothing new from the server", which is
   // exactly right and leaves the local roster untouched.
-  if (CONFIG.demoMode) return ok({ members: [], devices: [] }, 'local', 200);
   return control<FamilyPayload>('/v1/family');
 }
 
@@ -700,9 +672,6 @@ export async function createFamily(
   displayName: string,
   maxMembers: number,
 ): Promise<ApiResponse<FamilyIdentity>> {
-  if (CONFIG.demoMode) {
-    return ok({ id: familyId, display_name: displayName, max_members: maxMembers }, 'local', 200);
-  }
   return control<FamilyIdentity>('/v1/family', {
     method: 'POST',
     body: { id: familyId, displayName, maxMembers },
@@ -714,7 +683,6 @@ export async function getIncidents(
   sinceHlc?: string,
   limit = 50,
 ): Promise<ApiResponse<Incident[]>> {
-  if (CONFIG.demoMode) return ok<Incident[]>([], 'local', 200);
   // An HLC is a clock reading, not personal data — safe in a query string.
   // (React Native's URLSearchParams is a partial stub; build the query by hand.)
   const parts = [`limit=${encodeURIComponent(limit)}`];
@@ -728,7 +696,6 @@ export async function getIncidents(
  * unrecoverable bug class.
  */
 export async function getPolicy(): Promise<ApiResponse<EscalationPolicy>> {
-  if (CONFIG.demoMode) return ok(DEFAULT_POLICY, 'local', 200);
   return control<EscalationPolicy>('/v1/policies/current');
 }
 
@@ -742,25 +709,6 @@ export interface ConsentInput {
 }
 
 export async function postConsent(input: ConsentInput): Promise<ApiResponse<ConsentGrant>> {
-  if (CONFIG.demoMode) {
-    return ok(
-      {
-        id: input.id,
-        familyId,
-        grantorMemberId: input.grantorMemberId,
-        granteeMemberId: input.granteeMemberId,
-        scope: input.scope,
-        purpose: input.purpose,
-        grantedAt: Date.now(),
-        expiresAt: input.expiresAt,
-        revokedAt: null,
-        grantedVia: 'self',
-        keyRotationPending: false,
-      } satisfies ConsentGrant,
-      'local',
-      201,
-    );
-  }
   return control<ConsentGrant>('/v1/consents', {
     method: 'POST',
     body: input,
@@ -773,7 +721,6 @@ export async function postConsent(input: ConsentInput): Promise<ApiResponse<Cons
  * the caller has already revoked locally before this is ever called.
  */
 export async function deleteConsent(id: UUID): Promise<ApiResponse<null>> {
-  if (CONFIG.demoMode) return ok(null, 'local', 204);
   return control<null>(`/v1/consents/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     idempotencyKey: `consent:revoke:${id}`,
@@ -781,7 +728,6 @@ export async function deleteConsent(id: UUID): Promise<ApiResponse<null>> {
 }
 
 export async function getAccessLog(limit = 100): Promise<ApiResponse<AccessLogEntry[]>> {
-  if (CONFIG.demoMode) return ok<AccessLogEntry[]>([], 'local', 200);
   return control<AccessLogEntry[]>(`/v1/consents/access-log?limit=${encodeURIComponent(limit)}`);
 }
 
@@ -792,7 +738,6 @@ export async function getAccessLog(limit = 100): Promise<ApiResponse<AccessLogEn
 export async function postFindPhone(
   targetDeviceId: UUID,
 ): Promise<ApiResponse<{ deviceId: UUID; at: number }>> {
-  if (CONFIG.demoMode) return ok({ deviceId: targetDeviceId, at: Date.now() }, 'local', 200);
   return control(`/v1/find-phone/${encodeURIComponent(targetDeviceId)}`, {
     method: 'POST',
     body: {},
@@ -802,7 +747,6 @@ export async function postFindPhone(
 
 /** F-03: audienceDeviceIds is what stops a canary waking the family at 03:00. */
 export async function postDrill(drill: DrillRun): Promise<ApiResponse<DrillRun>> {
-  if (CONFIG.demoMode) return ok(drill, 'local', 201);
   return control<DrillRun>('/v1/drills', {
     method: 'POST',
     body: drill,
@@ -816,7 +760,6 @@ export async function postDrill(drill: DrillRun): Promise<ApiResponse<DrillRun>>
  * the route it follows.
  */
 export async function postJourney(journey: Journey): Promise<ApiResponse<Journey>> {
-  if (CONFIG.demoMode) return ok(journey, 'local', 201);
   return control<Journey>('/v1/journeys', {
     method: 'POST',
     body: journey,
@@ -835,6 +778,5 @@ export interface RtTicket {
  * Sec-WebSocket-Protocol slot and never in the query string (I-6).
  */
 export async function postRtTicket(): Promise<ApiResponse<RtTicket>> {
-  if (CONFIG.demoMode) return ok({ ticket: 'demo', expiresIn: 60 }, 'local', 200);
   return control<RtTicket>('/v1/rt/ticket', { method: 'POST', body: {}, timeoutMs: 8000 });
 }

@@ -327,37 +327,6 @@ function blankSelf(id: string, placement: string, ownerName: string, ownerMember
   };
 }
 
-/**
- * A second phone the viewer can actually be exercised against with no backend
- * and no second handset (CONFIG.demoMode). Its numbers are static and plainly
- * a demonstration — it is never presented as live.
- */
-function demoPeers(now: number): NodeStatus[] {
-  return [
-    {
-      id: 'demo-node-hall',
-      placement: 'Hall, facing the main door',
-      ownerName: 'Dada',
-      ownerMemberId: null,
-      isSelf: false,
-      runtime: 'paused-family-home',
-      lastHeardAt: now - 90_000,
-      armedAt: now - 6 * 60 * 60_000,
-      lastMotionAt: now - 52 * 60_000,
-      lastMotionBlocks: 11,
-      motionEvents24h: 4,
-      framesAnalysed: 61_400,
-      thermalTier: 'nominal',
-      temperatureC: 33.4,
-      batteryPct: 96,
-      charging: true,
-      snapshotCount: 4,
-      maintenance: null,
-      disabledBy: null,
-      purgeRequestedAt: null,
-    },
-  ];
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -401,8 +370,7 @@ async function doHydrate(
 
     const now = Date.now();
     const nodes = loaded?.nodes ?? [];
-    const hasPeers = nodes.some((n) => !n.isSelf);
-    const merged = CONFIG.demoMode && !hasPeers ? [...nodes, ...demoPeers(now)] : nodes;
+    const merged = nodes;
 
     // The snapshot FILES are the source of truth for the count — the index can be
     // stale if a purge or an OS cache sweep happened while the app was closed.
