@@ -30,3 +30,6 @@ data/
 **/android/.cxx/
 **/.gradle/
 **/build/.transforms/
+
+# built APKs — never commit binaries (RISK 11)
+*.apk
