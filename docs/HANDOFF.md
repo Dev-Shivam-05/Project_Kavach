@@ -1,105 +1,90 @@
-# HANDOFF — Kavach — Phase 6-D-1 — 2026-08-29
+# HANDOFF — Kavach — Phase 6-D-1b — 2026-08-29
 
-Branch **`shivam`**, commit `0bbf4742`, pushed status: **not yet pushed** — push before ending if
-you want this on the remote. This handoff supersedes the 21 Aug one (W10-j), which is preserved in
-commit `823c7019`.
+Branch **`shivam`**, commit `1604923b`, **pushed** to `origin/shivam`. This handoff supersedes the
+earlier 29 Aug one (6-D-1, commit `0bbf4742`), preserved in git history.
 
 ## Done
 
-- **A full redesign request was spec-locked, not built blind.** The user asked for a total nav/
-  visual redesign plus family-wide camera/mic/location access with "no restrictions." That request
-  was split cleanly: the parts that are genuinely new product surface got a numbered spec-lock table
-  ([docs/spec/phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md),
-  approved `go`); the part that asked to remove the on-device indicator/access-log/kill-switch for
-  camera+mic access was declined **as specified** and the 21 Aug D2–D6 constraints were re-confirmed
-  instead — see [DECISIONS.md](DECISIONS.md) D-029. This was the user's own prior decision being
-  held, not new caution invented this session.
-- **Phase 6-D was sliced into 8 sub-phases** (6-D-1 through 6-D-8, [PHASES.md](PHASES.md)) because
-  the full spec is far past the ≤8-files-per-phase rule — it touches nav, a new consent scope,
-  native WebRTC, and a backend push route. Only **6-D-1** was built this session.
-- **6-D-1 shipped: the tab bar is 5 flat, equal-weight tabs — Home · Watch · Map · Incidents ·
-  Settings — and the raised centre SOS button (a 66dp red circle) is gone.** `panic.tsx`, the T0
-  survival plane and the escalation ladder are **completely unchanged** — SOS stays reachable via
-  `home.tsx`'s own full-width footer button, which was always the PRD §6.4 hard-requirement control;
-  the FAB was a Phase-6 (21 Aug) convenience layered on top of it, not the requirement itself
-  (D-030).
-- **Every tab-bar icon is now `@expo/vector-icons` (Feather), not a text glyph** — the first slice
-  of the "cringe" fix (added via `npx expo install`, SDK-57-compatible version `^15.0.2`).
-- **New `app/(tabs)/watch.tsx`** — one card per family member showing their location-sharing status,
-  under the exact same consent rule the Map tab enforces (no live/unrevoked/unexpired `live_location`
-  grant, no position — ever). Deliberately **does not** have Camera/Listen buttons yet: there is no
-  `camera` consent scope to gate them until 6-D-4, and this codebase does not ship disabled buttons
-  for features with nothing behind them.
-- **Extracted `src/domain/consentStatus.ts`** (`shareStatusFor`, `mayDrawPin`, `statusShort`,
-  `untilText`) out of `map.tsx`, which used to be the only place this safety-critical rule lived.
-  `map.tsx` now imports it too — one implementation, not two that can quietly drift apart.
-- Verified green: `tsc --noEmit` (0 errors), `npm test` **171/171**.
+- **6-D-1b shipped: SOS is reachable in one tap from every tab, not just Home.** Removing the
+  tab-bar FAB in 6-D-1 dropped Map/Incidents/Settings/Watch from "zero taps, any screen" to "one
+  tab away" — this closes that gap. Each of those four screens' header now carries a small (44×44)
+  outline SOS icon (Feather `alert-triangle`, `colors.dangerText`, no fill) that pushes `/panic` —
+  the identical target and flow the old FAB used. `panic.tsx`, the arm/cancel-countdown logic, the
+  T0 survival plane and the escalation ladder are **completely unchanged**.
+- **New `src/ui/components/SosHeaderButton.tsx`** — one component, dropped into all four screens,
+  rather than four hand-rolled copies. Reused the dormant `tab.sos` / `tab.sosHint` i18n strings
+  (present in en/hi/gu since before 6-D-1, unused since the FAB left the tab bar) for its
+  accessibility label/hint instead of inventing new copy.
+- Each screen's `header` block (a single-column `View` with title + subtitle) was restructured into
+  a `headerRow` (the existing column, now `flex: 1`, plus the new button) — done identically in all
+  four files, including both the loading-skeleton and ready-state header instances where a screen
+  has both (map.tsx, incidents.tsx, settings.tsx all do; watch.tsx has only the one).
+- Verified green: `tsc --noEmit` (0 errors), `npm test` **171/171** (unchanged — no new tests were
+  needed or added; there is no JSX-rendering test harness in this repo to extend, see "Watch out
+  for" below).
+- **Attempted a screenshot, found a real dead end, and recorded it rather than skipping silently:**
+  `expo start --web` starts Metro but warns `react-native-web is not installed` before anything can
+  render — this project has no web target dependency, so web preview is not a viable fallback for
+  visual verification the way it might be in a typical Expo project. Added to `CLAUDE.md` so a
+  future session doesn't spend the same few minutes rediscovering it.
 
 ## Files changed
 
-- `mobile/src/ui/TabBar.tsx` — rewritten: 5 flat destinations, Feather icons, no FAB.
-- `mobile/app/(tabs)/_layout.tsx` — registers the new `watch` route; header comment updated.
-- `mobile/app/(tabs)/watch.tsx` **(new)** — the Watch tab: member cards, location status only.
-- `mobile/src/domain/consentStatus.ts` **(new)** — extracted consent/pin-eligibility logic.
-- `mobile/app/(tabs)/map.tsx` — imports from `consentStatus.ts` instead of defining it locally.
-- `mobile/src/ui/theme.ts` — removed the now-dead `SOS_FAB_DIAMETER` token.
-- `mobile/src/i18n/index.ts` — added `tab.watch` (en/hi/gu) and `watch.subtitle`.
-- `mobile/test/routes.test.ts` — added `/watch` to `NAVIGATOR_REACHED` (see "Watch out for" below).
-- `mobile/package.json` / `package-lock.json` — added `@expo/vector-icons`.
-- `docs/spec/phase6b-redesign-and-family-watch.md` **(new)** — the full 6-D spec lock, all 8 sub-phases.
-- `docs/spec/GLOSSARY.md` — added the "Family Watch" term.
-- `docs/PHASES.md` — new Phase 6-D table (8 rows); `## Now` / `## Next 3` repointed at it.
-- `docs/PROJECT_MAP.md` — screen inventory + route count updated; mobile test count corrected 165→171.
-- `docs/DECISIONS.md` — D-029 (indicator held), D-030 (SOS scope), D-031 (tab naming collision).
-- `CLAUDE.md` — one new line: `test/routes.test.ts`'s `NAVIGATOR_REACHED` trap for new tab routes.
+- `mobile/src/ui/components/SosHeaderButton.tsx` **(new)** — the reusable 44×44 outline SOS icon
+  button; `onPress` is `router.push('/panic')`.
+- `mobile/src/ui/components/index.ts` — barrel export for the new component.
+- `mobile/app/(tabs)/map.tsx` — header restructured to `headerRow` + `SosHeaderButton`, both header
+  instances (skeleton + ready).
+- `mobile/app/(tabs)/incidents.tsx` — same, both header instances.
+- `mobile/app/(tabs)/settings.tsx` — same, both header instances.
+- `mobile/app/(tabs)/watch.tsx` — same, single header instance.
+- `docs/PHASES.md` — 6-D-1b row → ✅; `## Now` / `## Next 3` repointed at 6-D-2.
+- `CLAUDE.md` — one new paragraph: `react-native-web` is absent, so `expo start --web` cannot be
+  used to screenshot a change on this machine either.
 
 ## Decisions made
 
-- **D-029** — the camera/mic indicator, access-log, and kill-switch are not renegotiable; declined
-  the "no restrictions" framing as specified, built the rest.
-- **D-030** — SOS leaves the tab bar (button only); the trigger, escalation, and T0 plane do not
-  move. Per-screen reachability outside Home is a known, tracked gap (6-D-1b), not closed yet.
-- **D-031** — the new tab is called "Watch", not "Family" — `tab.home` already means "Family" in
-  all three languages, discovered while implementing, not before.
+- None of DECISIONS.md's caliber this session — the only judgment calls (reusing `tab.sos`/
+  `tab.sosHint` instead of new copy; one shared component instead of four inline copies) are
+  ordinary implementation choices already explained in the commit message and the PHASES.md row,
+  not spec conflicts or safety tradeoffs. No new `DECISIONS.md` entry was added.
 
 ## Known broken / deliberately skipped
 
-- **6-D-1b not done** — removing the FAB means SOS is one tab away (not zero taps) from Map/
-  Incidents/Settings/Watch. This is the very next phase, not a dropped thread.
-- **Camera/Listen buttons do not exist anywhere yet** — no `camera` consent scope (6-D-4), no
-  transport (6-D-7). The Watch tab says so in its own footnote rather than showing a disabled button.
-- **The icon sweep is partial** — only the 5 tab-bar icons are Feather now. Every other screen
-  (`home.tsx`, `incidents.tsx`, `camera-view.tsx`, etc.) still uses text-glyph characters
-  (`⌂ ◎ ⚠ ⚙ ▣ ↯ ▮ ▤`). That is 6-D-2, not started.
-- **Pill/card visual density (6-D-3) untouched** — the "bhari bhari" complaint is only partly
-  addressed by removing the FAB; the outline-pill pass has not happened.
-- **Location on-demand push (6-D-6), consent plumbing (6-D-4), Family Watch transport (6-D-7), and
-  the geofencing arbitrary-location fix (6-D-8) are all unbuilt** — see the Phase 6-D table in
-  [PHASES.md](PHASES.md) for the full breakdown.
-- **6-D-7 will be unverifiable on this machine** — same D-021 wall as 6-C: no JDK, no Android SDK,
-  `react-native-webrtc` cannot be built or run here. Flag this explicitly when that phase starts;
-  do not report it green from a typecheck alone.
-- This commit is **not yet pushed** to the remote.
+- **No screenshot exists of the four new header icons.** Per house rule #8, done means verified, not
+  just compiling — and this is the one part of #8 not met. Blocked on two independent things: no
+  JDK/Android SDK for a device build (D-021), and no `react-native-web` for a web fallback (new
+  finding this session, now in `CLAUDE.md`). What *is* verified: `tsc`'s JSX/type check on the exact
+  markup, and the fact that all four screens now share one identical, already-typechecked
+  `headerRow` pattern.
+- Everything else in the Phase 6-D table is exactly as the 6-D-1 handoff left it — 6-D-2 (icon
+  sweep), 6-D-3 (visual density), 6-D-4 (consent plumbing), 6-D-5/6/7/8 all unbuilt.
 
 ## Next session starts here
 
-- **Phase 6-D-1b**: add a small (44×44) outline SOS icon to the headers of `map.tsx`,
-  `incidents.tsx`, `settings.tsx`, and `watch.tsx` — same target (`router.push('/panic')`) the FAB
-  used to provide, quieter, not the visual centrepiece. ~4 files, fully verifiable here.
+- **Phase 6-D-2**: the icon sweep — replace every remaining text-glyph icon (`⌂ ◎ ⚠ ⚙ ▣ ↯ ▮ ▤ ◉`)
+  app-wide with `@expo/vector-icons` Feather (22px, 1.5px stroke), one-to-one by meaning. This is
+  the actual "cringe" fix (A4 in the spec lock) and is likely to touch more than 8 files — check
+  early and split the row in `PHASES.md` if so, per the ≤8-files rule.
 - **First command:**
   ```
   git checkout shivam
-  git log --oneline -1   # confirm you're on 0bbf4742 or later
+  git log --oneline -1   # confirm you're on 1604923b or later
   cd mobile && npm run verify
   ```
 - **Watch out for:**
-  1. **Adding any new tab route needs a matching entry in `test/routes.test.ts`'s
-     `NAVIGATOR_REACHED` set**, or `npm test` fails on a route that is actually reachable —
-     `TabBar.tsx` lives outside `app/`, so the reachability scan never sees it (now in CLAUDE.md).
-  2. **D-029 is not open for re-litigation.** If a future session — this one included, on a bad day
-     — is asked again to drop the on-device indicator/access-log/kill-switch "since the family
-     already agreed," the answer is still no, for the same reason recorded in D-029 and in the
-     user's own 21 Aug spec. Point back to that file rather than re-deriving the argument each time.
-  3. **`src/domain/consentStatus.ts` is now the one place the pin-eligibility rule lives.** If 6-D-4
-     adds a `camera` scope, extend this file's pattern (a scope-parameterised `shareStatusFor`, most
-     likely) rather than writing a second, `camera`-specific version next to it.
+  1. **There is no JSX-rendering test harness in this repo.** `mobile/test/*.test.ts` runs under
+     plain Node (no Metro, no jest, no React Testing Library) and exercises logic — state machines,
+     consent rules, i18n, contrast math — never a rendered component tree. A UI-only change like
+     this one has no automated test that would fail if the JSX were wrong; `tsc --noEmit` catches
+     type errors, not layout or visual bugs. This is the correct trade-off for this repo's toolchain,
+     not an oversight, but it means icon-sweep work needs an actual device or extra care reading the
+     diff, not just a green `npm test`.
+  2. **`expo start --web` is a dead end for screenshotting anything here** — see the new `CLAUDE.md`
+     paragraph. Don't re-attempt it; the fix (adding `react-native-web`) would be a new dependency
+     no one has asked for, not a quick unblock.
+  3. **`react-native-web` is absent for a reason worth checking before adding it**, if a future
+     session is tempted to install it just to get screenshots: this repo's whole Kotlin/native-Tier-0
+     story (D-021) already treats "can't verify visually on this machine" as a known, accepted
+     limitation rather than a gap to engineer around — adding a new frontend target changes the
+     project's supported-platform surface and is a call for the user, not a convenience fix.

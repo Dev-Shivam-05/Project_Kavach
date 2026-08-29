@@ -26,6 +26,13 @@ compiled here, and **no CI gate compiles it either** — the nine gates are Go, 
 Changes to the native Tier-0 plane are unverifiable from this checkout; say so rather than reporting
 Kotlin as done (D-021).
 
+**`expo start --web` is not a fallback for screenshotting UI changes either.** `react-native-web` is
+not a dependency (`npm run web` starts Metro but warns it is missing before anything renders), and
+Expo Go can't run this app regardless (D-001, custom native modules). A pure-JS/RN change with no
+native surface — like phase6-D-1b's header icon — is verified here by `tsc --noEmit` + `npm test`
+plus reading the JSX, not by a screenshot; say that explicitly rather than attempting a web preview
+that dead-ends.
+
 Windows: `go test ./...` may fail with *"An Application Control policy has blocked this file"* —
 that is the OS, not the code. Re-running sometimes clears it. **It also blocks a test that re-execs
 its own binary** (`internal/{wal,bus}`'s two-real-process tests, `fork/exec …\b001\x.test.exe`).

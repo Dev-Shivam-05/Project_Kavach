@@ -103,6 +103,11 @@ and **nothing but a fail-open Ed25519 signature** on sos-ingest (ADR-018, delibe
 | `camera-node.tsx` · `camera-view.tsx` | Turn a spare phone into a motion-stills node · kill switch |
 | `screen-time.tsx` | **Functionally inert** — hardcoded 5-app fixture, no `UsageStatsManager` bridge |
 
+★ NEW 29 Aug (6-D-1b): `map.tsx`, `incidents.tsx`, `settings.tsx` and `watch.tsx` each carry a small
+44×44 outline SOS icon in their header (`src/ui/components/SosHeaderButton.tsx`) that pushes
+`/panic` — restores the one-tap SOS reachability the tab-bar FAB used to give those four screens
+before 6-D-1 removed it. `home.tsx`'s own full-width footer button is unchanged and untouched.
+
 ## Demo-mode surface
 
 `CONFIG.demoMode` defaults **true** (`config.ts:66`, `app.json:140`) and is **not a mock layer** —
