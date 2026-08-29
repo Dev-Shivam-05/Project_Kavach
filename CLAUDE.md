@@ -47,6 +47,13 @@ to the `} from …` line and reports itself unused. That shape shipped in `test/
 and left `tsc --noEmit` red while a handoff recorded it green. Use a single-line import with the
 directive above it, and read the actual `npm run typecheck` output before claiming a gate passed.
 
+**A new tab route needs a matching entry in `test/routes.test.ts`'s `NAVIGATOR_REACHED` set, or
+`npm test` fails on a route that IS reachable.** The test scans `app/` for a literal `'/route'`
+string in some OTHER file to prove reachability, but the `<Tabs>` navigator's own destinations live
+in `src/ui/TabBar.tsx` — outside `app/`, so never scanned — and are reached by the tab bar itself,
+not a `router.push`. `tsc --noEmit` is silent about this; only the test suite catches it. Added
+`/watch` on 29 Aug (phase6-D-1); the same step is needed for every future tab.
+
 ## The conventions this codebase actually follows
 
 1. **Every file opens with a `★` header citing the requirement it implements** (`F-05`, `NFR-002`,

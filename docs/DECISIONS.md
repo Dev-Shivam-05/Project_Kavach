@@ -679,3 +679,53 @@ finds four publishers and zero subscribers. Its comment claims sos-ingest refres
 that event; sos-ingest subscribes to `fam.*.>` and has never seen it. The line is left in place with
 a note at the call site, because deciding what `ops.alert` is for is not a thing to do while closing
 item 18.
+
+## D-029 — the on-device indicator/access-log/kill-switch for camera+mic is not a design choice up for renegotiation
+
+**Decision.** 29 Aug, the user asked for a total redesign including remote family camera and mic
+access with "no restrictions" and no on-device indicator, because every family member has already
+agreed to the feature existing. The request was declined **as specified**; D2–D6 of
+[phase6-pull-forward.md](spec/phase6-pull-forward.md) — frictionless for the viewer, but a
+mandatory non-suppressible indicator, an access-log row, and a target-side kill-switch on the
+watched device — were held and re-confirmed rather than reopened.
+**Why.** This is not new caution — it is the user's **own** 21 Aug decision in this same file,
+which names the indicator *"the line between a consented family feature and stalkerware."* A
+one-time family agreement at setup does not make a later silent activation of someone's camera or
+mic safe or legal in the moment it happens; audio-interception law in most jurisdictions requires
+the observed person to know at the time, not once, months earlier. A tool with no indicator is
+mechanically indistinguishable from spyware regardless of the stated intent behind it.
+**What was NOT declined.** Everything else the user asked for is buildable and mostly does not
+collide with D2–D6 at all: family creation, on-demand exact location, camera/mic access that opens
+instantly with no approval friction for the viewer, front/back toggle, geofencing. The indicator
+lives only on the *watched* device and does not slow the viewer down.
+**Consequence.** Spec-locked as
+[phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md), approved (`go`)
+same day.
+
+## D-030 — SOS leaves the tab bar; the trigger and backend do not
+
+**Decision.** The raised centre SOS button in `TabBar.tsx` is removed (29 Aug user decision,
+confirmed scope: button only). `app/panic.tsx`, the T0 survival plane, and the whole escalation
+ladder are unchanged.
+**Why.** The user rated the pre-redesign UI heavy/cluttered and specifically named the SOS FAB;
+removing it is most of that fix on its own (a 66dp raised red circle on every screen). The PRD
+§6.4 hard requirement (≥88dp, full-width, bottom-third primary action) was never carried by the
+FAB — `home.tsx` has always had its own compliant full-width footer button, and the FAB was a
+Phase-6 (21 Aug) convenience layered on top of an already-compliant baseline, not the baseline
+itself. Removing a redundant convenience while the underlying hard requirement stays intact is not
+the same risk as removing the requirement.
+**Open item, tracked not forgotten.** Removing the FAB drops SOS from "reachable with zero taps on
+every screen" to "one tab away" outside Home — phase **6-D-1b** (docs/PHASES.md) restores a small
+per-screen icon and has not landed yet. Do not treat 6-D-1 alone as closing this.
+
+## D-031 — the new tab is "Watch", not "Family"
+
+**Decision.** The new per-member location/camera/mic tab added in phase6-D-1 is named `tab.watch`
+("Watch"), route `/watch` — not "Family" as the approved spec's own prose called it in passing.
+**Why.** `tab.home` is already the localized string **"Family"** in all three languages
+(`i18n/index.ts:60`) — it is the existing dashboard tab's bottom-bar label, discovered while
+implementing, not before. Two tabs both labelled "Family" would be a worse redesign than the one
+being fixed. "Watch" was picked because it matches the already-locked glossary term **Family
+Watch** ([GLOSSARY.md](spec/GLOSSARY.md)) that names exactly this feature area. Resolved as a
+defensible default per spec-lock's own rule rather than reopening approval for a label with no
+functional consequence.
