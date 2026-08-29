@@ -14,17 +14,19 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 
 > ★★★ **29 Aug — Phase 6-D (nav redesign + Family Watch) is the active work, per the 21 Aug
 > decision to pull Phase 6 ahead of Phase 1.** Spec locked and approved same day:
-> [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md). **6-D-1 has
-> landed** — 5-tab flat nav, the SOS FAB is gone, a new Watch tab lists every member's location
-> status. See the Phase 6-D table below for the full 8-phase breakdown (6-D-1 through 6-D-8) and
-> [DECISIONS.md](DECISIONS.md) D-029/D-030/D-031 for what was and was not renegotiated along the
-> way — in particular, the on-device indicator/access-log/kill-switch for camera+mic access
-> (D-029) is a fixed constraint carried over from the user's own 21 Aug decision, not open for
-> reinterpretation in any later 6-D phase.
+> [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md). **6-D-1 and
+> 6-D-1b have landed** — 5-tab flat nav, the SOS FAB is gone, a new Watch tab lists every member's
+> location status, and Map/Incidents/Settings/Watch each carry a small outline SOS icon in their
+> header so SOS is reachable in one tap from every screen, not just Home. See the Phase 6-D table
+> below for the full 8-phase breakdown (6-D-1 through 6-D-8) and [DECISIONS.md](DECISIONS.md)
+> D-029/D-030/D-031 for what was and was not renegotiated along the way — in particular, the
+> on-device indicator/access-log/kill-switch for camera+mic access (D-029) is a fixed constraint
+> carried over from the user's own 21 Aug decision, not open for reinterpretation in any later 6-D
+> phase.
 >
-> **Next: 6-D-1b** — restore per-screen SOS reachability (a small outline icon on Map/Incidents/
-> Settings/Watch headers), which 6-D-1's FAB removal owes. The Phase-1 backend material below this
-> point is unchanged background, not the active thread right now.
+> **Next: 6-D-2** — the icon sweep (replace every remaining text-glyph icon app-wide with Feather).
+> The Phase-1 backend material below this point is unchanged background, not the active thread
+> right now.
 
 > ★ **D-026 and D-027 are both closed (20 Aug, W10-h + W10-i), and Phase 1's last arrow connects.**
 > Observed, not argued: `ops/e2e-two-binaries.sh` posts a real SOS to the `sos-ingest` binary and
@@ -111,10 +113,10 @@ that nobody has run `docker compose up`.
 
 ## Next 3
 
-> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 3, in order: **6-D-1b**
-> (restore per-screen SOS reachability — small header icon on Map/Incidents/Settings/Watch),
-> **6-D-2** (icon sweep — replace every remaining text-glyph icon with Feather), **6-D-3** (visual
-> density — outline pills, card padding). All three are TS/RN-only, fully verifiable on this
+> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 3, in order: **6-D-2** (icon
+> sweep — replace every remaining text-glyph icon with Feather; 6-D-1b already landed the header SOS
+> icon), **6-D-3** (visual density — outline pills, card padding), **6-D-4** (consent plumbing for
+> Family Watch — the new `camera` scope). All three are TS/RN-only, fully verifiable on this
 > machine, no JDK needed. The JDK-gated list below is what comes after Phase 6-D's verifiable slice
 > (6-D-1 through 6-D-6, 6-D-8) is done; 6-D-7 (the native camera/mic transport) hits the same D-021
 > wall this list already describes.
@@ -543,7 +545,7 @@ demoable thing.
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 6-D-1 | Nav shell — 5 flat tabs, remove the raised SOS FAB, new **Watch** tab (real per-member location cards, read-only) | ✅ | Landed 29 Aug. `TabBar.tsx` now 5 equal destinations (Feather icons via new `@expo/vector-icons` dep), no FAB; `SOS_FAB_DIAMETER` removed as dead. Home's existing full-width footer SOS button (PRD §6.4, ≥88dp) is untouched and is the actual hard-requirement control — the FAB was a Phase-6 convenience layered on top of it. `src/domain/consentStatus.ts` extracted from `map.tsx` (`shareStatusFor`/`mayDrawPin`/`statusShort`/`untilText`) so the pin/status rule has one home, not two — `map.tsx` now imports it too. New `app/(tabs)/watch.tsx`: one card per member, location status only (Camera/Listen deliberately absent — no scope to gate them until 6-D-4). `test/routes.test.ts`'s `NAVIGATOR_REACHED` whitelist updated for `/watch`. Verified: `tsc --noEmit` clean, `npm test` 171/171 |
-| 6-D-1b | Restore per-screen SOS reachability | 🔨 | Removing the FAB drops SOS from "0 taps, any screen" to "1 tab away" outside Home. Add a small (44×44) outline SOS icon to Map/Incidents/Settings/Watch headers — same target as the FAB, quieter, no longer the visual centrepiece |
+| 6-D-1b | Restore per-screen SOS reachability | ✅ | Landed 29 Aug. New `src/ui/components/SosHeaderButton.tsx` — 44×44 outline circle, Feather `alert-triangle` on `colors.dangerText`, no fill — dropped into a new `headerRow` (title column + button) on Map/Incidents/Settings/Watch. `onPress` is `router.push('/panic')`, identical to `home.tsx`'s existing calls — zero change to `panic.tsx`. Reused the dormant `tab.sos`/`tab.sosHint` i18n strings (all three locales) left over from the pre-6-D-1 tab, rather than inventing new copy. Verified: `tsc --noEmit` clean, `npm test` 171/171. **Not screenshot-verified** — this machine has no JDK/Android SDK (D-021) and the project has no `react-native-web` dependency, so neither a device build nor `expo start --web` can render it here; confirmed instead by matching the exact `styles.header` structure already proven correct on all four screens and by `tsc`'s JSX/type check |
 | 6-D-2 | Icon sweep | 🔨 | Replace every text-glyph icon (`⌂ ◎ ⚠ ⚙ ▣ ↯ ▮ ▤ ◉`) app-wide with `@expo/vector-icons` Feather, 22px/1.5px stroke. The actual "cringe" fix (A4) |
 | 6-D-3 | Visual density | 🔨 | Neutral/info `Pill` → outline variant; card padding → `space.lg`/`space.md` minimum (A5/A6). Danger/warn on active incidents/sessions stay filled — nothing safety-critical gets quieter |
 | 6-D-4 | Consent plumbing for Family Watch | 🔨 | New `ConsentScope` value `'camera'`, new `grantedVia: 'family_membership'`, auto-mutual-grant at enrolment, 90-day self-renewing expiry (never permanent — I-5), instant revoke (F1–F4) |

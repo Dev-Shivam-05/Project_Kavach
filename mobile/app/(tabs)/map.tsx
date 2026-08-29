@@ -55,6 +55,7 @@ import {
   Pill,
   PressableScale,
   Section,
+  SosHeaderButton,
   Toggle,
 } from '../../src/ui/components';
 import {
@@ -232,11 +233,14 @@ export default function MapScreen(): React.ReactElement {
     return (
       <SafeAreaView edges={['top']} style={styles.screen}>
         <View style={styles.content}>
-          <View style={styles.header}>
-            <Text accessibilityRole="header" style={styles.screenTitle}>
-              {t('tab.map')}
-            </Text>
-            <Text style={styles.screenSubtitle}>{subtitle}</Text>
+          <View style={styles.headerRow}>
+            <View style={styles.header}>
+              <Text accessibilityRole="header" style={styles.screenTitle}>
+                {t('tab.map')}
+              </Text>
+              <Text style={styles.screenSubtitle}>{subtitle}</Text>
+            </View>
+            <SosHeaderButton />
           </View>
           <View style={[styles.skeleton, styles.skeletonMap]} />
           <View style={styles.skeleton} />
@@ -255,14 +259,17 @@ export default function MapScreen(): React.ReactElement {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
-        <View
-          accessible
-          accessibilityRole="header"
-          accessibilityLabel={`${t('tab.map')}. ${subtitle}`}
-          style={styles.header}
-        >
-          <Text style={styles.screenTitle}>{t('tab.map')}</Text>
-          <Text style={styles.screenSubtitle}>{subtitle}</Text>
+        <View style={styles.headerRow}>
+          <View
+            accessible
+            accessibilityRole="header"
+            accessibilityLabel={`${t('tab.map')}. ${subtitle}`}
+            style={styles.header}
+          >
+            <Text style={styles.screenTitle}>{t('tab.map')}</Text>
+            <Text style={styles.screenSubtitle}>{subtitle}</Text>
+          </View>
+          <SosHeaderButton />
         </View>
 
         {members.length === 0 ? (
@@ -722,7 +729,8 @@ const styles = StyleSheet.create({
     gap: space.lg,
   },
 
-  header: { gap: space.xxs },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: space.md },
+  header: { flex: 1, gap: space.xxs },
   screenTitle: {
     color: colors.text,
     fontSize: font.h1,

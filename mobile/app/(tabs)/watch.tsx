@@ -30,7 +30,7 @@ import {
 } from '../../src/domain/consentStatus';
 import { relativeTime, t } from '../../src/i18n';
 import { useKavach } from '../../src/state/store';
-import { Card, MemberAvatar, Pill, Section } from '../../src/ui/components';
+import { Card, MemberAvatar, Pill, Section, SosHeaderButton } from '../../src/ui/components';
 import { colors, font, leading, space, tracking, weight } from '../../src/ui/theme';
 
 function useNow(intervalMs: number): number {
@@ -83,11 +83,14 @@ export default function WatchScreen(): React.ReactElement {
   return (
     <SafeAreaView edges={['top']} style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text accessibilityRole="header" style={styles.screenTitle}>
-            {t('tab.watch')}
-          </Text>
-          <Text style={styles.screenSubtitle}>{t('watch.subtitle')}</Text>
+        <View style={styles.headerRow}>
+          <View style={styles.header}>
+            <Text accessibilityRole="header" style={styles.screenTitle}>
+              {t('tab.watch')}
+            </Text>
+            <Text style={styles.screenSubtitle}>{t('watch.subtitle')}</Text>
+          </View>
+          <SosHeaderButton />
         </View>
 
         <Section title={t('tab.watch')} right={`${others.length}`}>
@@ -143,7 +146,8 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.xl, gap: space.lg },
 
-  header: { gap: space.xxs },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: space.md },
+  header: { flex: 1, gap: space.xxs },
   screenTitle: {
     color: colors.text,
     fontSize: font.h1,

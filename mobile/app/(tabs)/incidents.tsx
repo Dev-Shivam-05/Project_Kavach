@@ -44,6 +44,7 @@ import {
   Pill,
   PressableScale,
   Section,
+  SosHeaderButton,
   StateBadge,
 } from '../../src/ui/components';
 import {
@@ -397,14 +398,17 @@ export default function IncidentsScreen(): ReactElement {
 
   const headerBlock = (
     <View style={styles.headerBlock}>
-      <View
-        accessible
-        accessibilityRole="header"
-        accessibilityLabel={`Incidents. ${subtitle}`}
-        style={styles.header}
-      >
-        <Text style={styles.screenTitle}>Incidents</Text>
-        <Text style={styles.screenSubtitle}>{subtitle}</Text>
+      <View style={styles.headerRow}>
+        <View
+          accessible
+          accessibilityRole="header"
+          accessibilityLabel={`Incidents. ${subtitle}`}
+          style={styles.header}
+        >
+          <Text style={styles.screenTitle}>Incidents</Text>
+          <Text style={styles.screenSubtitle}>{subtitle}</Text>
+        </View>
+        <SosHeaderButton />
       </View>
 
       {/* ── False Positive Ledger (PRD §16.3 Dashboard 3, §18.5) ───────────── */}
@@ -585,11 +589,14 @@ export default function IncidentsScreen(): ReactElement {
     return (
       <SafeAreaView edges={['top']} style={styles.screen}>
         <View style={styles.content}>
-          <View style={styles.header}>
-            <Text accessibilityRole="header" style={styles.screenTitle}>
-              Incidents
-            </Text>
-            <Text style={styles.screenSubtitle}>{subtitle}</Text>
+          <View style={styles.headerRow}>
+            <View style={styles.header}>
+              <Text accessibilityRole="header" style={styles.screenTitle}>
+                Incidents
+              </Text>
+              <Text style={styles.screenSubtitle}>{subtitle}</Text>
+            </View>
+            <SosHeaderButton />
           </View>
           <View style={[styles.skeleton, styles.skeletonTall]} />
           <View style={styles.skeleton} />
@@ -658,7 +665,8 @@ const styles = StyleSheet.create({
   headerBlock: { gap: space.lg },
   footerBlock: { gap: space.sm, paddingTop: space.md },
 
-  header: { gap: space.xxs },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: space.md },
+  header: { flex: 1, gap: space.xxs },
   screenTitle: {
     color: colors.text,
     fontSize: font.h1,
