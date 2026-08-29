@@ -505,6 +505,33 @@ developer burnout.
 
 ---
 
+## Phase 6-D — Nav redesign + Family Watch (29 Aug user decision) 🔨
+
+Spec: [docs/spec/phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md), locked
+and approved (`go`) 29 Aug. Supersedes B1–B5 of the 21 Aug lock (the centre SOS button). Confirmed
+same day: SOS is removed from the tab bar ONLY — `panic.tsx`, the escalation ladder and the T0 plane
+are unchanged. D2–D6 of the 21 Aug lock (frictionless-for-the-viewer, non-suppressible on-device
+indicator, access-log row, target kill-switch, no recording) are fixed inputs, re-confirmed 29 Aug
+after a direct discussion of why the indicator does not become optional — not reopened by any row
+below.
+
+Sliced into phases per the ≤8-files rule; each row below touches ~8 files or fewer and produces one
+demoable thing.
+
+| # | Item | Status | Notes |
+|---|---|---|---|
+| 6-D-1 | Nav shell — 5 flat tabs, remove the raised SOS FAB, new **Watch** tab (real per-member location cards, read-only) | ✅ | Landed 29 Aug. `TabBar.tsx` now 5 equal destinations (Feather icons via new `@expo/vector-icons` dep), no FAB; `SOS_FAB_DIAMETER` removed as dead. Home's existing full-width footer SOS button (PRD §6.4, ≥88dp) is untouched and is the actual hard-requirement control — the FAB was a Phase-6 convenience layered on top of it. `src/domain/consentStatus.ts` extracted from `map.tsx` (`shareStatusFor`/`mayDrawPin`/`statusShort`/`untilText`) so the pin/status rule has one home, not two — `map.tsx` now imports it too. New `app/(tabs)/watch.tsx`: one card per member, location status only (Camera/Listen deliberately absent — no scope to gate them until 6-D-4). `test/routes.test.ts`'s `NAVIGATOR_REACHED` whitelist updated for `/watch`. Verified: `tsc --noEmit` clean, `npm test` 171/171 |
+| 6-D-1b | Restore per-screen SOS reachability | 🔨 | Removing the FAB drops SOS from "0 taps, any screen" to "1 tab away" outside Home. Add a small (44×44) outline SOS icon to Map/Incidents/Settings/Watch headers — same target as the FAB, quieter, no longer the visual centrepiece |
+| 6-D-2 | Icon sweep | 🔨 | Replace every text-glyph icon (`⌂ ◎ ⚠ ⚙ ▣ ↯ ▮ ▤ ◉`) app-wide with `@expo/vector-icons` Feather, 22px/1.5px stroke. The actual "cringe" fix (A4) |
+| 6-D-3 | Visual density | 🔨 | Neutral/info `Pill` → outline variant; card padding → `space.lg`/`space.md` minimum (A5/A6). Danger/warn on active incidents/sessions stay filled — nothing safety-critical gets quieter |
+| 6-D-4 | Consent plumbing for Family Watch | 🔨 | New `ConsentScope` value `'camera'`, new `grantedVia: 'family_membership'`, auto-mutual-grant at enrolment, 90-day self-renewing expiry (never permanent — I-5), instant revoke (F1–F4) |
+| 6-D-5 | Watch tab actions | 🔨 | Camera/Listen icon-buttons on each member card, wired to 6-D-4's grant state (B1–B3) — UI/state layer only, transport stubbed until 6-D-7 |
+| 6-D-6 | On-demand location push | 🔨 | Push-triggered one-shot `getCurrentPositionAsync`, works even if the target's app is backgrounded, 8s timeout with honest stale-fallback (C1–C3). Touches `notify` + a client push-handler + the Refresh button |
+| 6-D-7 | Family Watch transport (camera + listen, live) | ⛔ | `react-native-webrtc` (new native dep) + TURN relay (new infra) + the actual live-view/listen screens (D1–D5, E1–E4). **Unverifiable on this machine — no Android SDK/JDK (D-021)**, same limitation already recorded against 6-C. Build the TS/state/signalling layer here; the live stream itself needs a device build the user triggers |
+| 6-D-8 | Geofencing — arbitrary-location placement | 🔨 | Today's form only centres a fence on your own current position (a real gap, not a preference — `map.tsx:474`). Real fix rides 6-B's MapLibre (tap-anywhere-on-map); an interim lat/lon text-entry fallback can ship independently of 6-B |
+
+---
+
 ## Phase 6 — The 07 Aug product brief 🔨 **not started**
 
 Given on 07 Aug 17:03. A workflow was launched at 17:05:37 to scope it; **all four agents stopped by

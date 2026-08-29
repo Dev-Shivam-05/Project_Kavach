@@ -20,7 +20,7 @@ Status board: [PHASES.md](PHASES.md) · Risks: [RISK.md](RISK.md) · History: [h
 ✅ · `go test ./...` ✅ (`internal/escalation` **69 cases**, `internal/notify` **28**,
 `cmd/sos-ingest` **31**, `cmd/control-plane` **26**, `internal/store` **21**, `internal/wal` **19**,
 `internal/bus` **10**) · `archlint` ✅ (14 packages, **59** edges) · `tsc --noEmit` ✅ ·
-`npm test` **165/165** ✅ · `gen:check` in sync (14 states · 20 events · 35 transitions ·
+`npm test` **171/171** ✅ (re-verified 2026-08-29, was 165/165 at last recon) · `gen:check` in sync (14 states · 20 events · 35 transitions ·
 16 fixtures) · `schema-lint` ✅ · `protolint` ✅ · `logx` deny-list ✅ ·
 `TestLOCBudget` **995/1000**.
 `go test -race` needs `CGO_ENABLED=1` **and a C compiler**; there is no gcc on this machine, so the
@@ -69,7 +69,7 @@ and **nothing but a fail-open Ed25519 signature** on sos-ingest (ADR-018, delibe
 | backend routes | `backend/cmd/*/main.go` — one `routes()` block each |
 | backend auth | `control-plane/main.go:1826` · `realtime-gw/main.go:318` |
 | durable server state | `backend/internal/store/store.go` (JSON files, 11 tables) |
-| screens | `mobile/app/` (expo-router, 22 routes) |
+| screens | `mobile/app/` (expo-router, 23 routes) |
 | client state | `mobile/src/state/{store,nodeStore,enrolStore}.ts` |
 | T0 emergency plane | `mobile/src/t0/` |
 | native Tier-0 | `mobile/modules/kavach-t0/` (Kotlin, Android only) |
@@ -90,6 +90,7 @@ and **nothing but a fail-open Ed25519 signature** on sos-ingest (ADR-018, delibe
 | `incident/[id].tsx` | Claim / on-scene / two-party resolve, read the four clocks and the ladder |
 | `medical-card.tsx` | View/edit the 21:1 break-glass card (D-006) |
 | `(tabs)/home.tsx` | Family health dashboard + the non-dismissable "agent silent" line |
+| `(tabs)/watch.tsx` | ★ NEW 29 Aug (6-D-1) — one card per member with location status, same consent rule as Map. Camera/Listen buttons land in 6-D-4/6-D-5 |
 | `(tabs)/map.tsx` | SVG scatter of members, select, add/delete geofences — **no basemap** |
 | `(tabs)/incidents.tsx` | Browse incidents, false-positive ledger |
 | `(tabs)/consent.tsx` | Who sees me / what I see, revoke grants |

@@ -61,7 +61,7 @@ function routeFor(file: string): string {
 // /consent left the tab bar in the Phase-6 nav (Spec B1 / 6.7); it is now a
 // root-Stack route reached from Settings > Privacy, so it must prove that link
 // like any other pushed screen rather than being whitelisted as a tab.
-const NAVIGATOR_REACHED = new Set(['/', '/home', '/map', '/incidents', '/settings']);
+const NAVIGATOR_REACHED = new Set(['/', '/home', '/watch', '/map', '/incidents', '/settings']);
 
 test('★ every screen has a way in', () => {
   const orphans: string[] = [];

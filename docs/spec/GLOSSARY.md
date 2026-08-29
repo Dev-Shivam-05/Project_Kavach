@@ -48,6 +48,18 @@ per-scope keys, carrying a `scheme` byte so the MLS migration (ADR-008) stays ad
 **The sacred binary.** `sos-ingest`. Separate deploy, ≤2 deploys/year budgeted, ≤1000 lines
 enforced by CI, ≤5 direct dependencies enforced by archlint (ADR-002).
 
+**Family Watch.** Phase 6-D's name for live camera/mic access between family members
+([phase6-pull-forward.md](phase6-pull-forward.md) §D, [phase6b-redesign-and-family-watch.md](phase6b-redesign-and-family-watch.md)).
+Two capabilities, both 1↔1, both live-only (never recorded/stored): **Camera** (WebRTC video,
+front/back toggle controlled by the viewer) and **Listen** (WebRTC audio-only, 5-minute default
+session with a "+5 min" extend). Both are gated on a `camera`/`audio` `ConsentGrant` created
+automatically at enrolment (`grantedVia: 'family_membership'`, 90-day self-renewing expiry) so the
+viewer's side is frictionless — but every session is non-negotiably paired with **the indicator**:
+a banner + status dot + start-sound on the watched device that cannot be suppressed, plus one
+`AccessLogEntry` row per session. This pairing — instant for the viewer, always visible to the
+watched — is what the spec calls "the line between a consented family feature and stalkerware."
+Do not build one half without the other.
+
 **The canary.** Fires a real incident through the real handler every 15 minutes and measures all
 four clocks. It is the only page-worthy alert in the system — everything else is a ticket.
 

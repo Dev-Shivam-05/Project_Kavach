@@ -1,14 +1,13 @@
 /**
- * ★ FOUR TABS AND A CENTRE SOS BUTTON — Spec B (phase6-pull-forward) · P-018 · §6.4
+ * ★ FIVE FLAT TABS — Spec A (phase6b-redesign-and-family-watch, 29 Aug)
  *
- * The visible bar is `src/ui/TabBar` — a custom `tabBar`, because a raised 66 dp
- * SOS button cannot come from the default bar (it clips its children) and the SOS
- * surface must open as the root-Stack fullScreenModal, never as a tab route. This
- * file now only declares the four destinations and hands the navigator that bar.
+ * The visible bar is `src/ui/TabBar` — a custom `tabBar` so it can draw its own
+ * icons and the unacked-incidents badge. No tab is raised or otherwise weighted
+ * above the others; the SOS button that used to sit here is gone (see TabBar's
+ * own header for where it went).
  *
- * Consent moved OUT of the tab bar (Spec B1 / 6.7): five tabs plus a centre button
- * is a crowded thumb target, and Consent is reached from Settings › Privacy now.
- * It is a root-Stack route (app/consent.tsx), registered in app/_layout.tsx.
+ * Consent is reached from Settings › Privacy (Spec B1/6.7, 21 Aug) — it is a
+ * root-Stack route (app/consent.tsx), registered in app/_layout.tsx.
  */
 import { Tabs } from 'expo-router/js-tabs';
 
@@ -35,6 +34,7 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="home" options={{ title: t('tab.home') }} />
+      <Tabs.Screen name="watch" options={{ title: t('tab.watch') }} />
       <Tabs.Screen name="map" options={{ title: t('tab.map') }} />
       <Tabs.Screen name="incidents" options={{ title: t('tab.incidents') }} />
       <Tabs.Screen name="settings" options={{ title: t('tab.settings') }} />

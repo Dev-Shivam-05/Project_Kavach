@@ -1,51 +1,46 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * THE TAB BAR — four destinations and the centre SOS button that is not one.
- * ★ Spec B (phase6-pull-forward) · P-018 · PRD §6.4
+ * THE TAB BAR — five flat, equal-weight destinations.
+ * ★ Spec A/B (phase6b-redesign-and-family-watch, 29 Aug) · P-018
  *
- * A raised 66 dp SOS button cannot come from the default bottom bar: that bar has
- * a fixed height and clips its children, and the SOS surface has to open as the
- * root-Stack fullScreenModal (app/panic.tsx), never as a tab route that would
- * render inside the navigator and lose the lock. So this is a custom `tabBar`:
- * four labelled destinations, and between the middle two a red circle lifted above
- * the bar that pushes /panic — the identical call every other SOS entry point in
- * the app already makes (home.tsx). Nothing about the panic flow changes here.
+ * The raised centre SOS button from the 21 Aug spec is gone (A1/A3, superseding
+ * B1–B5 of phase6-pull-forward): a 66 dp red circle dominating every screen was
+ * the single biggest contributor to the "bhari bhari" (visually heavy) complaint
+ * that drove this redesign. SOS is not removed from the product — `app/panic.tsx`
+ * and everything under it are untouched — it moves to a small outline icon on
+ * each screen's own header (6-D-1b) plus the full-width footer button `home.tsx`
+ * already carries, which is the PRD §6.4 hard requirement (≥88dp, bottom third)
+ * this bar's old FAB was always redundant with, not a replacement for.
  *
- * ★ GLYPH AND LABEL, ALWAYS (P-018). Every destination and the SOS button carries
- * a word under its glyph. The active destination turns the brand teal (A2); the
- * SOS button stays alarm red so it is the one loud control on the surface, and
- * colour is never the only thing that separates two states.
+ * ★ GLYPH AND LABEL, ALWAYS (P-018). Every destination carries a word under its
+ * icon. The active destination turns the brand teal (A2); colour is never the
+ * only thing that separates two states.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
+import { Feather } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { t } from '../i18n';
-import {
-  colors,
-  font,
-  MIN_TOUCH_TARGET,
-  shadow,
-  SOS_FAB_DIAMETER,
-  space,
-  tracking,
-  weight,
-} from './theme';
+import { colors, font, MIN_TOUCH_TARGET, space, tracking, weight } from './theme';
 
-/** The four tab destinations, in bar order. The SOS button is rendered between
- *  the second and third and is deliberately NOT one of these — it is a Stack
- *  modal, not a tab route. */
-type Dest = { href: '/home' | '/map' | '/incidents' | '/settings'; glyph: string; label: string };
+type Dest = {
+  href: '/home' | '/watch' | '/map' | '/incidents' | '/settings';
+  icon: keyof typeof Feather.glyphMap;
+  label: string;
+};
 
 const DESTS: readonly Dest[] = [
-  { href: '/home', glyph: '⌂', label: t('tab.home') },
-  { href: '/map', glyph: '◎', label: t('tab.map') },
-  { href: '/incidents', glyph: '⚠', label: t('tab.incidents') },
-  { href: '/settings', glyph: '⚙', label: t('tab.settings') },
+  { href: '/home', icon: 'home', label: t('tab.home') },
+  { href: '/watch', icon: 'users', label: t('tab.watch') },
+  { href: '/map', icon: 'map-pin', label: t('tab.map') },
+  { href: '/incidents', icon: 'alert-triangle', label: t('tab.incidents') },
+  { href: '/settings', icon: 'settings', label: t('tab.settings') },
 ];
 
-const BAR_HEIGHT = 60;
+const BAR_HEIGHT = 56;
+const ICON_SIZE = 22;
 
 export function TabBar({ unacked }: { unacked: number }) {
   const insets = useSafeAreaInsets();
@@ -67,9 +62,7 @@ export function TabBar({ unacked }: { unacked: number }) {
         hitSlop={8}
       >
         <View>
-          <Text allowFontScaling={false} style={[styles.glyph, { color: tint }]}>
-            {d.glyph}
-          </Text>
+          <Feather name={d.icon} size={ICON_SIZE} color={tint} />
           {badge ? (
             <View style={styles.badge}>
               <Text allowFontScaling={false} style={styles.badgeText}>
@@ -91,29 +84,9 @@ export function TabBar({ unacked }: { unacked: number }) {
 
   return (
     <View style={[styles.bar, { height: BAR_HEIGHT + insets.bottom, paddingBottom: insets.bottom }]}>
-      <Destination d={DESTS[0]} />
-      <Destination d={DESTS[1]} />
-
-      <View style={styles.fabSlot}>
-        <Pressable
-          style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
-          onPress={() => router.push('/panic')}
-          accessibilityRole="button"
-          accessibilityLabel={t('tab.sos')}
-          accessibilityHint={t('tab.sosHint')}
-          hitSlop={10}
-        >
-          <Text allowFontScaling={false} style={styles.fabGlyph}>
-            ◉
-          </Text>
-        </Pressable>
-        <Text allowFontScaling={false} style={styles.fabLabel}>
-          {t('tab.sos')}
-        </Text>
-      </View>
-
-      <Destination d={DESTS[2]} />
-      <Destination d={DESTS[3]} />
+      {DESTS.map((d) => (
+        <Destination key={d.href} d={d} />
+      ))}
     </View>
   );
 }
@@ -124,8 +97,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgElevated,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    // The FAB is lifted above the top edge; the bar must not clip it.
-    overflow: 'visible',
     paddingTop: space.sm,
   },
   tab: {
@@ -135,7 +106,6 @@ const styles = StyleSheet.create({
     gap: 2,
     minHeight: MIN_TOUCH_TARGET,
   },
-  glyph: { fontSize: 22, textAlign: 'center', includeFontPadding: false },
   label: { fontSize: font.tiny, letterSpacing: tracking.tiny },
   badge: {
     position: 'absolute',
@@ -150,26 +120,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   badgeText: { color: colors.white, fontSize: 10, fontWeight: weight.bold },
-  fabSlot: { flex: 1, alignItems: 'center' },
-  fab: {
-    width: SOS_FAB_DIAMETER,
-    height: SOS_FAB_DIAMETER,
-    borderRadius: SOS_FAB_DIAMETER / 2,
-    marginTop: -(SOS_FAB_DIAMETER * 0.42),
-    backgroundColor: colors.danger,
-    borderWidth: 3,
-    borderColor: colors.bg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadow.raised,
-  },
-  fabPressed: { opacity: 0.85 },
-  fabGlyph: { fontSize: 26, color: colors.white, fontWeight: weight.heavy },
-  fabLabel: {
-    marginTop: 2,
-    fontSize: font.tiny,
-    color: colors.dangerText,
-    fontWeight: weight.bold,
-    letterSpacing: tracking.caps,
-  },
 });

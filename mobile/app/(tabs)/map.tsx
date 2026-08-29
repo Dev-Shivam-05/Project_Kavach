@@ -35,14 +35,14 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type {
-  ConsentGrant,
-  Device,
-  Geofence,
-  Member,
-  MemberPresence,
-  UUID,
-} from '../../src/core/types';
+import type { Device, Geofence, Member, MemberPresence, UUID } from '../../src/core/types';
+import {
+  mayDrawPin,
+  shareStatusFor,
+  statusShort,
+  untilText,
+  type ShareStatus,
+} from '../../src/domain/consentStatus';
 import { relativeTime, t } from '../../src/i18n';
 import { useKavach } from '../../src/state/store';
 import {
@@ -74,60 +74,6 @@ const RADIUS_CHOICES = [100, 150, 250, 500] as const;
 // ═══════════════════════════════════════════════════════════════════════════════
 // Sharing status — the only thing that decides whether a pin may be drawn
 // ═══════════════════════════════════════════════════════════════════════════════
-
-type ShareStatus =
-  | { kind: 'self' }
-  | { kind: 'paused' }
-  | { kind: 'granted'; grant: ConsentGrant }
-  | { kind: 'revoked'; grant: ConsentGrant }
-  | { kind: 'expired'; grant: ConsentGrant }
-  | { kind: 'none' };
-
-/**
- * P-066 is checked BEFORE the grant: when someone has paused monitoring, that is
- * the true and complete reason there is no position, and reporting a grant state
- * instead would blame the consent system for a choice the person made.
- */
-function shareStatusFor(
-  member: Member,
-  meId: UUID | null,
-  presence: MemberPresence | undefined,
-  grants: ConsentGrant[],
-  now: number,
-): ShareStatus {
-  if (meId !== null && member.id === meId) return { kind: 'self' };
-  if (presence && presence.monitoringPaused) return { kind: 'paused' };
-
-  const relevant = grants
-    .filter(
-      (g) =>
-        g.grantorMemberId === member.id &&
-        g.granteeMemberId === meId &&
-        g.scope === 'live_location',
-    )
-    .sort((a, b) => b.grantedAt - a.grantedAt);
-
-  const grant = relevant[0];
-  if (!grant) return { kind: 'none' };
-  if (grant.revokedAt !== null) return { kind: 'revoked', grant };
-  if (grant.expiresAt <= now) return { kind: 'expired', grant };
-  return { kind: 'granted', grant };
-}
-
-function mayDrawPin(status: ShareStatus): boolean {
-  return status.kind === 'self' || status.kind === 'granted';
-}
-
-/** Forward-looking counterpart to relativeTime(), for grant expiry. */
-function untilText(at: number, now: number): string {
-  const ms = at - now;
-  if (ms <= 0) return 'already';
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 60) return `in ${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `in ${hours}h`;
-  return `in ${Math.round(hours / 24)}d`;
-}
 
 function fenceTriggerText(fence: Geofence): string {
   const parts: string[] = [];
@@ -496,23 +442,6 @@ export default function MapScreen(): React.ReactElement {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Member detail — the plain statement of what we know and why
 // ═══════════════════════════════════════════════════════════════════════════════
-
-function statusShort(status: ShareStatus): string {
-  switch (status.kind) {
-    case 'self':
-      return 'this phone';
-    case 'paused':
-      return 'monitoring paused';
-    case 'granted':
-      return 'sharing location';
-    case 'revoked':
-      return 'sharing revoked';
-    case 'expired':
-      return 'grant expired';
-    default:
-      return 'location not shared';
-  }
-}
 
 interface MemberDetailProps {
   member: Member;

@@ -219,10 +219,6 @@ export const weight = {
 export const PANIC_BUTTON_HEIGHT = 96;
 export const MIN_TOUCH_TARGET = 48;
 export const CALL_112_HEIGHT = 88;
-/** ★ Spec B2 - the centre SOS button in the tab bar. Raised above the bar so a
- * thumb finds it without looking. Alarm red (never the teal accent): it is the
- * one loud control in the whole navigation surface. */
-export const SOS_FAB_DIAMETER = 66;
 
 /**
  * Elevation. Shadow alone is nearly invisible on a near-black surface, so each
