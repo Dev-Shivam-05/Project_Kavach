@@ -729,3 +729,28 @@ being fixed. "Watch" was picked because it matches the already-locked glossary t
 Watch** ([GLOSSARY.md](spec/GLOSSARY.md)) that names exactly this feature area. Resolved as a
 defensible default per spec-lock's own rule rather than reopening approval for a label with no
 functional consequence.
+
+## D-032 — the icon sweep's scope is the 9 catalogued characters, not "every glyph app-wide"
+
+**Decision.** Spec A4's binary acceptance criterion is a `grep -rn "[⌂◎⚠⚙▣↯▮▤◉]" mobile/`, and that
+is what 6-D-2 (both halves) actually targets — not the looser prose in the same row ("replace every
+text-character glyph… 1:1 by meaning… not just the tab bar"). Other Unicode glyph characters already
+in `ListItem`/`EmptyState`/`Pill` call sites (`✓ ✕ ℹ • ⚑ ▁ — ⚿ ↗ ≋ ◇ ≈ ✚ → ⏱ ✎ ⇄`, etc.) are left as
+plain text, untouched, in both 6-D-2a and 6-D-2b.
+**Why.** The two readings imply wildly different blast radii: the catalogued set matched exactly 13
+files repo-wide (verified by grep before starting); "every text-character glyph" would mean
+rewriting `ListItem`/`EmptyState`/`Pill`'s entire default-glyph systems and touching every call site
+across the app — tens of files, an undefined and much larger scope than the ≤8-files-per-phase rule
+or the "likely more than 8 files" sizing note already in PHASES.md ever anticipated. The spec file's
+own contract clause ("no implementation value may appear that is not in a table here") makes the
+literal, checkable grep the locked value; the prose is rationale for *why*, not a wider *what*.
+**Consequence for 6-D-2b and any future icon work.** Do not "clean up" the untouched glyphs while in
+these files for another reason — that is exactly the scope creep this decision heads off. If the
+broader sweep is ever wanted, it needs its own spec row and its own file-count estimate, not a
+silent expansion of A4.
+**How it was implemented.** `ListItem` and `EmptyState` gained an optional `icon?: keyof typeof
+Feather.glyphMap` prop, additive next to the existing `glyph?: string` prop — Feather renders in
+place of the text glyph when `icon` is given, same colour token, same slot width. `Pill` got a
+parallel `DEFAULT_ICON` map used only for the `warn` tone's default mark (`alert-triangle`); a
+caller-supplied `glyph` string still overrides it. This is the pattern 6-D-2b should reuse rather
+than inventing a second mechanism.

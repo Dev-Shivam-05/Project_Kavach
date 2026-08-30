@@ -135,6 +135,14 @@ trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** 
 - **Nothing throws into the UI** — every repo/network call goes through `safe()` (`store.ts:2478`).
 - Imports are **100% relative**; the `@/*` alias is configured and deliberately unused.
 - Zero `TODO`/`FIXME`/`HACK`/`@ts-ignore` in the tree. Outstanding work lives in `★` prose instead.
+- **Two icon systems coexist, deliberately.** Most glyphs are still plain BMP text characters
+  (`ListItem`/`EmptyState`/`Pill`'s `glyph?: string` prop, "no emoji font guaranteed" — pre-dates
+  6-D). Since 6-D-1, `@expo/vector-icons` Feather is also in use (`TabBar.tsx`, `SosHeaderButton.tsx`,
+  and now an optional `icon?: keyof typeof Feather.glyphMap` prop on `ListItem`/`EmptyState`, plus a
+  `DEFAULT_ICON` map on `Pill` for the `warn` tone — 6-D-2a). `icon` always wins over `glyph` when
+  both are given, and always uses the same colour token the text glyph would have. The icon sweep
+  (6-D-2a/b) only replaces the 9 characters `⌂ ◎ ⚠ ⚙ ▣ ↯ ▮ ▤ ◉` — see D-032 — not every glyph in the
+  app, so both systems are expected to coexist for a while yet.
 
 ## Danger zones
 
