@@ -1,8 +1,7 @@
 # HANDOFF — Kavach — Phase 6-D-2b — 2026-08-30
 
-Branch **`shivam`**, uncommitted at handoff time (see "Next session starts here" for the commit this
-handoff assumes gets made). This handoff supersedes the 30 Aug 6-D-2a one (commit `7f2b5866`),
-preserved in git history.
+Branch **`shivam`**, commit `813f4aa3`, **pushed** to `origin/shivam`. This handoff supersedes the
+30 Aug 6-D-2a one (commit `7f2b5866`), preserved in git history.
 
 ## Done
 
@@ -88,9 +87,6 @@ preserved in git history.
   precedent). `panic.tsx` and `incident/[id].tsx` — the two safety-critical files in this batch — got
   the closest reading: every change there is a leaf-level glyph→icon swap with zero logic touched
   (no state, no prop threading beyond the existing `colour`/`tone` variables already in scope).
-- **Uncommitted at handoff** — all 9 files above are modified but not yet committed on `shivam`. See
-  "Next session starts here" for the exact commit command; this was deliberately left for the user's
-  own review pass rather than auto-committed mid-handoff.
 
 ## Next session starts here
 
@@ -101,11 +97,8 @@ preserved in git history.
 - **First command:**
   ```
   git checkout shivam
-  git status                       # confirm the 9 files above are what's pending
-  git add -A
-  git commit -m "mobile(ui): icon sweep part 2 -- remaining 8 screens + Pill icon prop (phase6-D-2b)"
-  git push
-  cd mobile && grep -rn "[⌂◎⚠⚙▣↯▮▤◉]" .   # confirm it now returns nothing
+  git log --oneline -1              # confirm you're on 813f4aa3 or later
+  cd mobile && grep -rn "[⌂◎⚠⚙▣↯▮▤◉]" .   # confirm it still returns nothing
   npm run verify
   ```
 - **Watch out for:**
