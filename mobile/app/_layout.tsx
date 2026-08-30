@@ -19,6 +19,7 @@
  *     render-time throw and a white screen with no panic button on it.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
+import { Feather } from '@expo/vector-icons';
 import { useContext, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Stack, router, usePathname, type ErrorBoundaryProps } from 'expo-router';
@@ -147,7 +148,7 @@ export default function RootLayout() {
           <Stack.Screen name="vault" options={{ title: 'Documents' }} />
           <Stack.Screen name="screen-time" options={{ title: 'Screen time' }} />
 
-          {/* ⚠ journeys and drills still draw two headers. They render their own
+          {/* NOTE: journeys and drills still draw two headers. They render their own
               but apply NO top inset, so removing the native bar here would push
               their titles under the status bar. The line to delete is this one —
               once each screen adds `insets.top` it joins the block above. */}
@@ -357,9 +358,11 @@ function GlobalBars() {
           accessibilityLabel={`${DEGRADATION_LABELS[degradation]}. ${degradedDetail(degradation)} ${t('diag.run')}`}
           style={({ pressed }) => [styles.degradedBar, pressed ? styles.pressed : null]}
         >
-          <Text style={styles.warnGlyph} allowFontScaling={false}>
-            ⚠
-          </Text>
+          {/* warnText, not warn: the fill token measures 2.68:1 on warnSoft and was
+              the least visible thing on this corner-of-the-eye bar; warnText is
+              7.75:1. The bar's borderBottomColor stays the fill — a 2 dp edge,
+              not an icon. */}
+          <Feather name="alert-triangle" size={font.h2} color={colors.warnText} />
           <View style={styles.barText}>
             <Text style={styles.barTitle} numberOfLines={1}>
               {DEGRADATION_LABELS[degradation]}
@@ -460,11 +463,6 @@ const styles = StyleSheet.create({
   incidentTitle: { color: colors.text, fontSize: font.body, fontWeight: weight.bold },
   incidentSub: { color: colors.text, fontSize: font.small, fontWeight: weight.semibold, marginTop: space.xxs },
 
-  // warnText, not warn: this triangle is the only glyph on a bar whose whole job
-  // is to be caught out of the corner of an eye. The fill token measures 2.68:1
-  // on warnSoft and was the least visible thing in it; warnText is 7.75:1. The
-  // bar's borderBottomColor stays the fill — that is a 2 dp edge, not text.
-  warnGlyph: { color: colors.warnText, fontSize: font.h2, fontWeight: weight.bold },
   dot: { width: 12, height: 12, borderRadius: 6 },
   chevron: { color: colors.textDim, fontSize: font.h2, fontWeight: weight.bold },
 

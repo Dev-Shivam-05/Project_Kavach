@@ -725,13 +725,13 @@ export default function SettingsScreen(): ReactElement {
             onPress={() => router.push('/medical-card')}
           />
           <ListItem
-            glyph="▤"
+            icon="archive"
             title="Vault"
             subtitle={`${vault.length} sealed ${vault.length === 1 ? 'item' : 'items'} · ${vault.filter((v) => v.quorumRequired).length} need two guardians to open`}
             onPress={() => router.push('/vault')}
           />
           <ListItem
-            glyph="◎"
+            icon="target"
             title="Drills"
             subtitle={`${drills.length} recorded · last silent canary ${relativeTime(lastCanaryAt)}`}
             onPress={() => router.push('/drills')}
@@ -779,7 +779,7 @@ export default function SettingsScreen(): ReactElement {
             they were only looking at another one.
           */}
           <ListItem
-            glyph="▣"
+            icon="camera"
             title="Family cameras"
             subtitle={
               nodeCount === 0
@@ -789,7 +789,7 @@ export default function SettingsScreen(): ReactElement {
             onPress={() => router.push('/camera-view')}
           />
           <ListItem
-            glyph="◉"
+            icon="video"
             title="Use this phone as a camera"
             subtitle="Turns THIS device into a monitoring node. It refuses a bedroom or a bathroom, and stops itself the moment anyone is home."
             onPress={() => router.push('/camera-node')}

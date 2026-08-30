@@ -11,6 +11,7 @@
  * a bespoke control; a component that forced either would push a placeholder
  * into the other half.
  */
+import { Feather } from '@expo/vector-icons';
 import { memo, type ReactNode } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
@@ -23,8 +24,10 @@ export interface EmptyStateAction {
 }
 
 export interface EmptyStateProps {
-  /** Plain BMP text — no emoji font is guaranteed on a low-end Android. */
-  glyph: string;
+  /** Plain BMP text — no emoji font is guaranteed on a low-end Android. Omit when `icon` is given. */
+  glyph?: string;
+  /** Leading Feather icon. Wins over `glyph` if both are given. */
+  icon?: keyof typeof Feather.glyphMap;
   title: string;
   body?: string;
   action?: EmptyStateAction | ReactNode;
@@ -40,18 +43,30 @@ function isActionDescriptor(a: unknown): a is EmptyStateAction {
   );
 }
 
-function EmptyStateImpl({ glyph, title, body, action, style }: EmptyStateProps) {
+function EmptyStateImpl({ glyph, icon, title, body, action, style }: EmptyStateProps) {
   return (
     <View style={[styles.wrap, style]}>
-      <Text
-        // The glyph repeats what the title says; announcing it doubles the
-        // utterance for no added information.
-        importantForAccessibility="no"
-        allowFontScaling={false}
-        style={styles.glyph}
-      >
-        {glyph}
-      </Text>
+      {icon !== undefined ? (
+        <Feather
+          name={icon}
+          size={40}
+          color={colors.textFaint}
+          // The icon repeats what the title says; announcing it doubles the
+          // utterance for no added information.
+          importantForAccessibility="no"
+          style={styles.icon}
+        />
+      ) : (
+        <Text
+          // The glyph repeats what the title says; announcing it doubles the
+          // utterance for no added information.
+          importantForAccessibility="no"
+          allowFontScaling={false}
+          style={styles.glyph}
+        >
+          {glyph}
+        </Text>
+      )}
       <Text accessibilityRole="header" style={styles.title}>
         {title}
       </Text>
@@ -82,6 +97,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
   },
   glyph: { color: colors.textFaint, fontSize: font.display, lineHeight: leading.display },
+  icon: { marginBottom: space.xxs },
   title: {
     color: colors.text,
     fontSize: font.h3,

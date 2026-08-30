@@ -24,6 +24,7 @@
  * scale, haptic — because any single one of them is exactly what an 81-year-old
  * with a numb fingertip or a muted phone misses.
  */
+import { Feather } from '@expo/vector-icons';
 import { memo, type ReactNode } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
@@ -35,6 +36,8 @@ export interface ListItemProps {
   subtitle?: string;
   /** Leading glyph. Plain BMP text — no emoji font is guaranteed. */
   glyph?: string;
+  /** Leading Feather icon. Takes the same colour/slot `glyph` would; wins if both are given. */
+  icon?: keyof typeof Feather.glyphMap;
   /** Trailing slot: a Pill, a StateBadge, a value. Strings are wrapped for RN. */
   right?: ReactNode;
   onPress?: () => void;
@@ -46,6 +49,7 @@ function ListItemImpl({
   title,
   subtitle,
   glyph,
+  icon,
   right,
   onPress,
   danger = false,
@@ -56,7 +60,11 @@ function ListItemImpl({
 
   const body = (
     <>
-      {glyph === undefined || glyph.length === 0 ? null : (
+      {icon !== undefined ? (
+        <View style={styles.iconSlot}>
+          <Feather name={icon} size={20} color={tint} />
+        </View>
+      ) : glyph === undefined || glyph.length === 0 ? null : (
         <Text
           importantForAccessibility="no"
           allowFontScaling={false}
@@ -136,6 +144,7 @@ const styles = StyleSheet.create({
   },
   rowDanger: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
   glyph: { fontSize: font.h3, lineHeight: leading.h3, width: 26, textAlign: 'center' },
+  iconSlot: { width: 26, alignItems: 'center' },
   text: { flex: 1, gap: space.xxs },
   // `leading`, not a hand-picked number: `title` wraps to two lines and
   // `subtitle` to three, and cramped wrapped copy is the exact failure the token

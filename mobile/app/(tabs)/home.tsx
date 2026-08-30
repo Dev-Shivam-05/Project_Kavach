@@ -25,6 +25,7 @@
  *   during the 364 days nothing happens.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
+import { Feather } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -125,22 +126,29 @@ function etaText(etaAt: number | null, now: number): string {
   return `${Math.abs(minutes)} min overdue`;
 }
 
-function homeEventGlyph(kind: HaSafetyEvent['kind']): string {
+/**
+ * Returns exactly one of `glyph` (a plain-text mark) or `icon` (a Feather name)
+ * to spread onto a `ListItem` — `door` is the one home-event kind whose mark was
+ * a text-character house glyph (★ Spec A4); the rest are unaffected.
+ */
+function homeEventGlyph(
+  kind: HaSafetyEvent['kind'],
+): { glyph?: string; icon?: keyof typeof Feather.glyphMap } {
   switch (kind) {
     case 'smoke':
-      return '≋';
+      return { glyph: '≋' };
     case 'gas':
-      return '◇';
+      return { glyph: '◇' };
     case 'water':
-      return '≈';
+      return { glyph: '≈' };
     case 'door':
-      return '⌂';
+      return { icon: 'home' };
     case 'lock':
-      return '⚿';
+      return { glyph: '⚿' };
     case 'motion':
-      return '↗';
+      return { glyph: '↗' };
     default:
-      return '•';
+      return { glyph: '•' };
   }
 }
 
@@ -710,14 +718,14 @@ export default function HomeScreen(): React.ReactElement {
         {/* ── today at a glance ─────────────────────────────────────────────── */}
         <Section title="Today">
           <ListItem
-            glyph="◉"
+            icon="activity"
             title="Agents reporting"
             subtitle="Phones that sent a heartbeat in the last six hours"
             right={`${agentsReporting}/${phones.length}`}
           />
           {nodes.length > 0 ? (
             <ListItem
-              glyph="▣"
+              icon="camera"
               title="Fixed nodes"
               subtitle="Old handsets repurposed as always-on eyes and relays"
               right={`${nodesOnline}/${nodes.length} online`}
@@ -751,7 +759,7 @@ export default function HomeScreen(): React.ReactElement {
             {todaysHomeEvents.map((event) => (
               <ListItem
                 key={event.id}
-                glyph={homeEventGlyph(event.kind)}
+                {...homeEventGlyph(event.kind)}
                 danger={event.severity === 'critical'}
                 title={event.suggestedActions[0] ?? event.entity}
                 subtitle={`${event.entity} · ${relativeTime(event.at)}`}

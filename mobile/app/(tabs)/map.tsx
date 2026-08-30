@@ -274,7 +274,7 @@ export default function MapScreen(): React.ReactElement {
 
         {members.length === 0 ? (
           <EmptyState
-            glyph="◎"
+            icon="users"
             title="Nobody to map"
             body="Enrol a family member and their position appears here — but only while they are sharing it with you."
           />
@@ -387,7 +387,7 @@ export default function MapScreen(): React.ReactElement {
             geofences.map((fence) => (
               <ListItem
                 key={fence.id}
-                glyph="◎"
+                icon="map-pin"
                 title={fence.label}
                 subtitle={`${fence.radiusM} m · ${fenceTriggerText(fence)}${
                   fence.memberIds.length === 0

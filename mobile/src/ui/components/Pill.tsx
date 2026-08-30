@@ -28,6 +28,7 @@
  * pills sit in gapped rows, and a wide slop lets one chip swallow presses aimed
  * at its neighbour, which is worse than a small target because it acts.
  */
+import { Feather } from '@expo/vector-icons';
 import { memo } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
@@ -54,12 +55,23 @@ const PILL_HEIGHT = 2 + 2 * space.xs + font.small + 3;
 const SLOP = { top: hitSlopFor(PILL_HEIGHT), bottom: hitSlopFor(PILL_HEIGHT), left: space.xs, right: space.xs };
 
 /** Plain BMP characters only — an emoji font is not guaranteed on a cheap Android. */
-const DEFAULT_GLYPH: Record<PillTone, string> = {
+const DEFAULT_GLYPH: Partial<Record<PillTone, string>> = {
   ok: '✓',
-  warn: '⚠',
   danger: '✕',
   info: 'ℹ',
   neutral: '•',
+};
+
+/**
+ * `warn`'s default mark is a Feather vector icon instead of a text character
+ * (★ Spec A4, phase6b-redesign-and-family-watch). `@expo/vector-icons` ships
+ * inside `expo` itself, so the "no emoji font guaranteed" constraint above does
+ * not apply to it — it is a bundled font, not a device one. The contrast rule
+ * is unchanged either way: `color` below is still sourced from `TONE_SURFACE`,
+ * never a FILL token, same as the text glyphs it sits beside.
+ */
+const DEFAULT_ICON: Partial<Record<PillTone, keyof typeof Feather.glyphMap>> = {
+  warn: 'alert-triangle',
 };
 
 /**
@@ -109,7 +121,11 @@ const TONE_BORDER: Record<PillTone, string> = {
 function PillImpl({ label, tone, glyph, style, onPress, accessibilityHint }: PillProps) {
   // An explicitly-passed empty string would silently defeat P-018, so it falls
   // back exactly like `undefined` does.
-  const mark = glyph !== undefined && glyph.length > 0 ? glyph : DEFAULT_GLYPH[tone];
+  const hasCustomGlyph = glyph !== undefined && glyph.length > 0;
+  // A caller-supplied glyph always wins as plain text; the vector default only
+  // applies when nobody overrode it.
+  const icon = hasCustomGlyph ? undefined : DEFAULT_ICON[tone];
+  const mark = hasCustomGlyph ? glyph : (DEFAULT_GLYPH[tone] ?? '');
 
   const surface = TONE_SURFACE[tone];
 
@@ -121,15 +137,26 @@ function PillImpl({ label, tone, glyph, style, onPress, accessibilityHint }: Pil
 
   const body = (
     <>
-      <Text
-        style={[styles.glyph, { color: surface.fg }]}
-        // The glyph is decoration of the label it sits beside; announcing it
-        // separately turns every status chip into two utterances.
-        importantForAccessibility="no"
-        allowFontScaling={false}
-      >
-        {mark}
-      </Text>
+      {icon !== undefined ? (
+        <Feather
+          name={icon}
+          size={font.small + 1}
+          color={surface.fg}
+          // The icon is decoration of the label it sits beside; announcing it
+          // separately turns every status chip into two utterances.
+          importantForAccessibility="no"
+        />
+      ) : (
+        <Text
+          style={[styles.glyph, { color: surface.fg }]}
+          // The glyph is decoration of the label it sits beside; announcing it
+          // separately turns every status chip into two utterances.
+          importantForAccessibility="no"
+          allowFontScaling={false}
+        >
+          {mark}
+        </Text>
+      )}
       <Text numberOfLines={1} style={styles.label}>
         {label}
       </Text>
