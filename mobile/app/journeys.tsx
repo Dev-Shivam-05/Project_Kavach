@@ -755,7 +755,7 @@ export default function JourneysScreen(): React.ReactElement {
         />
       ) : active.length === 0 ? (
         <EmptyState
-          glyph="◎"
+          icon="users"
           title="Nobody is travelling"
           body="Journeys appear here the moment one starts. An empty list is the good outcome."
         />

@@ -55,6 +55,7 @@ import { File } from 'expo-file-system';
 import * as Brightness from 'expo-brightness';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Feather } from '@expo/vector-icons';
 
 import { base64ToBytes } from '../src/core/ids';
 import {
@@ -691,7 +692,7 @@ export default function CameraNodeScreen() {
           <Card>
             <Rule glyph="●" text="It never records video. It takes a small picture a few times a second, compares it with the last one, and throws it away." />
             <Rule glyph="◼" text="It shows an unmissable red banner on this screen the whole time it is on." />
-            <Rule glyph="⌂" text="It switches itself off automatically the moment anyone in the family is detected at home." />
+            <Rule icon="home" text="It switches itself off automatically the moment anyone in the family is detected at home." />
             <Rule glyph="⚿" text="The few snapshots it keeps are encrypted with your family key and deleted after 7 days." />
             <Rule glyph="✕" text="Any family member can switch it off from their own phone, at any time, without asking you." />
           </Card>
@@ -1033,12 +1034,27 @@ function Header({ title }: { title: string }) {
   );
 }
 
-function Rule({ glyph, text }: { glyph: string; text: string }) {
+function Rule({
+  glyph,
+  icon,
+  text,
+}: {
+  glyph?: string;
+  /** Wins over `glyph` if both are given. */
+  icon?: keyof typeof Feather.glyphMap;
+  text: string;
+}) {
   return (
     <View style={styles.rule}>
-      <Text style={styles.ruleGlyph} allowFontScaling={false}>
-        {glyph}
-      </Text>
+      {icon !== undefined ? (
+        <View style={styles.ruleIconSlot}>
+          <Feather name={icon} size={font.body} color={colors.infoText} />
+        </View>
+      ) : (
+        <Text style={styles.ruleGlyph} allowFontScaling={false}>
+          {glyph}
+        </Text>
+      )}
       <Text style={styles.ruleText}>{text}</Text>
     </View>
   );
@@ -1154,6 +1170,7 @@ const styles = StyleSheet.create({
   // the bullets on the consent screen — the screen somebody reads before
   // agreeing to put a camera in their home — had effectively invisible markers.
   ruleGlyph: { color: colors.infoText, fontSize: font.body, width: 18, textAlign: 'center' },
+  ruleIconSlot: { width: 18, alignItems: 'center' },
   ruleText: { flex: 1, color: colors.text, fontSize: font.body, lineHeight: font.body + 7 },
 
   input: {

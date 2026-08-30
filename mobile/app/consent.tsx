@@ -561,7 +561,7 @@ function AccessRow({ entry, members, tag, subjectIsMe }: AccessRowProps): ReactE
 
   return (
     <ListItem
-      glyph="◉"
+      icon="eye"
       title={subjectIsMe ? t('consent.viewedBy', { name: accessor, what }) : `You viewed ${subject}'s ${what}`}
       subtitle={`${relativeTime(entry.at)} · ${tag}`}
       right={entry.grantId === null ? <Pill label="No grant" tone="warn" /> : <Pill label="Granted" tone="ok" />}

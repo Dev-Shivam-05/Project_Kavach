@@ -731,7 +731,7 @@ export default function DrillsScreen(): React.ReactElement {
           onPress={() => router.push('/vault')}
         />
         <ListItem
-          glyph="▤"
+          icon="archive"
           title="Backup restore"
           subtitle="Restore last month's backup onto a spare phone and open one document from it. A backup nobody has restored is a hope, not a backup."
         />
@@ -741,7 +741,7 @@ export default function DrillsScreen(): React.ReactElement {
           subtitle="Somebody other than the person who set this up walks the runbook start to finish, out loud, while the others listen for the step that only lives in their head."
         />
         <ListItem
-          glyph="⚠"
+          icon="alert-triangle"
           title="Node-phone battery inspection"
           subtitle={
             swellingWatch.length === 0

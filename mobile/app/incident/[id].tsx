@@ -422,7 +422,7 @@ const IdentityCard = memo(function IdentityCard({
                 : 'warn'
           }
         />
-        {incident.isDrill ? <Pill label="DRILL" tone="info" glyph="◎" /> : null}
+        {incident.isDrill ? <Pill label="DRILL" tone="info" icon="target" /> : null}
         {incident.syntheticFromSms ? <Pill label="From SMS" tone="warn" /> : null}
       </View>
 

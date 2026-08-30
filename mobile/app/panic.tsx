@@ -33,6 +33,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
+import { Feather } from '@expo/vector-icons';
 
 import { BigCoordinates, Button, Call112Button, CountdownRing } from '../src/ui/components';
 import {
@@ -203,11 +204,18 @@ function transportLine(rows: Notified[], degradation: DegradationLevel): string 
   return null;
 }
 
-/** Degradation is never colour alone (P-018): glyph + word + tone, always. */
-function degradationGlyph(level: DegradationLevel): string {
-  if (level >= DegradationLevel.FULL) return '✓';
-  if (level >= DegradationLevel.PUSH_ONLY) return 'ℹ';
-  return '⚠';
+/**
+ * Degradation is never colour alone (P-018): glyph/icon + word + tone, always.
+ * Returns exactly one of `glyph` (plain text) or `icon` (Feather) — only the
+ * worst-case mark was a catalogued text-glyph character (★ Spec A4); the other
+ * two are unaffected.
+ */
+function degradationMark(
+  level: DegradationLevel,
+): { glyph?: string; icon?: keyof typeof Feather.glyphMap } {
+  if (level >= DegradationLevel.FULL) return { glyph: '✓' };
+  if (level >= DegradationLevel.PUSH_ONLY) return { glyph: 'ℹ' };
+  return { icon: 'alert-triangle' };
 }
 
 /**
@@ -241,6 +249,7 @@ const DegradationHeader = memo(function DegradationHeader({
 }): React.ReactElement {
   const label = DEGRADATION_LABELS[level];
   const colour = degradationColour(level);
+  const mark = degradationMark(level);
   return (
     <View style={styles.header}>
       {stateLabel === null ? (
@@ -256,9 +265,13 @@ const DegradationHeader = memo(function DegradationHeader({
         accessibilityLabel={label}
         style={[styles.degrade, { borderColor: colour }]}
       >
-        <Text style={[styles.degradeGlyph, { color: colour }]} allowFontScaling={false}>
-          {degradationGlyph(level)}
-        </Text>
+        {mark.icon !== undefined ? (
+          <Feather name={mark.icon} size={font.small + 1} color={colour} />
+        ) : (
+          <Text style={[styles.degradeGlyph, { color: colour }]} allowFontScaling={false}>
+            {mark.glyph}
+          </Text>
+        )}
         <Text style={styles.degradeLabel} numberOfLines={1}>
           {label}
         </Text>
@@ -474,9 +487,13 @@ const NotifiedList = memo(function NotifiedList({
             accessibilityLabel={`${row.name}. ${row.delivered ? 'Delivered' : 'Not delivered'}. ${word}.`}
             style={styles.notifiedRow}
           >
-            <Text style={[styles.notifiedGlyph, { color: colour }]} allowFontScaling={false}>
-              {row.delivered ? '✓' : '⚠'}
-            </Text>
+            {row.delivered ? (
+              <Text style={[styles.notifiedGlyph, { color: colour }]} allowFontScaling={false}>
+                ✓
+              </Text>
+            ) : (
+              <Feather name="alert-triangle" size={font.h3} color={colour} />
+            )}
             <Text style={styles.notifiedName} numberOfLines={1}>
               {row.name}
             </Text>
@@ -798,12 +815,16 @@ export default function PanicScreen(): React.ReactElement {
           {/* Colour, glyph AND word: a failed PIN reads the same to someone who
               cannot distinguish the amber (P-018). The words never change. */}
           <View style={styles.promptRow}>
-            <Text
-              style={[styles.promptGlyph, { color: wrong ? colors.warnText : colors.textFaint }]}
-              allowFontScaling={false}
-            >
-              {wrong ? '⚠' : '•'}
-            </Text>
+            {wrong ? (
+              <Feather name="alert-triangle" size={font.small + 1} color={colors.warnText} />
+            ) : (
+              <Text
+                style={[styles.promptGlyph, { color: colors.textFaint }]}
+                allowFontScaling={false}
+              >
+                •
+              </Text>
+            )}
             <Text
               style={[styles.prompt, wrong ? styles.promptWrong : null]}
               accessibilityLiveRegion="polite"
@@ -863,9 +884,7 @@ export default function PanicScreen(): React.ReactElement {
               bold, until a claim lands. */}
           {!responding && unacked ? (
             <View style={styles.nobody} accessible accessibilityRole="alert">
-              <Text style={styles.nobodyGlyph} allowFontScaling={false}>
-                ⚠
-              </Text>
+              <Feather name="alert-triangle" size={font.h2} color={colors.dangerText} />
               <Text style={styles.nobodyText}>{t('panic.nobodyResponded')}</Text>
             </View>
           ) : null}
@@ -1117,14 +1136,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dangerSoft,
     borderRadius: radius.md,
     padding: space.md,
-  },
-  nobodyGlyph: {
-    // `danger` on `dangerSoft` is 3.05:1. The glyph is the non-colour channel
-    // this alert depends on for a colour-blind reader (P-018), so it cannot be
-    // the part that disappears.
-    color: colors.dangerText,
-    fontSize: font.h2,
-    fontWeight: weight.heavy,
   },
   nobodyText: {
     flex: 1,

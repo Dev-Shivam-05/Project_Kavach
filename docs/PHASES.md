@@ -14,23 +14,21 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 
 > ★★★ **30 Aug — Phase 6-D (nav redesign + Family Watch) is the active work, per the 21 Aug
 > decision to pull Phase 6 ahead of Phase 1.** Spec locked and approved 29 Aug:
-> [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md). **6-D-1, 6-D-1b
-> and 6-D-2a have landed** — 5-tab flat nav, the SOS FAB is gone, a new Watch tab lists every
-> member's location status, Map/Incidents/Settings/Watch each carry a small outline SOS icon in
-> their header, and `ListItem`/`EmptyState`/`Pill` plus the home/map/settings tab screens and the
-> root layout now render Feather icons instead of the 9 catalogued text-glyph characters. See the
-> Phase 6-D table below for the full 8-phase breakdown (6-D-1 through 6-D-8) and
-> [DECISIONS.md](DECISIONS.md) D-029/D-030/D-031/D-032 for what was and was not renegotiated along
-> the way — in particular, the on-device indicator/access-log/kill-switch for camera+mic access
-> (D-029) is a fixed constraint carried over from the user's own 21 Aug decision, not open for
-> reinterpretation in any later 6-D phase, and D-032 pins the icon sweep's scope to exactly those 9
-> characters, not a wider "every glyph" rewrite.
+> [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md). **6-D-1, 6-D-1b,
+> 6-D-2a and 6-D-2b have all landed** — 5-tab flat nav, the SOS FAB is gone, a new Watch tab lists
+> every member's location status, Map/Incidents/Settings/Watch each carry a small outline SOS icon in
+> their header, and **the icon sweep (spec A4) is fully closed**: `grep -rn
+> "[⌂◎⚠⚙▣↯▮▤◉]" mobile/` returns nothing anywhere in the app. See the Phase 6-D table below for the
+> full 8-phase breakdown (6-D-1 through 6-D-8) and [DECISIONS.md](DECISIONS.md)
+> D-029/D-030/D-031/D-032 for what was and was not renegotiated along the way — in particular, the
+> on-device indicator/access-log/kill-switch for camera+mic access (D-029) is a fixed constraint
+> carried over from the user's own 21 Aug decision, not open for reinterpretation in any later 6-D
+> phase.
 >
-> **Next: 6-D-2b** — the icon sweep, part 2: the remaining 8 files
-> (`panic.tsx`, `camera-view.tsx`, `incident/[id].tsx`, `consent.tsx`, `drills.tsx`, `journeys.tsx`,
-> `vault.tsx`, `camera-node.tsx`), reusing the `icon` prop / `DEFAULT_ICON` pattern 6-D-2a just
-> added rather than a new mechanism. The Phase-1 backend material below this point is unchanged
-> background, not the active thread right now.
+> **Next: 6-D-3** — visual density: neutral/info `Pill` gets an outline variant, card padding moves
+> to `space.lg`/`space.md` minimum (spec A5/A6). Danger/warn tones on active incidents/sessions stay
+> filled — nothing safety-critical gets quieter. The Phase-1 backend material below this point is
+> unchanged background, not the active thread right now.
 
 > ★ **D-026 and D-027 are both closed (20 Aug, W10-h + W10-i), and Phase 1's last arrow connects.**
 > Observed, not argued: `ops/e2e-two-binaries.sh` posts a real SOS to the `sos-ingest` binary and
@@ -117,13 +115,13 @@ that nobody has run `docker compose up`.
 
 ## Next 3
 
-> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 3, in order: **6-D-2b** (icon
-> sweep, part 2 — the remaining 8 files; 6-D-2a already landed the shared-component `icon` prop and
-> swept the tab screens + root layout), **6-D-3** (visual density — outline pills, card padding),
-> **6-D-4** (consent plumbing for Family Watch — the new `camera` scope). All three are TS/RN-only,
-> fully verifiable on this machine, no JDK needed. The JDK-gated list below is what comes after
-> Phase 6-D's verifiable slice (6-D-1 through 6-D-6, 6-D-8) is done; 6-D-7 (the native camera/mic
-> transport) hits the same D-021 wall this list already describes.
+> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 3, in order: **6-D-3** (visual
+> density — outline pills, card padding; the icon sweep 6-D-2a/2b already closed), **6-D-4** (consent
+> plumbing for Family Watch — the new `camera` scope), **6-D-5** (Watch tab Camera/Listen buttons,
+> wired to 6-D-4's grant state, transport stubbed until 6-D-7). All three are TS/RN-only, fully
+> verifiable on this machine, no JDK needed. The JDK-gated list below is what comes after Phase 6-D's
+> verifiable slice (6-D-1 through 6-D-6, 6-D-8) is done; 6-D-7 (the native camera/mic transport) hits
+> the same D-021 wall this list already describes.
 
 > ⚠ **All three need a JDK. Check `java -version` before picking one, not after.** W10-d exists
 > because that check was run first on 11 Aug; the alternative was a session of Kotlin that no gate
@@ -551,7 +549,7 @@ demoable thing.
 | 6-D-1 | Nav shell — 5 flat tabs, remove the raised SOS FAB, new **Watch** tab (real per-member location cards, read-only) | ✅ | Landed 29 Aug. `TabBar.tsx` now 5 equal destinations (Feather icons via new `@expo/vector-icons` dep), no FAB; `SOS_FAB_DIAMETER` removed as dead. Home's existing full-width footer SOS button (PRD §6.4, ≥88dp) is untouched and is the actual hard-requirement control — the FAB was a Phase-6 convenience layered on top of it. `src/domain/consentStatus.ts` extracted from `map.tsx` (`shareStatusFor`/`mayDrawPin`/`statusShort`/`untilText`) so the pin/status rule has one home, not two — `map.tsx` now imports it too. New `app/(tabs)/watch.tsx`: one card per member, location status only (Camera/Listen deliberately absent — no scope to gate them until 6-D-4). `test/routes.test.ts`'s `NAVIGATOR_REACHED` whitelist updated for `/watch`. Verified: `tsc --noEmit` clean, `npm test` 171/171 |
 | 6-D-1b | Restore per-screen SOS reachability | ✅ | Landed 29 Aug. New `src/ui/components/SosHeaderButton.tsx` — 44×44 outline circle, Feather `alert-triangle` on `colors.dangerText`, no fill — dropped into a new `headerRow` (title column + button) on Map/Incidents/Settings/Watch. `onPress` is `router.push('/panic')`, identical to `home.tsx`'s existing calls — zero change to `panic.tsx`. Reused the dormant `tab.sos`/`tab.sosHint` i18n strings (all three locales) left over from the pre-6-D-1 tab, rather than inventing new copy. Verified: `tsc --noEmit` clean, `npm test` 171/171. **Not screenshot-verified** — this machine has no JDK/Android SDK (D-021) and the project has no `react-native-web` dependency, so neither a device build nor `expo start --web` can render it here; confirmed instead by matching the exact `styles.header` structure already proven correct on all four screens and by `tsc`'s JSX/type check |
 | 6-D-2a | Icon sweep, part 1 — shared components + tab screens | ✅ | Landed 30 Aug. Split from 6-D-2 after `grep -rn "[⌂◎⚠⚙▣↯▮▤◉]" mobile/` found **13** files, over the ≤8-files rule. `ListItem` and `EmptyState` gained an optional `icon?: keyof typeof Feather.glyphMap` prop (Feather wins over `glyph` when both given, same colour token, no new abstraction beyond that one prop); `Pill`'s `warn`-tone default glyph became a `DEFAULT_ICON` entry (`alert-triangle`) alongside the untouched `DEFAULT_GLYPH` text defaults for `ok`/`danger`/`info`/`neutral` — P-018's contrast rule is unchanged, `color` still comes from `TONE_SURFACE`/`tint`, never a FILL token. `home.tsx` (`homeEventGlyph`'s `door` case, "Agents reporting", "Fixed nodes"), `map.tsx` (both `◎` rows), `settings.tsx` (Vault/Drills/Family cameras/Use this phone as a camera), `_layout.tsx` (the degraded-status-bar triangle + one doc-comment `⚠`) all clear. Only the 9 catalogued characters were touched — other glyph values already in these files (`✓ ✕ ℹ • ⚑ ▁ — ⚿ ↗ ≋ ◇ ≈`, etc.) were left as-is, out of the locked scope. Verified: `tsc --noEmit` clean, `npm test` 171/171, `npm run verify` green |
-| 6-D-2b | Icon sweep, part 2 — remaining screens | 🔨 | The other 8 files from the same grep: `panic.tsx` (4), `camera-view.tsx` (5), `incident/[id].tsx` (1), `consent.tsx` (1), `drills.tsx` (2), `journeys.tsx` (1), `vault.tsx` (1), `camera-node.tsx` (1). Same rule as 6-D-2a: only the 9 catalogued characters, reuse `ListItem`/`EmptyState`'s new `icon` prop where the glyph already flows through one of those components, otherwise a direct `Feather` swap same as `_layout.tsx`'s degraded bar |
+| 6-D-2b | Icon sweep, part 2 — remaining screens | ✅ | Landed 30 Aug. The other 8 files from the same grep: `panic.tsx` (4), `camera-view.tsx` (5), `incident/[id].tsx` (1), `consent.tsx` (1), `drills.tsx` (2), `journeys.tsx` (1), `vault.tsx` (1), `camera-node.tsx` (1) — all clean. `Pill` gained a public `icon` prop (mirrors `ListItem`/`EmptyState`) for per-occurrence overrides beyond the tone default; three mixed glyph-returning spots (`panic.tsx degradationGlyph`, its `NotifiedList` row, its PIN prompt row, `vault.tsx KIND_GLYPH`) converted only the one catalogued branch each, leaving `✓ ℹ • ✚ ☰ ▦ ⚿` etc. untouched per D-032. **`grep -rn "[⌂◎⚠⚙▣↯▮▤◉]" mobile/` now returns nothing at all — spec A4 is fully closed.** Verified: `tsc --noEmit` clean, `npm test` 171/171, `npm run verify` exit 0 |
 | 6-D-3 | Visual density | 🔨 | Neutral/info `Pill` → outline variant; card padding → `space.lg`/`space.md` minimum (A5/A6). Danger/warn on active incidents/sessions stay filled — nothing safety-critical gets quieter |
 | 6-D-4 | Consent plumbing for Family Watch | 🔨 | New `ConsentScope` value `'camera'`, new `grantedVia: 'family_membership'`, auto-mutual-grant at enrolment, 90-day self-renewing expiry (never permanent — I-5), instant revoke (F1–F4) |
 | 6-D-5 | Watch tab actions | 🔨 | Camera/Listen icon-buttons on each member card, wired to 6-D-4's grant state (B1–B3) — UI/state layer only, transport stubbed until 6-D-7 |

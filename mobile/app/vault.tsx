@@ -38,6 +38,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Feather } from '@expo/vector-icons';
 
 import type { Device, DrillRun, Member, UUID, VaultObject } from '../src/core/types';
 import {
@@ -60,13 +61,36 @@ const QUORUM_THRESHOLD = 2;
 /** A year. The prompt turns red past this — see the drill card. */
 const RECOVERY_DRILL_INTERVAL_MS = 365 * 24 * 3_600_000;
 
-const KIND_GLYPH: Record<VaultObject['kind'], string> = {
-  document: '▤',
+/** `document` is not here — see `kindMark` below (★ Spec A4). */
+const KIND_GLYPH: Partial<Record<VaultObject['kind'], string>> = {
   medical: '✚',
   identity: '☰',
   insurance: '▦',
   credential: '⚿',
 };
+
+/**
+ * Returns exactly one of `glyph` (plain text) or `icon` (Feather) per object
+ * kind — `document` was the one kind whose mark was a catalogued text-glyph
+ * character (★ Spec A4); the rest are unaffected.
+ */
+function kindMark(
+  kind: VaultObject['kind'],
+): { glyph?: string; icon?: keyof typeof Feather.glyphMap } {
+  return kind === 'document' ? { icon: 'archive' } : { glyph: KIND_GLYPH[kind] };
+}
+
+/** The `styles.glyph`-sized leading mark on a vault object card. */
+function KindGlyph({ kind }: { kind: VaultObject['kind'] }): React.ReactElement {
+  const mark = kindMark(kind);
+  return mark.icon !== undefined ? (
+    <View style={styles.glyphIconSlot}>
+      <Feather name={mark.icon} size={font.h3} color={colors.textDim} />
+    </View>
+  ) : (
+    <Text style={styles.glyph}>{mark.glyph}</Text>
+  );
+}
 
 function fileSize(bytes: number): string {
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
@@ -425,7 +449,7 @@ export default function VaultScreen(): React.ReactElement {
           quorumObjects.map((v) => (
             <Card key={v.id}>
               <View style={styles.cardHead}>
-                <Text style={styles.glyph}>{KIND_GLYPH[v.kind]}</Text>
+                <KindGlyph kind={v.kind} />
                 <View style={styles.cardHeadText}>
                   <Text style={styles.cardTitle} numberOfLines={2}>
                     {v.title}
@@ -541,7 +565,7 @@ export default function VaultScreen(): React.ReactElement {
           {ownKeyObjects.map((v) => (
             <ListItem
               key={v.id}
-              glyph={KIND_GLYPH[v.kind]}
+              {...kindMark(v.kind)}
               title={v.title}
               subtitle={`${v.kind} · ${fileSize(v.sizeBytes)} · added ${relativeTime(v.createdAt)}`}
               right={<Pill label="No quorum" tone="neutral" />}
@@ -744,6 +768,7 @@ const styles = StyleSheet.create({
   cardTitle: { flex: 1, color: colors.text, fontSize: font.h3, fontWeight: weight.bold },
   cardSub: { color: colors.textDim, fontSize: font.small },
   glyph: { color: colors.textDim, fontSize: font.h2, width: 28, textAlign: 'center' },
+  glyphIconSlot: { width: 28, alignItems: 'center' },
 
   quote: {
     color: colors.text,

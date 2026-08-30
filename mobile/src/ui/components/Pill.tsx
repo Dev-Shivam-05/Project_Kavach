@@ -43,6 +43,8 @@ export interface PillProps {
   tone: PillTone;
   /** Overrides the per-tone default. Never produces an empty glyph. */
   glyph?: string;
+  /** Overrides the per-tone default with a Feather icon. Wins over `glyph` if both are given. */
+  icon?: keyof typeof Feather.glyphMap;
   style?: StyleProp<ViewStyle>;
   /** Supplying this turns the chip into a button — with slop, scale and haptic. */
   onPress?: () => void;
@@ -118,13 +120,13 @@ const TONE_BORDER: Record<PillTone, string> = {
   neutral: colors.borderStrong,
 };
 
-function PillImpl({ label, tone, glyph, style, onPress, accessibilityHint }: PillProps) {
+function PillImpl({ label, tone, glyph, icon: customIcon, style, onPress, accessibilityHint }: PillProps) {
   // An explicitly-passed empty string would silently defeat P-018, so it falls
   // back exactly like `undefined` does.
   const hasCustomGlyph = glyph !== undefined && glyph.length > 0;
-  // A caller-supplied glyph always wins as plain text; the vector default only
-  // applies when nobody overrode it.
-  const icon = hasCustomGlyph ? undefined : DEFAULT_ICON[tone];
+  // A caller-supplied icon wins over a caller-supplied glyph, which wins over
+  // the per-tone vector default, which wins over the per-tone text default.
+  const icon = customIcon ?? (hasCustomGlyph ? undefined : DEFAULT_ICON[tone]);
   const mark = hasCustomGlyph ? glyph : (DEFAULT_GLYPH[tone] ?? '');
 
   const surface = TONE_SURFACE[tone];

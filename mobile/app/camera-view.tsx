@@ -165,7 +165,7 @@ export default function CameraViewScreen() {
         />
       ) : nodes.length === 0 ? (
         <EmptyState
-          glyph="▣"
+          icon="camera"
           title="No cameras"
           body="A spare Android phone, plugged in and pointed at a door, becomes a motion alarm for the hours the house is empty."
           action={{
@@ -174,7 +174,7 @@ export default function CameraViewScreen() {
           }}
         />
       ) : (
-        <Section title="Cameras" right={<Pill label={`${nodes.length}`} tone="neutral" glyph="▣" />}>
+        <Section title="Cameras" right={<Pill label={`${nodes.length}`} tone="neutral" icon="camera" />}>
           {nodes.map((node) => (
             <NodeCard
               key={node.id}
@@ -271,7 +271,7 @@ function NodeCard({
               : `Motion ${sinceLabel(node.lastMotionAt, now)}`
           }
           tone={node.lastMotionAt === null ? 'neutral' : 'info'}
-          glyph="↯"
+          icon="zap"
         />
         <Pill
           label={formatCelsius(node.temperatureC)}
@@ -289,9 +289,9 @@ function NodeCard({
                   ? 'warn'
                   : 'ok'
           }
-          glyph="▮"
+          icon={node.charging ? 'battery-charging' : 'battery'}
         />
-        <Pill label={`${node.snapshotCount} snapshots`} tone="neutral" glyph="▤" />
+        <Pill label={`${node.snapshotCount} snapshots`} tone="neutral" icon="image" />
       </View>
 
       {node.motionEvents24h > 0 ? (
