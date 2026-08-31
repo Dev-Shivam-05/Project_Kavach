@@ -15,19 +15,24 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 > ★★★ **31 Aug — Phase 6-D (nav redesign + Family Watch) is the active work, per the 21 Aug
 > decision to pull Phase 6 ahead of Phase 1.** Spec locked and approved 29 Aug:
 > [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md). **6-D-1, 6-D-1b,
-> 6-D-2a, 6-D-2b and 6-D-3 have all landed** — 5-tab flat nav, the SOS FAB is gone, a new Watch tab
-> lists every member's location status, Map/Incidents/Settings/Watch each carry a small outline SOS
-> icon in their header, **the icon sweep (spec A4) is fully closed**: `grep -rn
-> "[⌂◎⚠⚙▣↯▮▤◉]" mobile/` returns nothing anywhere in the app, and **visual density (A5/A6) is done**:
-> `Pill`'s `neutral`/`info` tones render outline-only, and eight standalone notice-card containers
-> carry `space.lg` padding with a `space.md` minimum row gap. See the Phase 6-D table below for the
-> full 8-phase breakdown (6-D-1 through 6-D-8) and [DECISIONS.md](DECISIONS.md)
+> 6-D-2a, 6-D-2b, 6-D-3 and 6-D-4 have all landed** — 5-tab flat nav, the SOS FAB is gone, a new Watch
+> tab lists every member's location status, Map/Incidents/Settings/Watch each carry a small outline
+> SOS icon in their header, **the icon sweep (spec A4) is fully closed**: `grep -rn
+> "[⌂◎⚠⚙▣↯▮▤◉]" mobile/` returns nothing anywhere in the app, **visual density (A5/A6) is done**:
+> `Pill`'s `neutral`/`info` tones render outline-only, eight standalone notice-card containers carry
+> `space.lg` padding with a `space.md` minimum row gap, and **consent plumbing (spec F1–F4) is done**:
+> `camera` is a real `ConsentScope` end to end (mobile types + backend `validScopes` + migration
+> comments), `family_membership`-grant build/renew/status logic exists and is tested. ⛔ **F2's
+> auto-grant-on-join is NOT wired to any call site** — there is no real "a member just joined" event
+> in this codebase yet to attach it to; see the 6-D-4 handoff for why. See the Phase 6-D table below
+> for the full 8-phase breakdown (6-D-1 through 6-D-8) and [DECISIONS.md](DECISIONS.md)
 > D-029/D-030/D-031/D-032 for what was and was not renegotiated along the way — in particular, the
 > on-device indicator/access-log/kill-switch for camera+mic access (D-029) is a fixed constraint
 > carried over from the user's own 21 Aug decision, not open for reinterpretation in any later 6-D
 > phase.
 >
-> **Next: 6-D-4** — consent plumbing for Family Watch, the new `camera` scope. The Phase-1 backend
+> **Next: 6-D-5** — Watch tab Camera/Listen buttons, wired to 6-D-4's grant state
+> (`grantStatusFor('camera'|'audio', ...)`), transport stubbed until 6-D-7. The Phase-1 backend
 > material below this point is unchanged background, not the active thread right now.
 
 > ★ **D-026 and D-027 are both closed (20 Aug, W10-h + W10-i), and Phase 1's last arrow connects.**
@@ -115,13 +120,13 @@ that nobody has run `docker compose up`.
 
 ## Next 3
 
-> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 3, in order: **6-D-4** (consent
-> plumbing for Family Watch — the new `camera` scope; 6-D-3's visual density is already closed),
-> **6-D-5** (Watch tab Camera/Listen buttons, wired to 6-D-4's grant state, transport stubbed until
-> 6-D-7), **6-D-6** (whatever the spec table names next). All are TS/RN-only, fully verifiable on this
-> machine, no JDK needed. The JDK-gated list below is what comes after Phase 6-D's verifiable slice
-> (6-D-1 through 6-D-6, 6-D-8) is done; 6-D-7 (the native camera/mic transport) hits the same D-021
-> wall this list already describes.
+> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 3, in order: **6-D-5** (Watch tab
+> Camera/Listen buttons, wired to 6-D-4's grant state via `grantStatusFor`, transport stubbed until
+> 6-D-7 — 6-D-3's visual density and 6-D-4's consent plumbing are already closed), **6-D-6** (whatever
+> the spec table names next), **6-D-7** (native WebRTC camera/mic transport — hits the D-021 wall, no
+> JDK on this machine). All but 6-D-7 are TS/RN-only, fully verifiable on this machine, no JDK needed.
+> The JDK-gated list below is what comes after Phase 6-D's verifiable slice (6-D-1 through 6-D-6,
+> 6-D-8) is done.
 
 > ⚠ **All three need a JDK. Check `java -version` before picking one, not after.** W10-d exists
 > because that check was run first on 11 Aug; the alternative was a session of Kotlin that no gate
