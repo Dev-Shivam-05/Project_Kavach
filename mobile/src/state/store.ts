@@ -79,6 +79,9 @@ import {
 import {
   generateDeviceKeypair,
   incidentContentKey,
+  locationStreamKey,
+  locationWindowId,
+  openJson,
   randomBytes,
   sealJson,
   type DeviceKeypair,
@@ -161,6 +164,7 @@ import {
   postDrill,
   postFindPhone,
   postJourney,
+  postLocationRefreshRequest,
   postRelease,
   postResolve,
   putDevicePushToken,
@@ -298,6 +302,8 @@ export interface KavachState {
   probeRespond(id: UUID, ok: boolean): Promise<void>;
   checkIn(): Promise<void>;
   findPhone(deviceId: UUID): Promise<void>;
+  /** Watch tab's Refresh button (6-D-6 · C1). Returns whether the request left this device. */
+  requestLocationRefresh(memberId: UUID): Promise<boolean>;
   grantConsent(g: {
     granteeMemberId: UUID;
     scope: ConsentScope;
@@ -620,6 +626,19 @@ export const useKavach = create<KavachState>()((set, get) => ({
     const rowId = (await safe(() => consentRepo.addLogEntry(entry), 0)) ?? 0;
     set((prev) => ({ accessLog: [{ id: rowId, ...entry }, ...prev.accessLog] }));
     void safe(() => postFindPhone(deviceId), null);
+  },
+
+  /**
+   * Watch tab's Refresh button (6-D-6 · C1). This call is the request leg
+   * only — the fix itself never travels back through it. It arrives later, if
+   * it arrives at all, as an ordinary `location.update` frame (handleWsFrame),
+   * indistinguishable from any other presence tick. The boolean this resolves
+   * to answers exactly one question — did the request leave this device — so
+   * the caller knows whether starting an 8s spinner is honest.
+   */
+  async requestLocationRefresh(memberId: UUID): Promise<boolean> {
+    const res = await safe(() => postLocationRefreshRequest(memberId), null);
+    return res?.ok === true;
   },
 
   // ── consent ─────────────────────────────────────────────────────────────────
@@ -1942,7 +1961,13 @@ async function reactToOwnState(incident: Incident, event: IncidentEvent): Promis
 // Server → store
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** Frame payloads carry only Class B/C fields; precise location never arrives here. */
+/**
+ * These typed fields are all Class B/C. `location.update`'s frame ALSO carries
+ * a `sealed` field (Class A, opaque ciphertext) — that case reads it off
+ * `frame.payload` directly with its own narrower type rather than adding it
+ * here, so this interface stays true to its name: nothing declared on it is
+ * ever plaintext precise location.
+ */
 interface FramePayload {
   incidentId?: unknown;
   event?: unknown;
@@ -2012,9 +2037,39 @@ async function handleWsFrame(frame: WsFrame): Promise<void> {
       return;
     }
 
+    // 6-D-6 · C1/C6 — the only place a location.update frame is opened.
+    // `sealed` is Class A ciphertext under the Location Stream Key (5-minute
+    // windows, crypto.locationStreamKey); memberId/deviceId/at ride in the
+    // clear because they were always Class B/C. This is what turns BOTH a
+    // push-triggered refresh AND an ordinary foregrounded watch-position tick
+    // into a pin on a family member's card — realtime-gw does not (and
+    // structurally cannot, per handleMessage's own comment) distinguish the
+    // two on the wire.
+    case 'location.update': {
+      const data = (frame.payload ?? {}) as { memberId?: unknown; sealed?: unknown; at?: unknown };
+      const memberId = asId(data.memberId);
+      const sealed = typeof data.sealed === 'string' ? data.sealed : null;
+      if (memberId === null || sealed === null || !groupSecret) return;
+      const s = useKavach.getState();
+      if (memberId === s.me?.id) return; // my own report, echoed back on the family stream
+      const at = typeof data.at === 'number' ? data.at : Date.now();
+      const fix = openJson<{ lat: number; lon: number; accuracyM: number; at: number }>(
+        locationStreamKey(groupSecret, locationWindowId(at)),
+        sealed,
+      );
+      if (!fix) return; // sealed to a window key we do not hold, or corrupt — say nothing rather than guess
+      const presence: MemberPresence = {
+        ...(s.presence[memberId] ?? emptyPresence(memberId)),
+        location: { lat: fix.lat, lon: fix.lon, accuracyM: fix.accuracyM, at: fix.at },
+        lastSeenAt: Date.now(),
+      };
+      useKavach.setState((prev) => ({ presence: { ...prev.presence, [memberId]: presence } }));
+      return;
+    }
+
     default:
-      // location.update, presence.update, device.battery and friends are LOW
-      // priority projections the presence layer owns; nothing here needs them.
+      // presence.update, device.battery and friends are LOW priority
+      // projections the presence layer owns; nothing here needs them.
       return;
   }
 }

@@ -49,6 +49,7 @@ import {
   notifyOwnershipFromPush,
 } from './notifications';
 import type { IncidentAlertFields } from './notifications';
+import { handleLocationRefreshPush } from './locationRefresh';
 import type { TriggerType, UUID } from '../core/types';
 
 /**
@@ -179,21 +180,32 @@ function payloadBag(payload: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * On Android the same task receives notification-action taps when the app is
+ * backgrounded or terminated. That is a RESPONSE, not an incoming message of
+ * either shape this file parses, and acting on it would re-alarm a family for
+ * an incident they are already answering (or re-request a fix nobody asked
+ * for a second time).
+ */
+function isActionResponse(payload: unknown): boolean {
+  return payload !== null && typeof payload === 'object' && 'actionIdentifier' in payload;
+}
+
+/**
  * ★ THE ALLOWLIST READER. ★ Five values by name, or null. Exported because the
  * decision "is this a payload we are willing to wake a family for" is the whole
  * of this module's logic and belongs under test off-device.
  */
 export function readPushFields(payload: unknown): PushIncidentFields | null {
-  // On Android the same task receives notification-action taps when the app is
-  // backgrounded or terminated. That is a RESPONSE, not an incoming alert, and
-  // presenting it again would re-alarm a family for an incident they are
-  // already answering.
-  if (payload !== null && typeof payload === 'object' && 'actionIdentifier' in payload) {
-    return null;
-  }
+  if (isActionResponse(payload)) return null;
 
   const bag = payloadBag(payload);
   if (bag === null) return null;
+  // 6-D-6 · C1: a location-refresh request is a different message shape
+  // (readLocationRefreshFields), not an incident missing its id — without this
+  // an incomplete refresh payload would silently fall through the mandatory-id
+  // check below and be dropped as a malformed incident push instead of simply
+  // not being one.
+  if (bag.type === 'location_refresh_request') return null;
 
   const incidentId = asId(bag.incidentId);
   const familyId = asId(bag.familyId);
@@ -211,6 +223,33 @@ export function readPushFields(payload: unknown): PushIncidentFields | null {
     kind: asKind(bag.kind),
     ownerShortName: asShortName(bag.ownerShortName),
   };
+}
+
+/**
+ * The 6-D-6 · C1 message shape: a discriminator, a correlation id, and the
+ * target's OWN device id — nothing else. No incident, no location, no name.
+ * `deviceId` is what lets the response leg (locationRefresh.ts) mint a
+ * realtime connect ticket without reading this device's own identity out of
+ * t0ConfigRepo first, which is a SQLite open on the headless wake path — the
+ * same trade D-020 already declined once, for locale.
+ */
+export interface LocationRefreshPushFields {
+  requestId: string;
+  deviceId: UUID;
+}
+
+/** Sibling of readPushFields, same allowlist discipline, different shape. */
+export function readLocationRefreshFields(payload: unknown): LocationRefreshPushFields | null {
+  if (isActionResponse(payload)) return null;
+
+  const bag = payloadBag(payload);
+  if (bag === null || bag.type !== 'location_refresh_request') return null;
+
+  const deviceId = asId(bag.deviceId);
+  const requestId = typeof bag.requestId === 'string' && bag.requestId.length > 0 ? bag.requestId : null;
+  if (deviceId === null || requestId === null) return null;
+
+  return { requestId, deviceId };
 }
 
 /**
@@ -257,8 +296,16 @@ TaskManager.defineTask<Notifications.NotificationTaskPayload>(
   PUSH_INCIDENT_TASK,
   async ({ data, error }) => {
     if (error) return Notifications.BackgroundNotificationTaskResult.Failed;
-    const presented = await handleIncidentPush(data);
-    return presented
+    // Android delivers every data-only FCM message to this ONE registered task
+    // regardless of app state (that is the whole reason it is defined in
+    // module scope — see the file header) — there is no second, foreground-only
+    // listener anywhere in this app. A location-refresh push therefore arrives
+    // here exactly like an incident push always has, and is routed by shape.
+    const refreshFields = readLocationRefreshFields(data);
+    const handled = refreshFields !== null
+      ? await handleLocationRefreshPush(refreshFields)
+      : await handleIncidentPush(data);
+    return handled
       ? Notifications.BackgroundNotificationTaskResult.NewData
       : Notifications.BackgroundNotificationTaskResult.NoData;
   },

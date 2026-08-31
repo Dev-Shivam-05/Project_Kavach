@@ -659,6 +659,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PATCH /v1/journeys/{id}", s.auth(s.patchJourney))
 	mux.HandleFunc("POST /v1/checkins", s.auth(s.idempotent(s.checkin)))
 	mux.HandleFunc("POST /v1/find-phone/{id}", s.auth(s.findPhone))
+	mux.HandleFunc("POST /v1/members/{id}/location-refresh", s.auth(s.requestLocationRefresh))
 
 	mux.HandleFunc("GET /v1/drills", s.auth(s.listDrills))
 	mux.HandleFunc("POST /v1/drills", s.auth(s.idempotent(s.startDrill)))
@@ -1641,6 +1642,36 @@ func (s *server) findPhone(w http.ResponseWriter, r *http.Request) {
 		"deviceId": d.ID, "requestedBy": s.memberID(r), "at": time.Now().UnixMilli(),
 	})
 	writeJSON(w, http.StatusAccepted, map[string]any{"deviceId": d.ID, "sent": true})
+}
+
+// requestLocationRefresh is 6-D-6 · spec C1: push-triggered, one-shot,
+// "regardless of whether their app is foregrounded". Unlike findPhone this
+// cannot rely on a live socket — the whole point is reaching a backgrounded
+// or closed app — so it goes through notify.RequestLocationRefresh, the FCM
+// leg, not s.publishFamily. The fix itself never comes back through this
+// endpoint or this binary: it is sealed on the target's device and reported
+// straight to realtime-gw (ADR-010 — no control-plane body carries location,
+// sealed or not; see net/api.ts's stripClassA on the mobile side).
+func (s *server) requestLocationRefresh(w http.ResponseWriter, r *http.Request) {
+	memberID := r.PathValue("id")
+	// The member's OWN family, not s.familyID(r) — same reasoning findPhone
+	// applies to a device's family: the resource being acted on is the
+	// authority, not whatever header the caller happened to send.
+	member, ok := s.st.Member(memberID)
+	if !ok {
+		problem(w, http.StatusNotFound, "KV-1013", "unknown member", memberID)
+		return
+	}
+	requestID, err := s.notify.RequestLocationRefresh(r.Context(), member.FamilyID, memberID)
+	if err != nil {
+		// Honest, not a 500: the mechanism ran, it just could not reach a phone —
+		// the same KV-NOTOKEN/KV-NOPUSHCFG reality every other push leg in this
+		// deployment reports (W10). The caller's UI falls back to the last-known
+		// fix's honest age either way (C2).
+		problem(w, http.StatusServiceUnavailable, "KV-5001", err.Error(), memberID)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"requestId": requestID, "memberId": memberID})
 }
 
 // ── Drills ───────────────────────────────────────────────────────────────────

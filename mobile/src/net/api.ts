@@ -780,3 +780,62 @@ export interface RtTicket {
 export async function postRtTicket(): Promise<ApiResponse<RtTicket>> {
   return control<RtTicket>('/v1/rt/ticket', { method: 'POST', body: {}, timeoutMs: 8000 });
 }
+
+// ── on-demand location refresh (6-D-6 · spec C1) ────────────────────────────
+
+export interface LocationRefreshRequest {
+  requestId: string;
+  memberId: UUID;
+}
+
+/**
+ * Ask a member's device(s) for a fresh fix — the Watch tab's Refresh button.
+ * Control-plane only sends the push; the fix itself never travels through
+ * this endpoint or this response (see postLocationReport).
+ */
+export async function postLocationRefreshRequest(
+  memberId: UUID,
+): Promise<ApiResponse<LocationRefreshRequest>> {
+  return control<LocationRefreshRequest>(`/v1/members/${memberId}/location-refresh`, {
+    method: 'POST',
+    body: {},
+    timeoutMs: 8000,
+  });
+}
+
+function realtimeHttpBase(): string {
+  return CONFIG.wsBase.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
+}
+
+/**
+ * Reports one sealed fix straight to realtime-gw, NOT control-plane (ADR-010:
+ * stripClassA above exists because no control-plane body has any business
+ * carrying location, sealed or not — see notify.RequestLocationRefresh's
+ * comment on the Go side for the same rule stated from the other end). Spends
+ * the same single-use connect ticket the WS path uses (F-16) over a plain
+ * POST — the caller may be a headless push task with no socket to hold open.
+ */
+export async function postLocationReport(
+  ticket: string,
+  sealed: string,
+): Promise<ApiResponse<null>> {
+  try {
+    const res = await timedFetch(
+      `${realtimeHttpBase()}/v1/location-report`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Kavach-Ticket': ticket },
+        body: JSON.stringify({ sealed }),
+      },
+      8000,
+    );
+    if (res.status === 204) return ok(null, 'http', 204);
+    if (!res.ok) {
+      const problem = await readProblem(res);
+      return fail<null>(res.status, codeFor(res.status, problem.code), 'http', problem.message);
+    }
+    return ok(null, 'http', res.status);
+  } catch (e) {
+    return fail<null>(0, 'KV-0000', 'http', e instanceof Error ? e.message : 'network error');
+  }
+}

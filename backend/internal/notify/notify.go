@@ -765,6 +765,73 @@ func (n *Notifier) pageBudgetBreach(b Budget) {
 	}
 }
 
+// ── On-demand location refresh (6-D-6 · spec C1) ────────────────────────────
+
+// ErrNoReachableDevice means the member has no non-revoked Android device with
+// an FCM token, or this deployment holds no push credentials — the same two
+// honest failure states fan-out already records as KV-NOTOKEN/KV-NOPUSHCFG,
+// just surfaced synchronously since this is a single request, not a ladder.
+var ErrNoReachableDevice = errors.New("notify: member has no push-reachable device")
+
+// locationRefreshPushPayload is the entire contract for this message: a
+// discriminator, a correlation id, and the target's OWN device id. Nothing
+// else — no incident, no location, no name. `deviceId` exists so the device
+// can mint a realtime connect ticket (POST /v1/rt/ticket) without reading its
+// own identity out of t0ConfigRepo first, which is a SQLite open on the
+// headless wake path (the trade D-020 already declined once, for locale).
+func locationRefreshPushPayload(requestID, deviceID string) map[string]string {
+	return map[string]string{
+		"type":      "location_refresh_request",
+		"requestId": requestID,
+		"deviceId":  deviceID,
+	}
+}
+
+// RequestLocationRefresh asks one member's device(s) to take a fresh GPS fix
+// and report it back over the realtime gateway (C1). It bypasses Fanout
+// deliberately: this is not a rung of the escalation ladder, has no incident,
+// and needs none of the audience/drill/budget machinery built for one — it is
+// closer to findPhone (control-plane) than to an alert. FCM-only for now
+// (iOS is out of scope by ADR-015, same as the rest of 6-D); a revoked device
+// is skipped the same way dispatch() skips one.
+//
+// Synchronous and best-effort across every matching device: a family member
+// commonly carries one phone, so unlike Fanout's legs this does not need its
+// own goroutine per device to keep the HTTP handler fast.
+func (n *Notifier) RequestLocationRefresh(ctx context.Context, familyID, memberID string) (requestID string, err error) {
+	requestID = n.newID()
+	var lastErr error
+	sent := 0
+	for _, d := range n.st.Devices(familyID) {
+		if d.MemberID != memberID || d.RevokedAt != 0 {
+			continue
+		}
+		if strings.ToLower(d.Platform) != "android" {
+			continue
+		}
+		if strings.TrimSpace(d.PushTokenFCM) == "" {
+			lastErr = ErrPushUnregistered
+			continue
+		}
+		if n.push == nil {
+			lastErr = ErrPushNotConfigured
+			continue
+		}
+		if sendErr := n.push.Send(ctx, d.PushTokenFCM, locationRefreshPushPayload(requestID, d.ID)); sendErr != nil {
+			lastErr = sendErr
+			continue
+		}
+		sent++
+	}
+	if sent == 0 {
+		if lastErr == nil {
+			lastErr = ErrNoReachableDevice
+		}
+		return requestID, lastErr
+	}
+	return requestID, nil
+}
+
 // ── Audience resolution ──────────────────────────────────────────────────────
 
 // audience answers the only question that matters at fan-out time: whose phone

@@ -113,6 +113,13 @@ var pushSafeKeys = map[string]bool{
 	// W10-d · 1.32. `kind` is a three-valued enum and `ownerShortName` is the
 	// same ASCII short name as the subject's, already permitted above.
 	"kind": true, "ownerShortName": true,
+	// 6-D-6 · C1. A location-refresh request is not an incident push and carries
+	// none of the fields above — `type` is what tells the device which of the two
+	// message shapes this is (see readLocationRefreshFields, mobile side).
+	// `deviceId` is the target's OWN device id, included so the device can mint a
+	// realtime ticket without a database read on the wake path (D-020's same
+	// reasoning: no SQLite open from a headless task). Neither field is Class A.
+	"type": true, "requestId": true, "deviceId": true,
 }
 
 // assertPushSafe fails closed. Note what is not on the list and would be caught

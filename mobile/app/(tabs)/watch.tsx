@@ -15,12 +15,19 @@
  * says so honestly instead of opening a session (or writing an access-log row)
  * that has not actually happened.
  *
- * No new backend call exists here — same store selectors as `map.tsx`, so this
- * screen can never show a fact the map would not also stand behind.
+ * 6-D-6 adds the Refresh button (C1–C3): a push-triggered one-shot GPS fix on
+ * the member's own phone, reported back over `realtime-gw`'s sealed
+ * `location.update` relay and rendered here through the exact same `presence`
+ * selector `map.tsx` reads — this screen still cannot show a fact the map
+ * would not also stand behind, it is just that the fact can now actually
+ * arrive. The 8s spinner (`state/store.ts requestLocationRefresh`) only
+ * answers "did the request leave this device"; the fix itself, if one comes
+ * back, updates `presence` independently and may arrive after the spinner has
+ * already reverted — same honesty rule as the "Last fix Xs ago" line below.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
-import React, { useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 
@@ -34,8 +41,9 @@ import {
   untilText,
   type ShareStatus,
 } from '../../src/domain/consentStatus';
+import { haversineM } from '../../src/domain/geofence';
 import { relativeTime, t } from '../../src/i18n';
-import { useKavach } from '../../src/state/store';
+import { lastKnownFix, useKavach } from '../../src/state/store';
 import {
   Card,
   MemberAvatar,
@@ -77,6 +85,7 @@ function WatchActionButton({
   label,
   disabled,
   reason,
+  loading = false,
   onPress,
 }: {
   icon: keyof typeof Feather.glyphMap;
@@ -84,6 +93,8 @@ function WatchActionButton({
   disabled: boolean;
   /** Read to a screen-reader user on this button specifically — the same B3/F4 copy the sighted reason line under the row shows. */
   reason: string | null;
+  /** C2: mid-flight state for the Refresh button — an ActivityIndicator in place of the icon, never a second visual language for "disabled". */
+  loading?: boolean;
   onPress: () => void;
 }): React.ReactElement {
   return (
@@ -93,13 +104,22 @@ function WatchActionButton({
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityHint={reason ?? undefined}
-      accessibilityState={{ disabled }}
+      accessibilityState={{ disabled, busy: loading }}
       hitSlop={space.xs}
       style={[styles.actionButton, { borderColor: disabled ? colors.border : colors.borderStrong }]}
     >
-      <Feather name={icon} size={18} color={disabled ? colors.textFaint : colors.text} />
+      {loading ? (
+        <ActivityIndicator size="small" color={colors.text} />
+      ) : (
+        <Feather name={icon} size={18} color={disabled ? colors.textFaint : colors.text} />
+      )}
     </PressableScale>
   );
+}
+
+/** C3: "320m away", or kilometres past 1000m — the same unit break B1's own example implies. */
+function distanceLabel(metres: number): string {
+  return metres < 1000 ? `${Math.round(metres)}m away` : `${(metres / 1000).toFixed(1)}km away`;
 }
 
 function locationLine(status: ShareStatus, now: number, member: Member): string {
@@ -126,6 +146,7 @@ export default function WatchScreen(): React.ReactElement {
   const members = useKavach((s) => s.members);
   const presence = useKavach((s) => s.presence);
   const grants = useKavach((s) => s.grants);
+  const requestLocationRefresh = useKavach((s) => s.requestLocationRefresh);
   useKavach((s) => s.locale);
 
   const meId = me?.id ?? null;
@@ -139,6 +160,37 @@ export default function WatchScreen(): React.ReactElement {
   }, [members, meId, presence, grants, now]);
 
   const others = useMemo(() => members.filter((m) => m.id !== meId), [members, meId]);
+  const myFix = lastKnownFix();
+
+  // ★ Spec C2 — "up to 8s". requestLocationRefresh only reports whether the
+  // request LEFT this device; a fresher fix, if one arrives, shows up through
+  // the ordinary presence update (handleWsFrame's location.update case) same
+  // as any other tick — this timer only bounds how long the spinner honestly
+  // claims "still trying" before falling back to whatever the card already
+  // shows.
+  const [refreshing, setRefreshing] = useState<Record<UUID, boolean>>({});
+  const refreshTimers = useRef<Record<UUID, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    const timers = refreshTimers.current;
+    return () => {
+      for (const id of Object.values(timers)) clearTimeout(id);
+    };
+  }, []);
+
+  async function onRefreshPress(member: Member): Promise<void> {
+    if (refreshing[member.id]) return;
+    setRefreshing((prev) => ({ ...prev, [member.id]: true }));
+    const sent = await requestLocationRefresh(member.id);
+    if (!sent) {
+      setRefreshing((prev) => ({ ...prev, [member.id]: false }));
+      return;
+    }
+    clearTimeout(refreshTimers.current[member.id]);
+    refreshTimers.current[member.id] = setTimeout(() => {
+      setRefreshing((prev) => ({ ...prev, [member.id]: false }));
+    }, 8_000);
+  }
 
   return (
     <SafeAreaView edges={['top']} style={styles.screen}>
@@ -164,6 +216,11 @@ export default function WatchScreen(): React.ReactElement {
               const p = presence[member.id];
               const hasFix = mayDrawPin(status) && p?.location;
               const tone = status.kind === 'granted' ? 'ok' : undefined;
+              // ★ Spec C3 — "distance-from-you". Only computable once BOTH this
+              // device has a fix of its own and the member's card is entitled to
+              // show one; never guessed, never zero as a placeholder.
+              const distanceM = hasFix && p?.location && myFix ? haversineM(myFix, p.location) : null;
+              const isRefreshing = refreshing[member.id] === true;
 
               // ★ Spec F1/HANDOFF note — camera/audio don't gate on
               // `monitoringPaused` the way location does, so `presence` is
@@ -193,18 +250,29 @@ export default function WatchScreen(): React.ReactElement {
                       </Text>
                       <Text style={styles.meta}>{locationLine(status, now, member)}</Text>
                       {hasFix && p?.location ? (
-                        <Text style={styles.meta}>
-                          {`Last fix ${relativeTime(p.location.at)} · accurate to about ${Math.max(
-                            1,
-                            Math.round(p.location.accuracyM),
-                          )} m`}
-                        </Text>
+                        <View style={styles.fixRow}>
+                          <Text style={styles.meta}>
+                            {(distanceM !== null ? `${distanceLabel(distanceM)} · ` : '') +
+                              `Last fix ${relativeTime(p.location.at)}`}
+                          </Text>
+                          {p.location.accuracyM > 30 ? (
+                            <Pill label={`±${Math.round(p.location.accuracyM)}m`} tone="neutral" />
+                          ) : null}
+                        </View>
                       ) : null}
                     </View>
                     <Pill label={statusShort(status)} tone={status.kind === 'granted' || status.kind === 'self' ? 'ok' : 'neutral'} />
                   </View>
 
                   <View style={styles.actionsRow}>
+                    <WatchActionButton
+                      icon="refresh-cw"
+                      label={`Refresh ${member.displayName}'s location`}
+                      disabled={!mayDrawPin(status) || isRefreshing}
+                      reason={mayDrawPin(status) ? null : locationLine(status, now, member)}
+                      loading={isRefreshing}
+                      onPress={() => void onRefreshPress(member)}
+                    />
                     <WatchActionButton
                       icon="video"
                       label={`View ${member.displayName}'s camera`}
@@ -267,6 +335,7 @@ const styles = StyleSheet.create({
   middle: { flex: 1, gap: space.xxs },
   name: { color: colors.text, fontSize: font.h3, fontWeight: weight.semibold },
   meta: { color: colors.textDim, fontSize: font.small, lineHeight: leading.small },
+  fixRow: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
 
   actionsRow: { flexDirection: 'row', gap: space.sm },
   actionButton: {

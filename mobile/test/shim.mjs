@@ -23,6 +23,7 @@ const STUBS = new Set([
   'expo-notifications',
   'expo-router',
   'expo-task-manager',
+  'expo-location',
 ]);
 
 const STUB_SOURCE = {
@@ -120,6 +121,27 @@ const STUB_SOURCE = {
     }
     export async function isTaskRegisteredAsync(name) { return tasks.has(name); }
     export async function unregisterTaskAsync(name) { tasks.delete(name); }
+  `,
+  /**
+   * Controllable the same way expo-notifications is: __setNextFix/__setNextError
+   * drive what the next getCurrentPositionAsync() call does, and __setHang makes
+   * it never resolve at all — the only way to test locationRefresh.ts's own
+   * Promise.race timeout off-device, since getCurrentPositionAsync has no
+   * built-in timeout option (Expo SDK 57 docs) and the caller must build one.
+   */
+  'expo-location': `
+    export const Accuracy = { Lowest: 1, Low: 2, Balanced: 3, High: 4, Highest: 5, BestForNavigation: 6 };
+    export const __state = { nextFix: null, nextError: null, hang: false, calls: 0 };
+    export function __setNextFix(fix) { __state.nextFix = fix; __state.nextError = null; __state.hang = false; }
+    export function __setNextError(err) { __state.nextError = err; __state.nextFix = null; __state.hang = false; }
+    export function __setHang() { __state.hang = true; __state.nextFix = null; __state.nextError = null; }
+    export async function getCurrentPositionAsync(_opts) {
+      __state.calls++;
+      if (__state.hang) return new Promise(() => {});
+      if (__state.nextError) throw __state.nextError;
+      if (__state.nextFix) return __state.nextFix;
+      throw new Error('expo-location stub: no fix configured for this test');
+    }
   `,
 };
 

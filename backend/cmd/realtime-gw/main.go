@@ -100,6 +100,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/stream", gw.stream)
+	mux.HandleFunc("POST /v1/location-report", gw.reportLocation)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -310,6 +311,48 @@ func (g *gateway) stream(w http.ResponseWriter, r *http.Request) {
 	g.track(c)
 	c.run(r.Context())
 	g.untrack(c)
+}
+
+// reportLocation is 6-D-6 · spec C1's response leg: a fire-and-forget sealed
+// presence report over a plain POST, for a caller that cannot hold a socket
+// open — a push-triggered background fix report chief among them (the target
+// device may be headless, per D-020's precedent nothing on that path may open
+// the local database, and a WebSocket handshake plus its whole reconnect/
+// cursor/heartbeat machinery is not a one-shot fire-and-forget primitive).
+// It spends the exact same single-use connect ticket as the WS upgrade (F-16:
+// no second auth scheme in this binary) and publishes the identical frame
+// shape handleMessage's "location.report" case builds from a live socket, so
+// a receiver cannot tell a headless refresh from a foregrounded watch-position
+// tick apart.
+func (g *gateway) reportLocation(w http.ResponseWriter, r *http.Request) {
+	tk, ok := g.tickets.consume(r.Header.Get("Kavach-Ticket"))
+	if !ok {
+		http.Error(w, `{"code":"KV-1002","detail":"missing or invalid connect ticket"}`,
+			http.StatusUnauthorized)
+		return
+	}
+	defer r.Body.Close()
+	var in struct {
+		Sealed json.RawMessage `json:"sealed"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil || len(in.Sealed) == 0 {
+		http.Error(w, `{"code":"KV-1001","detail":"malformed body"}`, http.StatusBadRequest)
+		return
+	}
+	now := time.Now().UnixMilli()
+	f := notify.Frame{
+		V: notify.FrameVersion, Type: "location.update", Priority: notify.PriorityLow,
+		Key: "loc:" + tk.MemberID, FamilyID: tk.FamilyID, At: now,
+		Data: map[string]any{
+			"memberId": tk.MemberID, "deviceId": tk.DeviceID,
+			"sealed": in.Sealed, "at": now,
+		},
+	}
+	if err := g.bus.Publish(notify.StreamSubject(tk.FamilyID), f.Encode()); err != nil {
+		http.Error(w, `{"code":"KV-5001","detail":"publish failed"}`, http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // authorise pulls the ticket out of Sec-WebSocket-Protocol: "kavach.v1,
