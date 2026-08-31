@@ -14,6 +14,17 @@
  * PRD §6.4. The tone lives in the border and the glyph, where it is a signal
  * rather than a legibility tax.
  *
+ * ★ Spec A5 (phase6b-redesign-and-family-watch) — `neutral`/`info` ARE OUTLINE ★
+ * Those two tones drop the soft fill: transparent background, border unchanged,
+ * and — unlike every other tone — the label itself renders in the tone's own
+ * text token (`TONE_SURFACE[tone].fg`) instead of `colors.text`. That is safe
+ * here specifically because the fill is gone: `*Text` tokens are lightened
+ * until they clear 7:1 on every surface theme.ts exports (see theme.ts), so
+ * reading one directly off the page needs no soft-fill pairing to protect. This
+ * does not extend to `ok`/`warn`/`danger` — they keep the filled treatment
+ * unconditionally, including on an active incident or Family Watch session,
+ * because nothing safety-critical is allowed to get quieter.
+ *
  * ★ AND THE GLYPH IS STILL TEXT ★
  * "The tone lives in the glyph" is not a licence to paint the glyph in the FILL
  * colour — see TONE_FG below. A mark at 2:1 is a mark that is not there, and a
@@ -130,10 +141,16 @@ function PillImpl({ label, tone, glyph, icon: customIcon, style, onPress, access
   const mark = hasCustomGlyph ? glyph : (DEFAULT_GLYPH[tone] ?? '');
 
   const surface = TONE_SURFACE[tone];
+  // Spec A5: only these two tones go outline. `ok`/`warn`/`danger` keep the
+  // filled treatment always — see the header note above.
+  const outline = tone === 'neutral' || tone === 'info';
 
   const skin = [
     styles.pill,
-    { backgroundColor: surface.bg, borderColor: TONE_BORDER[tone] },
+    {
+      backgroundColor: outline ? colors.transparent : surface.bg,
+      borderColor: TONE_BORDER[tone],
+    },
     style,
   ];
 
@@ -159,7 +176,7 @@ function PillImpl({ label, tone, glyph, icon: customIcon, style, onPress, access
           {mark}
         </Text>
       )}
-      <Text numberOfLines={1} style={styles.label}>
+      <Text numberOfLines={1} style={[styles.label, outline ? { color: surface.fg } : null]}>
         {label}
       </Text>
     </>

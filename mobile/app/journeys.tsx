@@ -931,10 +931,10 @@ const styles = StyleSheet.create({
 
   deadman: {
     marginTop: space.md,
-    padding: space.md,
+    padding: space.lg,
     borderRadius: radius.md,
     backgroundColor: colors.bgElevated,
-    gap: space.xs,
+    gap: space.md,
   },
   deadmanTitle: { color: colors.text, fontSize: font.small, fontWeight: weight.bold },
   deadmanBody: { color: colors.textDim, fontSize: font.small, lineHeight: font.small + 5 },
@@ -949,7 +949,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.bgElevated,
   },
-  corridorEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.lg, gap: space.xs },
+  corridorEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.lg, gap: space.md },
   corridorEmptyTitle: { color: colors.text, fontSize: font.h3, fontWeight: weight.semibold },
   corridorEmptyBody: { color: colors.textDim, fontSize: font.small, textAlign: 'center', lineHeight: font.small + 5 },
 

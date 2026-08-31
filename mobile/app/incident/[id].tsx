@@ -1146,7 +1146,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderRadius: radius.lg,
     padding: space.lg,
-    gap: space.sm,
+    gap: space.md,
   },
   unackedText: {
     color: colors.white,
@@ -1161,7 +1161,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderRadius: radius.lg,
     padding: space.lg,
-    gap: space.xs,
+    gap: space.md,
   },
   respondingText: { color: colors.text, fontSize: font.h3, fontWeight: weight.bold },
   respondingHint: { color: colors.textDim, fontSize: font.small },

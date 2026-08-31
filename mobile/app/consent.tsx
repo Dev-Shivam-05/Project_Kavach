@@ -681,8 +681,8 @@ const styles = StyleSheet.create({
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
 
   rung: {
-    gap: space.sm,
-    padding: space.md,
+    gap: space.md,
+    padding: space.lg,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,

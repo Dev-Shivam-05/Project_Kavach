@@ -767,7 +767,7 @@ const styles = StyleSheet.create({
     borderColor: CARD_INK,
     borderRadius: radius.md,
     padding: space.lg,
-    gap: space.xs,
+    gap: space.md,
   },
   emptyTitle: { color: CARD_INK, fontSize: font.h2, fontWeight: weight.heavy },
   emptyBody: { color: CARD_INK, fontSize: font.body, lineHeight: font.body + 8 },

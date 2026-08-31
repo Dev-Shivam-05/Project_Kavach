@@ -1152,8 +1152,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.bgCard,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.md,
+    padding: space.lg,
+    gap: space.md,
   },
   notifiedTitle: {
     color: colors.textDim,
@@ -1215,7 +1215,7 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
     backgroundColor: colors.bgElevated,
     padding: space.lg,
-    gap: space.xs,
+    gap: space.md,
   },
   noFixTitle: {
     color: colors.text,
