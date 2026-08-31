@@ -15,30 +15,39 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 > ★★★ **31 Aug — Phase 6-D (nav redesign + Family Watch) is the active work, per the 21 Aug
 > decision to pull Phase 6 ahead of Phase 1.** Spec locked and approved 29 Aug:
 > [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md). **6-D-1, 6-D-1b,
-> 6-D-2a, 6-D-2b, 6-D-3, 6-D-4 and 6-D-5 have all landed** — 5-tab flat nav, the SOS FAB is gone, a new
-> Watch tab lists every member's location status, Map/Incidents/Settings/Watch each carry a small
+> 6-D-2a, 6-D-2b, 6-D-3, 6-D-4, 6-D-5 and 6-D-6 have all landed** — 5-tab flat nav, the SOS FAB is gone,
+> a new Watch tab lists every member's location status, Map/Incidents/Settings/Watch each carry a small
 > outline SOS icon in their header, **the icon sweep (spec A4) is fully closed**: `grep -rn
 > "[⌂◎⚠⚙▣↯▮▤◉]" mobile/` returns nothing anywhere in the app, **visual density (A5/A6) is done**:
 > `Pill`'s `neutral`/`info` tones render outline-only, eight standalone notice-card containers carry
 > `space.lg` padding with a `space.md` minimum row gap, **consent plumbing (spec F1–F4) is done**:
 > `camera` is a real `ConsentScope` end to end (mobile types + backend `validScopes` + migration
-> comments), `family_membership`-grant build/renew/status logic exists and is tested, and **Watch tab
+> comments), `family_membership`-grant build/renew/status logic exists and is tested, **Watch tab
 > Camera/Listen buttons (spec B1–B3) are done**: each member card renders them enabled/disabled from
 > real grant state with the exact B3/F4 copy, and tapping an enabled one is honest that the live
-> session isn't built rather than faking one (D-034). ⛔ **F2's auto-grant-on-join is still NOT wired
-> to any call site** — there is no real "a member just joined" event in this codebase yet to attach it
-> to (D-033) — so in the running app today, virtually every card actually shows the B3 "not sharing
-> yet" reason for camera/audio, not the granted state 6-D-5 also makes possible. See the Phase 6-D
+> session isn't built rather than faking one (D-034), and **on-demand location refresh (spec C1–C3) is
+> done**: the Watch tab's Refresh button push-triggers a one-shot GPS fix, 8s honest spinner, and — the
+> part that turned out to be the real work — a cross-member location relay that had **never once been
+> wired in either direction** before this phase (D-035): `realtime-gw` gained its first-ever tests
+> (`POST /v1/location-report`, ticket-authed, no new control-plane surface per ADR-010), and
+> `store.ts`'s `handleWsFrame` now has the only `location.update`/`locationStreamKey` decrypt call in
+> the client. ⛔ **F2's auto-grant-on-join is still NOT wired to any call site** — there is no real "a
+> member just joined" event in this codebase yet to attach it to (D-033) — so in the running app
+> today, virtually every card actually shows the B3 "not sharing yet" reason for camera/audio, not the
+> granted state 6-D-5 also makes possible. ⛔ **Ambient/continuous cross-member sharing is still not
+> wired** — only a push-triggered Refresh reports a fix; `presenceService.ts`'s ordinary
+> `watchPositionAsync` tick still never leaves the device (D-035's consequence). See the Phase 6-D
 > table below for the full 8-phase breakdown (6-D-1 through 6-D-8) and [DECISIONS.md](DECISIONS.md)
-> D-029/D-030/D-031/D-032/D-033/D-034 for what was and was not renegotiated along the way — in
-> particular, the on-device indicator/access-log/kill-switch for camera+mic access (D-029) is a fixed
-> constraint carried over from the user's own 21 Aug decision, not open for reinterpretation in any
-> later 6-D phase.
+> D-029 through D-035 for what was and was not renegotiated along the way — in particular, the
+> on-device indicator/access-log/kill-switch for camera+mic access (D-029) is a fixed constraint
+> carried over from the user's own 21 Aug decision, not open for reinterpretation in any later 6-D
+> phase.
 >
-> **Next: 6-D-6** — On-demand location push for the Watch tab's Refresh button (spec C1–C3):
-> push-triggered one-shot `getCurrentPositionAsync`, 8s timeout with honest stale-fallback. The first
-> 6-D-* phase that touches the backend (`internal/notify`) as well as mobile. The Phase-1 backend
-> material below this point is unchanged background, not the active thread right now.
+> **Next: 6-D-7** — Family Watch transport (camera + listen, live): `react-native-webrtc` + TURN relay
+> + the actual live-view/listen screens. **Unverifiable on this machine — no Android SDK/JDK (D-021)**,
+> same limitation already recorded against 6-C. Build the TS/state/signalling layer here; the live
+> stream itself needs a device build the user triggers. 6-D-8 (geofencing arbitrary-location placement)
+> remains available as a fully-verifiable-here alternative if 6-D-7 is blocked on a device.
 
 > ★ **D-026 and D-027 are both closed (20 Aug, W10-h + W10-i), and Phase 1's last arrow connects.**
 > Observed, not argued: `ops/e2e-two-binaries.sh` posts a real SOS to the `sos-ingest` binary and
@@ -125,15 +134,15 @@ that nobody has run `docker compose up`.
 
 ## Next 3
 
-> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 3, in order: **6-D-6** (on-demand
-> location push for the Refresh button, spec C1–C3 — needs `internal/notify` + a client push-handler,
-> the first 6-D-* phase to touch the backend; 6-D-3's visual density, 6-D-4's consent plumbing and
-> 6-D-5's Camera/Listen buttons are already closed), **6-D-7** (native WebRTC camera/mic transport —
-> hits the D-021 wall, no JDK on this machine), **6-D-8** (geofencing arbitrary-location placement,
-> an interim lat/lon text-entry fallback that does not need 6-B's MapLibre first). All but 6-D-7 are
-> TS/RN-only (6-D-6 also touches Go, still no JDK needed), fully verifiable on this machine.
-> The JDK-gated list below is what comes after Phase 6-D's verifiable slice (6-D-1 through 6-D-6,
-> 6-D-8) is done.
+> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 2, in order: **6-D-7** (native
+> WebRTC camera/mic transport — hits the D-021 wall, no JDK on this machine; build the TS/state/
+> signalling layer here regardless), **6-D-8** (geofencing arbitrary-location placement, an interim
+> lat/lon text-entry fallback that does not need 6-B's MapLibre first, fully verifiable on this
+> machine). 6-D-1 through 6-D-6 are closed — 6-D-6 (31 Aug) touched Go as well as TS
+> (`internal/notify`, `cmd/control-plane`, `cmd/realtime-gw` — the last of these got its first-ever
+> tests) and is the reason "backend" stopped meaning "no JDK needed but also no Go" for this phase
+> group. The JDK-gated list below is what comes after Phase 6-D's verifiable slice (6-D-1 through
+> 6-D-6, 6-D-8) is done.
 
 > ⚠ **All three need a JDK. Check `java -version` before picking one, not after.** W10-d exists
 > because that check was run first on 11 Aug; the alternative was a session of Kotlin that no gate
@@ -565,7 +574,7 @@ demoable thing.
 | 6-D-3 | Visual density | ✅ | Landed 31 Aug. `Pill`'s `neutral`/`info` tones go outline-only (transparent fill, border unchanged, label switches to the tone's own `*Text` token — safe only because the soft fill is gone); `ok`/`warn`/`danger` stay filled unconditionally, scoped purely by `tone` so active-incident/Family-Watch pills need no context flag (A5). Eight standalone notice-card containers (`consent.tsx rung`, `incident/[id].tsx` unacked/responding banners, `panic.tsx notified`/`noFix`, `journeys.tsx deadman`/`corridorEmpty`, `medical-card.tsx emptyCard`) move to `space.lg` padding / `space.md` minimum row gap (A6); `panic.tsx`'s "WHO HAS BEEN TOLD" card had *zero* gap between rows before this. Excluded `journeys.tsx`'s `metric` stat tile and `diagnostics.tsx`'s repeated check-row as atomic/repeated elements, not cards (same category as the `ListItem`/`MemberRow` exclusions). Verified: `tsc --noEmit` clean, `npm test` 171/171, `npm run verify` exit 0 |
 | 6-D-4 | Consent plumbing for Family Watch | ✅ | Landed 31 Aug. `ConsentScope` += `'camera'` (mobile + backend `validScopes` + migration comments), `grantedVia` += `'family_membership'` (F1). Pure builders (`buildFamilyMembershipGrant`, `dueForRenewal`, `renewed`) and a `grantFamilyMembershipScopes` store action exist and are tested for the mutual-grant + 90-day self-renewal shape (F2/F3); `grantStatusFor` generalises `shareStatusFor` to any scope for F4. **⛔ F2's auto-grant is NOT wired to any call site** — there is no real "a member just joined" event in this codebase yet: `enrolStore.ts`'s P2P join is deliberately airgapped from the server/store, and mobile has no client call to `POST /v1/members` at all. Flagged as D-033, not papered over — user decision this session was "plumbing only." F3's renewal is local-only (no PATCH-consent endpoint exists). `db/schema.ts`/`db/repos.ts`/`net/api.ts` needed no edits (already scope-agnostic). Verified: `tsc --noEmit` clean, `npm test` 182/182, `npm run verify` exit 0, full Go build/vet/staticcheck/archlint/test clean, schema-lint clean, `gen:check` in sync |
 | 6-D-5 | Watch tab actions | ✅ | Landed 31 Aug. Each member card in `watch.tsx` gets Camera/Listen icon-buttons (Feather `video`/`mic`), enabled state from `grantStatusFor('camera'\|'audio', member, meId, undefined, grants, now)` (`presence` deliberately `undefined` — camera/audio don't gate on `monitoringPaused`). New `disabledReasonFor()` in `consentStatus.ts` renders the exact B3 ("Not sharing location/camera/mic yet…") and F4 ("{name} has turned this off.") copy, deduped to one line when camera/audio share a reason and split to two when a member has revoked only one (F1's "separately revocable"). Tapping an *enabled* button is honest that the live session doesn't exist yet (D-034) rather than opening a fake one or writing a fake `AccessLogEntry` — that stays 6-D-7's job. **Refresh is NOT in this row** — confirmed against this table mid-session and corrected out of the phase; it is 6-D-6. Verified: `tsc --noEmit` clean, `npm test` 186/186, `npm run verify` exit 0. Backend untouched, not re-run |
-| 6-D-6 | On-demand location push | 🔨 | Push-triggered one-shot `getCurrentPositionAsync`, works even if the target's app is backgrounded, 8s timeout with honest stale-fallback (C1–C3). Touches `notify` + a client push-handler + the Refresh button |
+| 6-D-6 | On-demand location push | ✅ | Landed 31 Aug. Turned out to need more than the Refresh button: cross-member location had **never once been wired in either direction** before this phase (D-035) — `noteLocationFix` only ever wrote to the local DB, and `realtime-gw`'s existing `location.report`→`location.update` relay plus `crypto.locationStreamKey` had zero callers. Built: **(1)** the request leg — `notify.RequestLocationRefresh` (Android-only FCM, bypasses `Fanout`), `POST /v1/members/{id}/location-refresh` on control-plane, `fcm.go`'s `pushSafeKeys` +3 (`type`/`requestId`/`deviceId`). **(2)** the response leg — `mobile/src/state/locationRefresh.ts`, a headless-safe handler (reads `groupSecret`/session straight from SecureStore, per D-020's precedent never opens `t0ConfigRepo`) that acquires one fix (`Promise.race`, 8s — `getCurrentPositionAsync` has no built-in timeout), seals it with the Location Stream Key, and reports it to a NEW `POST /v1/location-report` on **realtime-gw** (its first-ever tests) rather than control-plane (ADR-010: no control-plane body carries location, sealed or not) — reusing the existing single-use connect ticket (F-16), never opening a WebSocket from a headless task. **(3)** the receive leg — `store.ts handleWsFrame`'s new `location.update` case is the only place `openJson`/`locationStreamKey` are called client-side; feeds `presence[memberId].location` for both the push-triggered path and, incidentally, any future foregrounded sender. **(4)** `watch.tsx`'s Refresh button (Feather `refresh-cw`, first in the row per B1), 8s spinner gated on `mayDrawPin`, distance-from-you (`geofence.haversineM`, reused not duplicated) + a `±Xm` accuracy chip past 30m (C3). ⛔ **Ambient/continuous sharing still not wired** — only a push-triggered Refresh reports a fix; `presenceService.ts`'s regular watch-position tick still never leaves the device. Verified: `tsc --noEmit` clean, `npm test` 196/196, `npm run verify` exit 0; `go build`/`go vet`/staticcheck/archlint clean; `go test` — `internal/notify` 32 (+7), `cmd/control-plane` 21 (+2), `cmd/realtime-gw` 4 (its first ever); `gen:check`/schema-lint/protolint unaffected (no schema/proto change) |
 | 6-D-7 | Family Watch transport (camera + listen, live) | ⛔ | `react-native-webrtc` (new native dep) + TURN relay (new infra) + the actual live-view/listen screens (D1–D5, E1–E4). **Unverifiable on this machine — no Android SDK/JDK (D-021)**, same limitation already recorded against 6-C. Build the TS/state/signalling layer here; the live stream itself needs a device build the user triggers |
 | 6-D-8 | Geofencing — arbitrary-location placement | 🔨 | Today's form only centres a fence on your own current position (a real gap, not a preference — `map.tsx:474`). Real fix rides 6-B's MapLibre (tap-anywhere-on-map); an interim lat/lon text-entry fallback can ship independently of 6-B |
 

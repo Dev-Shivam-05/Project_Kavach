@@ -800,3 +800,47 @@ fabrication D5/E4 and this app's whole honest-empty-state convention exist to pr
 **Consequence.** 6-D-7 replaces this `Alert` call with the real navigation/session start — it should
 not need to touch the enabled/disabled logic or the reason copy, which 6-D-5 already finished.
 Do not report Camera/Listen as "working" beyond "correctly gated and honest about not being live yet."
+
+## D-035 — 6-D-6 needed a cross-member location relay that had never once been wired, and built it
+
+**Decision.** Scoping 6-D-6 (spec C1–C3, "on-demand location push") found that cross-member live
+location had **zero working wire path outside demo-mode fixtures**, in either direction: `noteLocationFix`
+(`store.ts`) writes only to the local on-device DB and never sends anything; `realtime-gw`'s
+`location.report → location.update` relay (`handleMessage`, W1-era code) has always existed
+server-side but no client ever called it; and `crypto.locationStreamKey`/`sealJson`/`openJson` — the
+Location Stream Key documented in `docs/02-System-Architecture.md` §"content keys" — had never been
+called from anywhere. This is the same failure shape `presenceService.ts`'s own header names for
+`noteLocationFix`/`evaluateGeofences`/`connectWs` before it existed: "three complete, tested
+subsystems with ZERO call sites." Presented to the user as a scope fork (build the relay too, in one
+session, vs. split into 6-D-6a/6-D-6b across two) — the user chose to build both in one session.
+**Why the design landed where it did — three real constraints, not preferences.**
+1. **ADR-010 defence in depth (`net/api.ts`'s `stripClassA`) says no control-plane body may carry
+   location, sealed or not.** So the fix is reported to `realtime-gw` (`POST /v1/location-report`,
+   new), never to `control-plane`, spending the exact same single-use connect ticket the WS path
+   already uses (F-16) rather than inventing a second auth scheme.
+2. **The response leg must work from a killed app.** Expo's own docs are explicit that a
+   headless-launched task mounts no views — `app/_layout.tsx`'s `bootstrap()` never runs, so
+   `store.ts`'s module-level `groupSecret`/`authToken` are unset. `mobile/src/state/locationRefresh.ts`
+   reads both straight out of SecureStore instead, and never opens `t0ConfigRepo` (SQLite) to learn
+   this device's own id — the exact trade D-020 already declined once, for locale. The push payload
+   itself now carries the target's own `deviceId` for that reason (`fcm.go`'s `pushSafeKeys` grew
+   `type`/`requestId`/`deviceId`).
+3. **`net/ws.ts` is the wrong shape for a fire-and-forget report.** It is a stateful,
+   SQLite-cursor-backed singleton built for a long-lived connection with reconnect/backoff/heartbeat —
+   not a one-shot POST from a task that may have seconds of budget left. A plain `fetch` is what that
+   budget affords, so the client never opens a WebSocket to report a headless fix.
+**Evidence.** `backend/internal/notify/{fcm.go,notify.go,location_refresh_test.go}` (the request leg,
+FCM-only, bypasses `Fanout`) · `backend/cmd/control-plane/main.go` `requestLocationRefresh` +
+`location_refresh_test.go` · `backend/cmd/realtime-gw/main.go` `reportLocation` + `report_test.go`
+(realtime-gw's first tests) · `mobile/src/state/{locationRefresh.ts,pushReceive.ts}` ·
+`mobile/src/state/store.ts` — the new `location.update` case in `handleWsFrame` is the only place
+`openJson`/`locationStreamKey` are called anywhere in the client · `mobile/app/(tabs)/watch.tsx` —
+the Refresh button.
+**Consequence — what this does NOT close.** `presenceService.ts`'s ordinary `watchPositionAsync` tick
+(the "existing 10s-foreground watch" C1's own prose assumes already broadcasts) still calls only
+`noteLocationFix`, which still never leaves the device. Only a push-triggered Refresh reports a fix.
+Ambient/continuous cross-member sharing while both apps are simply open is still not wired — same
+category of gap as D-033's join→store bridge: flagged, not silently folded into this phase. A future
+phase closing it should have a **foregrounded** device send over its own already-open `net/ws.ts`
+socket directly (`sendFrame({type:'location.report', ...})`, sealed the same way) rather than reusing
+`locationRefresh.ts`'s ticket+POST path, which exists specifically for the headless case.
