@@ -1,7 +1,8 @@
 # HANDOFF — Kavach — Phase 6-D-4 — 2026-08-31
 
-Branch **`shivam`**, commit `822258ca`, **pushed** to `origin/shivam`. This handoff supersedes the
-31 Aug 6-D-3 one (commit `7d7babff`), preserved in git history.
+Branch **`shivam`**, code commit `94ed2b7b` (docs closed out through `a3118619`), **pushed** to
+`origin/shivam`. This handoff supersedes the 31 Aug 6-D-3 one (commit `7d7babff`), preserved in git
+history.
 
 ## Done
 
