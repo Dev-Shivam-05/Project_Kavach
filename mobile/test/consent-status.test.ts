@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildFamilyMembershipGrant,
+  disabledReasonFor,
   dueForRenewal,
   FAMILY_MEMBERSHIP_GRANT_WINDOW_MS,
   FAMILY_MEMBERSHIP_SCOPES,
@@ -124,4 +125,31 @@ test('★ Spec F3 — renewed() pushes expiresAt another 90-day window out and c
   assert.equal(r.id, g.id);
   assert.equal(r.grantedAt, g.grantedAt);
   assert.equal(r.revokedAt, g.revokedAt);
+});
+
+test('★ Spec B3 (6-D-5) — disabledReasonFor uses the exact "not sharing yet" copy for kind: none', () => {
+  const status = grantStatusFor('camera', A, B_ID, undefined, [], NOW);
+  assert.equal(
+    disabledReasonFor(status, A),
+    'Not sharing location/camera/mic yet — ask them to finish joining.',
+  );
+});
+
+test('★ Spec F4 (6-D-5) — disabledReasonFor uses the exact "turned this off" copy for kind: revoked', () => {
+  const g = grant({ revokedAt: NOW - 500 });
+  const status = grantStatusFor('camera', A, B_ID, undefined, [g], NOW);
+  assert.equal(disabledReasonFor(status, A), 'A has turned this off.');
+});
+
+test('disabledReasonFor is null (button enabled) for a live granted scope', () => {
+  const g = grant({ scope: 'audio' });
+  const status = grantStatusFor('audio', A, B_ID, undefined, [g], NOW);
+  assert.equal(disabledReasonFor(status, A), null);
+});
+
+test('disabledReasonFor names an expired scope distinctly from a revoked one', () => {
+  const g = grant({ expiresAt: NOW - 1 });
+  const status = grantStatusFor('camera', A, B_ID, undefined, [g], NOW);
+  const reason = disabledReasonFor(status, A);
+  assert.match(reason ?? '', /expired/);
 });

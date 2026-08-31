@@ -86,6 +86,33 @@ export function statusShort(status: ShareStatus): string {
   }
 }
 
+/**
+ * ★ Spec B3/F4 (6-D-5) — the exact copy a Camera/Listen button's disabled state
+ * shows, so `watch.tsx` never invents its own wording for a state this file
+ * already computes. `null` means the button is enabled.
+ *
+ * `'paused'` and `'self'` fall through to the enabled/no-message branches
+ * below rather than getting their own copy: callers building a Camera/Listen
+ * button pass `presence: undefined` to `grantStatusFor` (its own header notes
+ * camera/audio don't gate on `monitoringPaused` the way location does), and
+ * `self` is filtered out of every member list before this runs. Both cases
+ * are kept here only so the switch stays exhaustive against `ShareStatus`.
+ */
+export function disabledReasonFor(status: ShareStatus, member: Member): string | null {
+  switch (status.kind) {
+    case 'granted':
+    case 'self':
+    case 'paused':
+      return null;
+    case 'revoked':
+      return `${member.displayName} has turned this off.`;
+    case 'expired':
+      return `${member.displayName}'s access expired — it renews automatically once they reopen their app.`;
+    case 'none':
+      return 'Not sharing location/camera/mic yet — ask them to finish joining.';
+  }
+}
+
 /** Forward-looking counterpart to `relativeTime()`, for grant expiry. */
 export function untilText(at: number, now: number): string {
   const ms = at - now;

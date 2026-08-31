@@ -5,23 +5,29 @@
  *
  * This is the home for what the user actually asked this app to do at a glance:
  * "kisi ki location dekhna, camera access, mic access" in one place. Phase 6-D-1
- * ships the honest part that already exists — location, gated by the same rule
- * Map enforces (`src/domain/consentStatus.ts`) — and stops there. Camera and
- * Listen buttons are NOT in this screen yet: they need a `camera` consent scope
- * that does not exist until 6-D-4, and a live transport that does not exist
- * until 6-D-7. Shipping a disabled button for a feature with no scope to gate it
- * would be a fake control, which this codebase does not ship (G, 22 Aug).
+ * shipped the honest part that already existed — location, gated by the same
+ * rule Map enforces (`src/domain/consentStatus.ts`). 6-D-5 adds the Camera and
+ * Listen icon-buttons (B1–B3), driven by 6-D-4's `grantStatusFor('camera'|
+ * 'audio', ...)` — each renders disabled with the exact B3/F4 copy
+ * (`disabledReasonFor`) until a real grant exists. What is still NOT here: the
+ * live-view/listen screens themselves (D1–E4) need `react-native-webrtc` and a
+ * TURN relay, neither of which exists until 6-D-7 — tapping an *enabled* button
+ * says so honestly instead of opening a session (or writing an access-log row)
+ * that has not actually happened.
  *
  * No new backend call exists here — same store selectors as `map.tsx`, so this
  * screen can never show a fact the map would not also stand behind.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 import React, { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Feather } from '@expo/vector-icons';
 
-import type { Member, UUID } from '../../src/core/types';
+import type { ConsentScope, Member, UUID } from '../../src/core/types';
 import {
+  disabledReasonFor,
+  grantStatusFor,
   mayDrawPin,
   shareStatusFor,
   statusShort,
@@ -30,7 +36,14 @@ import {
 } from '../../src/domain/consentStatus';
 import { relativeTime, t } from '../../src/i18n';
 import { useKavach } from '../../src/state/store';
-import { Card, MemberAvatar, Pill, Section, SosHeaderButton } from '../../src/ui/components';
+import {
+  Card,
+  MemberAvatar,
+  Pill,
+  PressableScale,
+  Section,
+  SosHeaderButton,
+} from '../../src/ui/components';
 import { colors, font, leading, space, tracking, weight } from '../../src/ui/theme';
 
 function useNow(intervalMs: number): number {
@@ -40,6 +53,53 @@ function useNow(intervalMs: number): number {
     return () => clearInterval(id);
   }, [intervalMs]);
   return now;
+}
+
+/**
+ * ★ Spec D1/E1 (6-D-5 shell) — the honest thing to say when a grant exists but
+ * the transport that would open a real session (6-D-7) does not. No session
+ * starts, so no `AccessLogEntry` (D5/E4) is written here — writing one for a
+ * session that never opened would be the exact fabrication this app's honest-
+ * empty-state rule forbids.
+ */
+function alertWatchActionNotBuilt(member: Member, scope: Extract<ConsentScope, 'camera' | 'audio'>): void {
+  const title = scope === 'camera' ? 'Camera view isn’t built yet' : 'Listening isn’t built yet';
+  const verb = scope === 'camera' ? 'viewing' : 'listening';
+  Alert.alert(
+    title,
+    `${member.displayName} has granted you this, but live ${verb} needs a feature this build doesn’t have yet. Nothing was sent to their phone.`,
+    [{ text: t('common.done') }],
+  );
+}
+
+function WatchActionButton({
+  icon,
+  label,
+  disabled,
+  reason,
+  onPress,
+}: {
+  icon: keyof typeof Feather.glyphMap;
+  label: string;
+  disabled: boolean;
+  /** Read to a screen-reader user on this button specifically — the same B3/F4 copy the sighted reason line under the row shows. */
+  reason: string | null;
+  onPress: () => void;
+}): React.ReactElement {
+  return (
+    <PressableScale
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint={reason ?? undefined}
+      accessibilityState={{ disabled }}
+      hitSlop={space.xs}
+      style={[styles.actionButton, { borderColor: disabled ? colors.border : colors.borderStrong }]}
+    >
+      <Feather name={icon} size={18} color={disabled ? colors.textFaint : colors.text} />
+    </PressableScale>
+  );
 }
 
 function locationLine(status: ShareStatus, now: number, member: Member): string {
@@ -104,6 +164,22 @@ export default function WatchScreen(): React.ReactElement {
               const p = presence[member.id];
               const hasFix = mayDrawPin(status) && p?.location;
               const tone = status.kind === 'granted' ? 'ok' : undefined;
+
+              // ★ Spec F1/HANDOFF note — camera/audio don't gate on
+              // `monitoringPaused` the way location does, so `presence` is
+              // deliberately passed as `undefined` here, not `p`.
+              const cameraStatus = grantStatusFor('camera', member, meId, undefined, grants, now);
+              const audioStatus = grantStatusFor('audio', member, meId, undefined, grants, now);
+              const cameraReason = disabledReasonFor(cameraStatus, member);
+              const audioReason = disabledReasonFor(audioStatus, member);
+              // B1 shows one reason line; F1 lets camera/audio diverge (a
+              // member can revoke one and keep the other). Dedupe so the
+              // common case (both blocked for the same reason) still reads
+              // as one line, and only show two when the reasons truly differ.
+              const actionReasons = [cameraReason, audioReason].filter(
+                (r, i, arr): r is string => r !== null && arr.indexOf(r) === i,
+              );
+
               return (
                 <Card key={member.id} tone={tone}>
                   <View style={styles.row}>
@@ -127,6 +203,28 @@ export default function WatchScreen(): React.ReactElement {
                     </View>
                     <Pill label={statusShort(status)} tone={status.kind === 'granted' || status.kind === 'self' ? 'ok' : 'neutral'} />
                   </View>
+
+                  <View style={styles.actionsRow}>
+                    <WatchActionButton
+                      icon="video"
+                      label={`View ${member.displayName}'s camera`}
+                      disabled={cameraReason !== null}
+                      reason={cameraReason}
+                      onPress={() => alertWatchActionNotBuilt(member, 'camera')}
+                    />
+                    <WatchActionButton
+                      icon="mic"
+                      label={`Listen to ${member.displayName}`}
+                      disabled={audioReason !== null}
+                      reason={audioReason}
+                      onPress={() => alertWatchActionNotBuilt(member, 'audio')}
+                    />
+                  </View>
+                  {actionReasons.map((reason) => (
+                    <Text key={reason} style={styles.actionReason}>
+                      {reason}
+                    </Text>
+                  ))}
                 </Card>
               );
             })
@@ -134,8 +232,9 @@ export default function WatchScreen(): React.ReactElement {
         </Section>
 
         <Text style={styles.footnote}>
-          Camera and listen access are coming in a later update — they need their own consent
-          grant, separate from location, so a member can allow one without the other.
+          Camera and Listen use the same automatic family consent as this list — no separate
+          approval per session. The live view/listen screens themselves are coming in a later
+          update.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -168,6 +267,17 @@ const styles = StyleSheet.create({
   middle: { flex: 1, gap: space.xxs },
   name: { color: colors.text, fontSize: font.h3, fontWeight: weight.semibold },
   meta: { color: colors.textDim, fontSize: font.small, lineHeight: leading.small },
+
+  actionsRow: { flexDirection: 'row', gap: space.sm },
+  actionButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionReason: { color: colors.textFaint, fontSize: font.tiny, lineHeight: leading.tiny },
 
   footnote: {
     color: colors.textFaint,
