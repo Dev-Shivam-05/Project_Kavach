@@ -3,6 +3,12 @@
 Read [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md) before touching code, [docs/PHASES.md](docs/PHASES.md)
 for status, and [docs/RISK.md](docs/RISK.md) before touching anything in its danger table.
 
+**`PHASES.md`'s `## Now` summary paragraph is not the scope boundary — the detailed per-phase table
+further down is.** Multi-part work (e.g. the "Phase 6-D table") splits across adjacent rows that name
+exactly which files/mechanism each one owns (phase6-D-5's HANDOFF announced "Refresh/Camera/Listen
+buttons" before that table had been read; the table itself puts Refresh in 6-D-6, not 6-D-5). Read
+the phase's own row before stating a FILES/DONE-WHEN scope at boot, not just the summary above it.
+
 ## Commands
 
 | | |

@@ -778,3 +778,25 @@ frictionless grant as working end to end. The phase that builds the bridge shoul
 `grantFamilyMembershipScopes` directly rather than reimplementing the grant shape — see the 6-D-4
 entry in git history (`docs/HANDOFF.md` as of commit `822258ca`) for the exact call signature and
 the two candidate bridge designs.
+
+## D-034 — 6-D-5's Camera/Listen buttons render real grant state, but tapping an enabled one never opens a session or writes an access-log row
+
+**Decision.** `watch.tsx`'s new Camera/Listen icon-buttons (spec B1–B3) compute their
+enabled/disabled state from `grantStatusFor('camera'|'audio', ...)` and show the exact locked B3/F4
+copy when disabled — real, not fake. Tapping an *enabled* button, though, does not open a live-view
+or listen session: those screens, `react-native-webrtc`, and the TURN relay are all 6-D-7's scope
+(unbuildable here regardless — D-021). It shows an honest `Alert` ("Camera view isn't built yet" /
+"Listening isn't built yet") and writes nothing — no navigation to a stub screen, no
+`AccessLogEntry` row.
+**Why.** Two tempting alternatives were rejected. A stub live-view screen would have reached into
+6-D-7's already-named scope (PHASES.md assigns "the actual live-view/listen screens" there
+explicitly) — building it here would be scope creep the ≤8-files phase discipline exists to prevent.
+A silent no-op was rejected because a button that visibly changed from disabled-with-a-reason to
+enabled, and then does nothing when pressed, reads as a broken control on a feature this session just
+proved has a real consent gate behind it — worse than the honest admission that the feature itself
+isn't finished. Writing a real `AccessLogEntry` for a session that never opened would be the exact
+fabrication D5/E4 and this app's whole honest-empty-state convention exist to prevent.
+**Evidence.** `mobile/app/(tabs)/watch.tsx` — `alertWatchActionNotBuilt()`.
+**Consequence.** 6-D-7 replaces this `Alert` call with the real navigation/session start — it should
+not need to touch the enabled/disabled logic or the reason copy, which 6-D-5 already finished.
+Do not report Camera/Listen as "working" beyond "correctly gated and honest about not being live yet."

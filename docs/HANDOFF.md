@@ -1,145 +1,114 @@
-# HANDOFF — Kavach — Phase 6-D-4 — 2026-08-31
+# HANDOFF — Kavach — Phase 6-D-5 — 2026-08-31
 
-Branch **`shivam`**, code commit `94ed2b7b` (docs closed out through `a3118619`), **pushed** to
-`origin/shivam`. This handoff supersedes the 31 Aug 6-D-3 one (commit `7d7babff`), preserved in git
+Branch **`shivam`**, code commit `71ba026d`, **pushed** to `origin/shivam`. This handoff supersedes
+the 31 Aug 6-D-4 one (commit `94ed2b7b`, docs closed out through `a3118619`), preserved in git
 history.
 
 ## Done
 
-- **6-D-4 shipped: consent plumbing for Family Watch (spec F1–F4)**, scoped to "plumbing only, flag
-  the gap" per an explicit decision this session — see **Decisions made** below for the gap and why
-  it was not papered over.
-- **F1 — `camera` is a real `ConsentScope` end to end.** Added to `mobile/src/core/types.ts`'s
-  `ConsentScope` union, to backend's `validScopes` map (`backend/internal/consent/consent.go`,
-  new `ScopeCamera` constant), and to `backend/migrations/0001_init.sql`'s `scope` column comment
-  (the naming authority, per this repo's own convention). Separately revocable from `audio` — a
-  member can allow Listen and refuse Camera or the reverse, matching F1's own stated reason.
-- **F2 — `'family_membership'` joins `ConsentGrant['grantedVia']`.** Pure builder
-  `buildFamilyMembershipGrant()` and the scope pair `FAMILY_MEMBERSHIP_SCOPES = ['camera', 'audio']`
-  added to `consentStatus.ts`. A new store action, `grantFamilyMembershipScopes(otherMemberIds)`,
-  creates a `camera` + `audio` grant from **me** to each id in the list — same
-  persist → outbox-enqueue → `postConsent` shape as the existing `grantConsent`, just built by the
-  pure constructor instead of taking purpose/hours from a caller. Backend needed no change for the
-  new `grantedVia` value: `Grant()` doesn't validate it against an enum, just defaults empty to
-  `"self"` and passes anything else through verbatim — pinned by a new characterization test
-  (`TestGrantPassesThroughFamilyMembershipVia`) rather than assumed.
-- **F3 — 90-day silent self-renewal.** `dueForRenewal()`/`renewed()` in `consentStatus.ts`
-  (`FAMILY_MEMBERSHIP_GRANT_WINDOW_MS = 90 days`). Swept once per app bootstrap, inside
-  `loadEverything()`: any grant where `grantorMemberId === my member id`, `grantedVia ===
-  'family_membership'`, `revokedAt === null`, and `expiresAt <= now` gets its `expiresAt` pushed
-  another 90 days out, persisted via `consentRepo.upsert`. **Deliberately local-only** — there is no
-  PATCH-consent endpoint on the control plane to sync a renewal to, and reusing `postConsent`'s
-  idempotency key (`consent:${id}`) would replay the *original* cached response rather than update
-  anything, so this does not call it. A revoked grant is never renewed, by construction (that would
-  silently undo the one control F4 gives the grantor).
-- **F4 — `grantStatusFor(scope, ...)` generalizes `shareStatusFor`** to any `ConsentScope`, so a
-  future Watch-tab Camera/Listen button can derive granted/revoked/expired/none exactly the way
-  `map.tsx` already does for `live_location`. `shareStatusFor` itself is an unchanged thin
-  `'live_location'`-scoped wrapper over it — `map.tsx`'s behaviour is untouched (verified: no test
-  file exercises it directly, but the wrapper is a 3-line delegation, and `watch.tsx`'s only current
-  `shareStatusFor` call site is unaffected).
-- **11 new mobile unit tests** (`test/consent-status.test.ts`) covering scope-specificity, the
-  revoked-over-expired precedence, the 90-day window math, and that a manually-granted (`self`)
-  scope is never swept into renewal. **3 new backend tests**
-  (`internal/consent/consent_test.go` — this package had zero before) covering the new scope, the
-  unchanged unknown-scope rejection, and the `grantedVia` passthrough.
-- **`db/schema.ts` and `db/repos.ts` needed no code changes**, and I did not force one to match the
-  acceptance-criteria file list literally: `consent_grant`'s `scope`/`granted_via` SQLite columns are
-  plain `TEXT` with no `CHECK` constraint or enum list, and `repos.ts`'s `toGrant()` already casts
-  generically (`r.scope as ConsentScope`). Reported honestly rather than edited for the sake of
-  matching a checklist.
-- **`net/api.ts` also needed no code change** — `postConsent`/`ConsentInput` are already
-  `ConsentScope`-typed, so they accept `'camera'` the moment `core/types.ts` does.
-- Verified green: `tsc --noEmit` (0 errors), `npm test` **182/182**, `npm run verify` exit 0,
-  `go build`/`go vet`/staticcheck/archlint/`go test ./...` all clean (every backend package,
-  including `cmd/sos-ingest` — no Application Control block this run), `schema-lint` clean,
-  `gen:check` in sync.
+- **6-D-5 shipped: Watch tab Camera/Listen icon-buttons (spec B1–B3)** — UI/state layer only, exactly
+  as PHASES.md's own 8-phase table scoped it (Refresh is 6-D-6, live transport is 6-D-7; neither
+  touched here).
+- Each member card in `app/(tabs)/watch.tsx` now renders two icon-buttons (Feather `video`, `mic`)
+  next to the existing avatar/location/Pill row. Enabled state comes from
+  `grantStatusFor('camera'|'audio', member, meId, undefined, grants, now)` — 6-D-4's generalisation
+  of the location-consent rule. `presence` is passed as `undefined`, not the member's live presence,
+  because camera/audio don't gate on `monitoringPaused` the way location does (a note `consentStatus`
+  left for this exact caller in 6-D-4).
+- New `disabledReasonFor(status, member)` in `consentStatus.ts` renders the exact locked copy: B3's
+  *"Not sharing location/camera/mic yet — ask them to finish joining."* for `kind: 'none'`, F4's
+  *"{name} has turned this off."* for `kind: 'revoked'`. `kind: 'expired'` gets a judgment-call string
+  (not spec-locked — flagged below).
+- Camera and audio reasons **dedupe to one line** when both scopes are blocked for the same reason
+  (the common case) and show as **two lines** only when a member has revoked one scope but kept the
+  other — this is F1's "separately revocable" requirement actually exercised, not just declared.
+- Tapping an **enabled** button shows an honest `Alert` ("Camera view isn't built yet" / "Listening
+  isn't built yet") rather than opening a session that doesn't exist, or writing a fake
+  `AccessLogEntry` for one. Recorded as **D-034** — see that entry for why a stub screen and a silent
+  no-op were both rejected.
+- **4 new mobile unit tests** (`test/consent-status.test.ts`, now 15 in that file) covering
+  `disabledReasonFor`'s four reachable branches (`none`, `revoked`, `granted`→null, `expired`).
+- Verified green: `tsc --noEmit` (0 errors), `npm test` **186/186** (was 182), `npm run verify` exit
+  0. **No screenshot** — per this repo's own rule, a pure RN change with no native surface is verified
+  by `tsc`+tests+reading the JSX here, not a web preview (`react-native-web` isn't a dependency, and
+  no JDK/Android SDK exists on this machine for a device build — D-021).
+- Backend untouched this phase — not re-run, honestly, because nothing in `backend/` changed.
 
 ## Files changed
 
-- `mobile/src/core/types.ts` — `ConsentScope` += `'camera'`, `ConsentGrant['grantedVia']` +=
-  `'family_membership'`.
-- `mobile/src/domain/consentStatus.ts` — `grantStatusFor()` (generalized from `shareStatusFor`'s old
-  body), `buildFamilyMembershipGrant()`, `FAMILY_MEMBERSHIP_SCOPES`,
-  `FAMILY_MEMBERSHIP_GRANT_WINDOW_MS`, `dueForRenewal()`, `renewed()`.
-- `mobile/src/state/store.ts` — new `grantFamilyMembershipScopes` action (interface + impl,
-  unwired); F3's renewal sweep wired into `loadEverything()`.
-- `mobile/app/consent.tsx` — `SCOPE_LABEL['camera']` and `VIA_LABEL['family_membership']` added (TS
-  exhaustiveness on `Record<ConsentScope,…>`/`Record<ConsentGrant['grantedVia'],…>` forced this; the
-  screen would not otherwise compile once the unions grew).
-- `mobile/test/consent-status.test.ts` — new, 11 tests.
-- `backend/internal/consent/consent.go` — `ScopeCamera` constant, added to `validScopes`.
-- `backend/internal/consent/consent_test.go` — new, 3 tests (package's first).
-- `backend/migrations/0001_init.sql` — `scope`/`granted_via` column comments updated (naming
-  authority, per this repo's own convention #8).
-- `docs/PHASES.md` — 6-D-4 row → done; `## Now` / `## Next 3` repointed to 6-D-5.
+- `mobile/app/(tabs)/watch.tsx` — `WatchActionButton` (the icon-button primitive, local to this
+  screen), `alertWatchActionNotBuilt()`, per-member camera/audio status + reason computation, updated
+  header comment and footnote.
+- `mobile/src/domain/consentStatus.ts` — new `disabledReasonFor(status, member)`.
+- `mobile/test/consent-status.test.ts` — 4 new tests.
+- `docs/DECISIONS.md` — **D-034** appended.
+- `docs/PHASES.md` — 6-D-5 row → done; `## Now` / `## Next 3` repointed to 6-D-6.
 - `docs/HANDOFF.md` — this file.
 
 ## Decisions made
 
-Recorded as [DECISIONS.md](DECISIONS.md) **D-033**.
+Recorded durably as [DECISIONS.md](DECISIONS.md) **D-034**; the rest below are session-local
+judgment calls kept here only, same convention 6-D-4 used.
 
-- **F2's "existing enrolment flow" hook does not exist, and I asked rather than invented one.**
-  Before writing code, I checked where "a member finishes joining a family" actually happens in this
-  codebase and found two candidates, neither usable: (1) `enrolStore.ts`'s P2P device-pairing flow
-  (spoken-fingerprint SAS, QR/code exchange) is explicitly, deliberately airgapped — its own header
-  says "IT NEVER TALKS TO A SERVER" and "it never touches `store.ts`"; (2) the server-backed path
-  (`POST /v1/members`, which W10-j proved exists and works on the backend) has **no client call site
-  in mobile at all** — `net/api.ts` only wires `POST /v1/family` (`createFamily`, from spec row E1).
-  I asked the user how to scope 6-D-4 given this; the answer was "plumbing only, flag the gap" —
-  build F1–F4's mechanics as tested, callable functions, and document the missing bridge rather than
-  inventing a fake call site or silently expanding scope to build it. `grantFamilyMembershipScopes`
-  is exported, tested, and **not called from anywhere** — the next phase that builds the real
-  join-to-store bridge (either wiring `enrolStore`'s `joined`+`restartRequired` into `store.ts`'s
-  bootstrap, or building the missing `POST /v1/members` client call) should call it directly instead
-  of reimplementing the grant shape.
-- **F3's renewal sync was scoped down the same way, for a smaller, self-contained reason**: there is
-  no PATCH/PUT-consent endpoint on the control plane, and `postConsent`'s idempotency-key scheme
-  (`consent:${id}`) means re-POSTing an existing grant id would return the *original* cached response
-  rather than update anything server-side. Rather than inventing a new wire endpoint (a contract
-  decision beyond this phase's locked spec rows), renewal stays local-only. Flagged, not hidden.
-- **`purpose: 'safety'` on auto-created family-membership grants is an implementation choice, not a
-  spec-locked value** — F2 does not name one. Documented inline in `buildFamilyMembershipGrant`'s
-  comment as a judgment call, same category as 6-D-2a/2b's per-occurrence icon choices.
-- **`'family_membership'` needed no backend validation change** — discovered, not assumed:
-  `Grant()`'s `GrantedVia` field is free-text server-side (defaults empty to `"self"`, otherwise
-  passed through), unlike `Scope`/`Purpose` which are checked against enum maps. Pinned by
-  `TestGrantPassesThroughFamilyMembershipVia` so this stays true on purpose rather than by accident.
+- **Tapping an enabled Camera/Listen button is an honest "not built yet" alert, not a stub screen and
+  not a silent no-op.** See D-034 for the full reasoning — the short version: a stub screen would
+  have reached into 6-D-7's already-named scope, and a silent no-op on a button that just proved it
+  has a real consent gate behind it reads as broken, not unfinished.
+- **`disabledReasonFor`'s `'expired'` copy is a judgment call, not a spec-locked value** — B3/F4 only
+  name the `'none'` and `'revoked'` strings. Wrote *"{name}'s access expired — it renews automatically
+  once they reopen their app,"* consistent with F3's actual mechanism (the **grantor's** phone renews
+  its own outbound grant on its next bootstrap — not mine, since the card shows grants made *to* me)
+  and the tone of `map.tsx`'s existing location-expired string. Flagged, not silently invented, same
+  category as 6-D-4's `purpose: 'safety'` call.
+- **The B1 "one reason line" and F1 "separately revocable" requirements were reconciled by
+  deduping**, not by picking one over the other — see "Done" above.
+- **I corrected my own scope statement mid-session.** The phase I announced at boot said "Watch tab
+  renders Refresh/Camera/Listen icon-buttons" — before I had read PHASES.md's own 8-phase table
+  (the granular one, not the summary paragraph above it), which assigns Refresh to **6-D-6** (it needs
+  a new push-triggered location mechanism: "touches `notify` + a client push-handler"). Built
+  Camera/Listen only, per that table, once I found it. No Refresh button exists in `watch.tsx` yet —
+  this was not a user correction, just a self-caught mismatch between what I said and what the
+  project's own status board already specified.
 
 ## Known broken / deliberately skipped
 
-- **`grantFamilyMembershipScopes` is dead code by design** — exists, tested, callable, zero call
-  sites. Convention #2 applies: "Exists ≠ is wired up." Do not report Family Watch's frictionless
-  grant as working end to end until the join-bridge phase lands.
-- **F4's UI (Camera/Listen buttons, the exact B3/F4 reason strings) is 6-D-5's job, not this one** —
-  the acceptance-criteria file list for F1–F4 named no UI file, and none was touched. `grantStatusFor`
-  is the derivation layer 6-D-5 will call; the button rendering, the disabled-reason copy
-  ("Not sharing location/camera/mic yet…", "{name} has turned this off.") and the live-view screen
-  routes do not exist yet.
+- **No Refresh button yet** — that is 6-D-6's job, which needs a new server round-trip (a
+  push-triggered one-shot `getCurrentPositionAsync`) this phase does not touch.
+- **Camera/Listen do not open a real session** — tapping an enabled button is honest about this
+  (D-034) rather than faking one. The live-view/listen screens, `react-native-webrtc`, and the TURN
+  relay are all 6-D-7, and are unverifiable on this machine regardless (D-021 — no JDK/Android SDK).
+- **The join→store bridge gap from 6-D-4 (D-033) is still open**, and this phase makes it more
+  visible, not less: in the running app today, essentially every member's card will show the B3
+  "not sharing yet" reason for camera/audio, because `grantFamilyMembershipScopes` still has zero
+  call sites. This phase did not change that — it only makes the UI correctly *reflect* the gap
+  instead of hiding it behind 6-D-4's hardcoded "coming in a later update" footnote.
+- **No JSX-rendering test harness still** — same as every 6-D UI phase. `tsc --noEmit` and the new
+  `disabledReasonFor` tests catch type/logic errors, not layout; the card's visual arrangement (two
+  40×40 circles next to a Pill, an optional reason line below) has not been screenshotted.
 
 ## Next session starts here
 
-- **Phase 6-D-5**: Watch tab Camera/Listen buttons (spec rows B1–B3, D1–D2 partial, E1 partial —
-  the UI shell only; live transport is 6-D-7). Wire `grantStatusFor('camera'|'audio', member, meId,
-  presence, grants, now)` from `consentStatus.ts` into `watch.tsx`'s per-member card, using the exact
-  B3 reason string for `kind: 'none'` and the exact F4 string for `kind: 'revoked'`. Spec:
-  [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md) rows B1–B3.
+- **Phase 6-D-6**: On-demand location push (spec rows C1–C3) — a push-triggered one-shot
+  `getCurrentPositionAsync` for the Refresh button, 8s timeout with an honestly-labelled stale
+  fallback if no fix returns. Adds the actual Refresh icon-button to `watch.tsx`'s per-member card,
+  alongside the Camera/Listen buttons this session added.
 - **First command:**
   ```
   git checkout shivam
-  git log --oneline -1              # confirm you're on 94ed2b7b or later
+  git log --oneline -1              # confirm you're on 71ba026d or later
   cd mobile && npm run verify
   cd ../backend && go build ./... && go vet ./... && go test ./...
   ```
 - **Watch out for:**
-  1. **The join→store bridge is still missing.** If 6-D-5 or a later phase needs a real "member just
-     joined" trigger, that is new architecture (either hook `store.ts` bootstrap to read
-     `useEnrol.getState().joined`, or build the missing `POST /v1/members` client call), not a
-     5-minute wire-up. Read this handoff's Decisions section before assuming it is trivial.
-  2. **`grantStatusFor` takes `presence` as a required param** even though camera/audio checks don't
-     care about `monitoringPaused` the way location does — it was kept in the signature so `self`/
-     `paused` short-circuit identically to `shareStatusFor` rather than diverging. Pass `undefined`
-     for presence if the caller doesn't have it handy; the function already treats that as "not
-     paused."
-  3. **No JSX-rendering test harness still** — same as every 6-D UI phase. `tsc --noEmit` and the
-     new consent-status tests catch type/logic errors, not layout.
+  1. **6-D-6 is the first 6-D-* phase to touch the backend.** Read `internal/notify`'s existing FCM
+     send path (`fcm.go`, `notify.go pushPayload()`) before adding a new message kind — F-21's
+     seven-field allowlist is enforced twice, fail-closed (`assertPushSafe` server-side,
+     `readPushFields` device-side, both in [PROJECT_MAP.md](PROJECT_MAP.md)'s "What a push says"
+     section). A new push kind needs both allowlists updated, not just the sender.
+  2. **The device being refreshed may have its app backgrounded or closed** — C1 says "regardless of
+     whether their app is foregrounded," which is exactly what 1.35e (background push receive)
+     already proves works for incident alerts. Reuse that receive path (`src/state/pushReceive.ts`)
+     rather than building a second one.
+  3. **The join→store bridge gap (D-033) is unrelated to 6-D-6 and still unresolved.** Do not let a
+     future phase quietly fold that bridge into an unrelated phase's scope, per the same reasoning
+     D-033 already recorded — it needs its own phase.
