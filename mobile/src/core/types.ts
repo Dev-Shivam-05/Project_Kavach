@@ -199,6 +199,7 @@ export type ConsentScope =
   | 'history'
   | 'vitals'
   | 'audio'
+  | 'camera'
   | 'documents'
   | 'screen_time';
 
@@ -215,7 +216,7 @@ export interface ConsentGrant {
   /** ★ NEVER null. There is no permanent grant (PRD P-008). */
   expiresAt: number;
   revokedAt: number | null;
-  grantedVia: 'self' | 'guardian_policy' | 'autonomy_ramp';
+  grantedVia: 'self' | 'guardian_policy' | 'autonomy_ramp' | 'family_membership';
   /** F-14: Layer-1 revocation is instant; Layer-2 (key ratchet) may lag. */
   keyRotationPending: boolean;
 }

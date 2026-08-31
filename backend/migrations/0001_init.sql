@@ -261,7 +261,7 @@ CREATE TABLE consent_grant (
     family_id         uuid NOT NULL REFERENCES family(id) ON DELETE CASCADE,
     grantor_member_id uuid NOT NULL REFERENCES member(id),
     grantee_member_id uuid NOT NULL REFERENCES member(id),
-    scope             text NOT NULL,   -- live_location|history|vitals|audio|documents|screen_time
+    scope             text NOT NULL,   -- live_location|history|vitals|audio|camera|documents|screen_time
     purpose           text NOT NULL,   -- safety|incident_only|routine|care
     granted_at        timestamptz NOT NULL DEFAULT now(),
     -- ★ P-008: NOT NULL. There is no permanent grant. ★
@@ -270,7 +270,7 @@ CREATE TABLE consent_grant (
     -- the question to be asked again, out loud, by someone who can say no.
     expires_at        timestamptz NOT NULL,
     revoked_at        timestamptz,
-    granted_via       text NOT NULL,   -- self|guardian_policy|autonomy_ramp
+    granted_via       text NOT NULL,   -- self|guardian_policy|autonomy_ramp|family_membership
     -- F-14: layer-1 revocation is instant, the layer-2 key ratchet may lag. The
     -- UI must never claim a completeness the crypto does not yet have.
     key_rotation_pending boolean NOT NULL DEFAULT false,

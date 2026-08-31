@@ -188,6 +188,12 @@ import {
 
 import { computeRisk } from '../domain/riskContext';
 import { haversineM } from '../domain/geofence';
+import {
+  buildFamilyMembershipGrant,
+  dueForRenewal,
+  renewed,
+  FAMILY_MEMBERSHIP_SCOPES,
+} from '../domain/consentStatus';
 import { refreshPresenceTier, startPresence, stopPresence } from '../domain/presenceService';
 import { connectWs, disconnectWs, onFrame, sendFrame, subscribeWsStatus, type WsFrame } from '../net/ws';
 import {
@@ -299,6 +305,13 @@ export interface KavachState {
     hours: number;
   }): Promise<void>;
   revokeConsent(id: UUID): Promise<void>;
+  /**
+   * ★ Spec F2 — creates MY `camera` + `audio` grants to each of `otherMemberIds`
+   * (this device is always the grantor; the reciprocal direction is each of
+   * those members running this same action for me). NOT CALLED FROM ANYWHERE
+   * YET — see this function's implementation for why.
+   */
+  grantFamilyMembershipScopes(otherMemberIds: UUID[]): Promise<void>;
   startJourney(j: { label: string; destName: string; etaMinutes: number }): Promise<void>;
   arriveJourney(id: UUID): Promise<void>;
   addGeofence(g: Omit<Geofence, 'id'>): Promise<void>;
@@ -643,6 +656,61 @@ export const useKavach = create<KavachState>()((set, get) => ({
     await safe(() => enqueueConsentGrant(input), 0);
     await refreshOutboxDepth();
     void safe(() => postConsent(input), null);
+  },
+
+  /**
+   * ★ Spec F2 — the frictionless grant behind Family Watch's Camera/Listen
+   * buttons (6-D-5). Creates a `camera` and an `audio` grant, `grantedVia:
+   * 'family_membership'`, from ME to each id in `otherMemberIds` — same
+   * persist/enqueue/postConsent shape as `grantConsent` above, just built by
+   * `buildFamilyMembershipGrant` instead of taking purpose/hours from a caller.
+   *
+   * ★ NOT CALLED FROM ANYWHERE YET ★ — 31 Aug decision (phase6-D-4). The spec's
+   * "when a member finishes joining a family (existing enrolment flow)" assumes
+   * a hook that does not exist end to end: `enrolStore.ts`'s P2P join
+   * deliberately never touches this store or a server (see its own header
+   * comment), and no client call to `POST /v1/members` exists either — so there
+   * is no real "a member just joined" event in this codebase to attach this to.
+   * Exported and tested so the phase that builds that bridge calls this
+   * directly instead of reimplementing the grant shape.
+   */
+  async grantFamilyMembershipScopes(otherMemberIds: UUID[]): Promise<void> {
+    const s = get();
+    const grantorMemberId = s.me?.id ?? (await identity()).memberId;
+    const now = Date.now();
+    const grants: ConsentGrant[] = [];
+    for (const granteeMemberId of otherMemberIds) {
+      for (const scope of FAMILY_MEMBERSHIP_SCOPES) {
+        grants.push(
+          buildFamilyMembershipGrant({
+            id: uuidv7(now),
+            familyId: s.familyId,
+            grantorMemberId,
+            granteeMemberId,
+            scope,
+            now,
+          }),
+        );
+      }
+    }
+    for (const grant of grants) {
+      await safe(() => consentRepo.upsert(grant), undefined);
+    }
+    set((prev) => ({ grants: [...grants, ...prev.grants] }));
+
+    for (const grant of grants) {
+      const input = {
+        id: grant.id,
+        grantorMemberId: grant.grantorMemberId,
+        granteeMemberId: grant.granteeMemberId,
+        scope: grant.scope,
+        purpose: grant.purpose,
+        expiresAt: grant.expiresAt,
+      };
+      await safe(() => enqueueConsentGrant(input), 0);
+      void safe(() => postConsent(input), null);
+    }
+    await refreshOutboxDepth();
   },
 
   /**
@@ -1350,7 +1418,21 @@ async function loadEverything(ids: { familyId: UUID; deviceId: UUID; memberId: U
   const incidents = incidentsRaw ?? [];
   const activeList = activeListRaw ?? [];
   const presenceMap = presenceMapRaw ?? {};
-  const grants = grantsRaw ?? [];
+  // ★ Spec F3 — silent 90-day self-renewal, swept once per bootstrap. Only MY
+  // own outgoing grants are eligible: renewal is a reaffirmation of consent I
+  // gave, and this device has no authority to reaffirm one somebody else gave.
+  // Local-only — there is no PATCH-consent endpoint on the control plane to
+  // sync a renewed `expiresAt` to, and reusing `postConsent`'s idempotency key
+  // (`consent:${id}`) would just replay the ORIGINAL cached response instead of
+  // updating anything, so this deliberately does not call it.
+  const loadedGrants = grantsRaw ?? [];
+  const renewalNow = Date.now();
+  const grants = loadedGrants.map((g) => {
+    if (g.grantorMemberId !== ids.memberId || !dueForRenewal(g, renewalNow)) return g;
+    const next = renewed(g, renewalNow);
+    void safe(() => consentRepo.upsert(next), undefined);
+    return next;
+  });
   const accessLog = accessLogRaw ?? [];
   const journeys = journeysRaw ?? [];
   const geofences = geofencesRaw ?? [];

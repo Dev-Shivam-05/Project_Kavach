@@ -34,8 +34,12 @@ const (
 	ScopeHistory      = "history"
 	ScopeVitals       = "vitals"
 	ScopeAudio        = "audio"
-	ScopeDocuments    = "documents"
-	ScopeScreenTime   = "screen_time"
+	// ScopeCamera — Spec F1 (phase6b-redesign-and-family-watch), Family Watch
+	// live camera view. Separately revocable from ScopeAudio: a member may allow
+	// Listen and refuse Camera, or the reverse.
+	ScopeCamera     = "camera"
+	ScopeDocuments  = "documents"
+	ScopeScreenTime = "screen_time"
 )
 
 // Purposes. Purpose binding is the property RBAC cannot give you: a grant made
@@ -50,7 +54,7 @@ const (
 
 var validScopes = map[string]bool{
 	ScopeLiveLocation: true, ScopeHistory: true, ScopeVitals: true,
-	ScopeAudio: true, ScopeDocuments: true, ScopeScreenTime: true,
+	ScopeAudio: true, ScopeCamera: true, ScopeDocuments: true, ScopeScreenTime: true,
 }
 
 var validPurposes = map[string]bool{

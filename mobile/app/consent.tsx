@@ -63,6 +63,7 @@ const SCOPE_LABEL: Record<ConsentScope, string> = {
   history: 'location history',
   vitals: 'vitals',
   audio: 'audio',
+  camera: 'camera',
   documents: 'documents',
   screen_time: 'screen time',
 };
@@ -78,6 +79,7 @@ const VIA_LABEL: Record<ConsentGrant['grantedVia'], string> = {
   self: 'You granted this',
   guardian_policy: 'Guardian policy',
   autonomy_ramp: 'Autonomy ramp',
+  family_membership: 'Family membership',
 };
 
 /** What an access-log row actually touched, in words rather than column names. */
