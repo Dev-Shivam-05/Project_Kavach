@@ -1,117 +1,107 @@
-# HANDOFF — Kavach — Phase 6-D-2b — 2026-08-30
+# HANDOFF — Kavach — Phase 6-D-3 — 2026-08-31
 
-Branch **`shivam`**, commit `813f4aa3`, **pushed** to `origin/shivam`. This handoff supersedes the
-30 Aug 6-D-2a one (commit `7f2b5866`), preserved in git history.
+Branch **`shivam`**, commit `45fc5d18`, **not yet pushed**. This handoff supersedes the 30 Aug
+6-D-2b one (commit `813f4aa3`), preserved in git history.
 
 ## Done
 
-- **6-D-2b shipped: icon sweep, part 2 of 2 — the sweep is now complete.** All 8 remaining files from
-  the spec-A4 grep are clean: `panic.tsx` (4 occurrences), `camera-view.tsx` (5), `incident/[id].tsx`
-  (1), `consent.tsx` (1), `drills.tsx` (2), `journeys.tsx` (1), `vault.tsx` (1), `camera-node.tsx` (1).
-  `grep -rn "[⌂◎⚠⚙▣↯▮▤◉]" mobile/` now returns **nothing at all** — spec A4's acceptance criterion is
-  met, and the two-part split from 6-D-2a is done.
-- **`Pill` gained a public `icon?: keyof typeof Feather.glyphMap` prop**, additive next to `glyph`,
-  mirroring `ListItem`/`EmptyState`'s existing pattern (icon wins over glyph, which wins over the
-  per-tone `DEFAULT_ICON`, which wins over the per-tone `DEFAULT_GLYPH`). 6-D-2a only exposed a
-  *tone-default* Feather icon internally (`warn` → `alert-triangle`); this phase needed callers to
-  override with a specific icon per occurrence (`incident/[id].tsx`'s DRILL pill, four Pills in
-  `camera-view.tsx`), which the tone-default mechanism alone could not express.
-- **Selective conversion inside mixed strings/functions** — three places returned more than one
-  glyph and only one of the returned values was in the catalogued 9-character set, so the fix could
-  not be "swap the function," it had to be "swap one branch of the function":
-  - `panic.tsx`'s `degradationGlyph()` → renamed `degradationMark()`, returns `{ glyph } | { icon }`
-    (same shape as 6-D-2a's `home.tsx homeEventGlyph`). Only the worst-tier mark (`⚠`) became
-    `alert-triangle`; `✓` and `ℹ` are untouched, per D-032.
-  - `panic.tsx`'s `NotifiedList` row (`✓` stays text, `⚠` → icon) and PIN-entry prompt row (`•` stays
-    text, `⚠` → icon) — both now branch on the boolean that already existed (`row.delivered`, `wrong`)
-    rather than switching on a returned character.
-  - `vault.tsx`'s `KIND_GLYPH` map lost its `document: '▤'` entry (type narrowed to
-    `Partial<Record<...>>`); a new `kindMark()` helper returns `{ icon: 'archive' }` for `document`
-    and `{ glyph: KIND_GLYPH[kind] }` for the other four kinds (`✚ ☰ ▦ ⚿`, all untouched). A new local
-    `KindGlyph` component renders the raw `<Text>` in the quorum-object card header; the `ListItem`
-    call site spreads `{...kindMark(v.kind)}` directly.
-  - `panic.tsx`'s "nobody responded" banner had only one glyph (`⚠`, always shown) — swapped straight
-    to `Feather alert-triangle`, and the now-fully-dead `nobodyGlyph` style was deleted (same as
-    6-D-2a's `_layout.tsx` `warnGlyph` removal).
-- **`camera-node.tsx`'s local `Rule` component gained an optional `icon` prop** (`glyph` is now
-  optional too, same pattern as `ListItem`). Only its `⌂` call site (the "switches off automatically
-  when someone is home" rule) became `icon="home"`; the other four `Rule` glyphs in the same list
-  (`● ◼ ⚿ ✕`) are untouched — not in the catalogued set.
-- **Per-occurrence icon choices, not a character→icon lookup table** (same judgment call as 6-D-2a,
-  restated because the same character split differently again this time):
-  - `▣` → `camera` (both camera-view.tsx occurrences: the empty state and the Section count Pill).
-  - `↯` → `zap` (camera-view.tsx, motion-detected Pill).
-  - `▮` → `battery` / `battery-charging`, chosen dynamically off `node.charging` (camera-view.tsx,
-    battery Pill). The `⚡` character already in that Pill's label text is untouched — not one of the 9.
-  - `▤` → `image` (camera-view.tsx, snapshot-count Pill — a photo, not a document) **vs.** `▤` →
-    `archive` (drills.tsx "Backup restore" ListItem, and vault.tsx's `document` kind — both documents).
-  - `◎` → `target` (incident/[id].tsx DRILL Pill) **vs.** `◎` → `users` (journeys.tsx "Nobody is
-    travelling" empty state, matching 6-D-2a's map.tsx "Nobody to map" → `users`).
-  - `◉` → `eye` (consent.tsx access-log row — "you viewed X's location").
-  - `⚠` → `alert-triangle` everywhere it appeared (5 occurrences across panic.tsx and drills.tsx) —
-    the one character that was unambiguous every time.
+- **6-D-3 shipped: visual density (spec A5 + A6).**
+- **A5 — `Pill`'s `neutral`/`info` tones are now outline-only.** Transparent background, border
+  unchanged (`TONE_BORDER[tone]`, already the peripheral-vision-strength colour), and — new — the
+  label itself renders in the tone's own text token (`TONE_SURFACE[tone].fg`: `infoText` / `textDim`)
+  instead of the universal `colors.text`. That inversion is safe specifically because the soft fill is
+  gone: `*Text` tokens are pre-validated at ≥7:1 on every surface `theme.ts` exports, so reading one
+  directly off the page needs no fill pairing to protect it — unlike the filled tones, which still use
+  `colors.text` to stay clear of the low-contrast fill+tone-text pairing documented at the top of the
+  file. `ok`/`warn`/`danger` are **unconditionally unaffected** — no context flag, no "is this an
+  active incident" check anywhere in `Pill`. The scoping is purely by `tone`, which is what makes A5's
+  own caveat ("danger/warn stay filled on an active incident or Family Watch session") automatically
+  true: those tones never touch the outline branch at all.
+- **A6 — eight standalone notice-card containers now carry `padding: space.lg` (16) with a
+  `space.md` (12) minimum gap between their stacked rows**, up from a mix of `space.sm`/`space.xs`/
+  `space.xxs`:
+  - `consent.tsx` `rung` (the autonomy-ramp age card: age+title row, then a body line).
+  - `incident/[id].tsx` `unackedBanner` and `respondingBanner` (padding was already `lg`; only the
+    row gap moved).
+  - `panic.tsx` `notified` (the "WHO HAS BEEN TOLD" card — went from asymmetric `paddingVertical:
+    sm`/`paddingHorizontal: md` to uniform `lg`, and **gained a `gap` it did not have at all**: the
+    title and every `notifiedRow` were previously flush siblings with zero space between them) and
+    `noFix` (padding already `lg`; only the gap moved).
+  - `journeys.tsx` `deadman` (padding+gap both moved) and `corridorEmpty` (padding already `lg`; only
+    the gap moved).
+  - `medical-card.tsx` `emptyCard` (padding already `lg`; only the gap moved).
 - Verified green: `tsc --noEmit` (0 errors), `npm test` **171/171**, `npm run verify` exit code 0.
 
 ## Files changed
 
-- `mobile/app/panic.tsx` — 4 glyph→icon swaps (all `⚠`→`alert-triangle`), `degradationGlyph` renamed
-  `degradationMark` (mixed-return pattern), dead `nobodyGlyph` style removed, `Feather` import added.
-- `mobile/app/camera-view.tsx` — 5 glyph→icon swaps (`▣`×2→`camera`, `↯`→`zap`, `▮`→dynamic battery
-  icon, `▤`→`image`).
-- `mobile/app/incident/[id].tsx` — 1 swap: DRILL `Pill` `glyph="◎"` → `icon="target"`.
-- `mobile/app/consent.tsx` — 1 swap: access-log `ListItem` `glyph="◉"` → `icon="eye"`.
-- `mobile/app/drills.tsx` — 2 swaps: `▤`→`archive`, `⚠`→`alert-triangle`.
-- `mobile/app/journeys.tsx` — 1 swap: empty-state `◎`→`users`.
-- `mobile/app/vault.tsx` — 1 swap (`▤`→`archive` for the `document` kind only), `KIND_GLYPH` narrowed
-  to `Partial`, new `kindMark()` helper + `KindGlyph` local component, `Feather` import added.
-- `mobile/app/camera-node.tsx` — 1 swap: local `Rule` component gained an `icon` prop, `⌂`→`home` on
-  its one call site, `Feather` import added.
-- `mobile/src/ui/components/Pill.tsx` — new public `icon` prop, wins over `glyph` and over the
-  per-tone `DEFAULT_ICON`.
-- `docs/PHASES.md` — 6-D-2b row → ✅; `## Now` / `## Next 3` repointed to 6-D-3.
+- `mobile/src/ui/components/Pill.tsx` — outline branch for `neutral`/`info` tones (background,
+  border-preserved, label colour), new header note explaining why the label-colour rule inverts only
+  there.
+- `mobile/app/consent.tsx` — `rung` padding/gap.
+- `mobile/app/incident/[id].tsx` — `unackedBanner`, `respondingBanner` gap.
+- `mobile/app/panic.tsx` — `notified` padding+gap (was two directional padding props, no gap at all),
+  `noFix` gap.
+- `mobile/app/journeys.tsx` — `deadman` padding/gap, `corridorEmpty` gap.
+- `mobile/app/medical-card.tsx` — `emptyCard` gap.
+- `docs/PHASES.md` — 6-D-3 row → done; `## Now` / `## Next 3` repointed to 6-D-4.
 - `docs/HANDOFF.md` — this file.
 
 ## Decisions made
 
-- None new. This phase executes D-032 (6-D-2a, 30 Aug) to completion — no scope question came up that
-  D-032 didn't already answer. The per-occurrence icon judgment calls above are implementation
-  choices in the same category 6-D-2a's own handoff described as "not written down anywhere as a
-  separate lock; treated as ordinary implementation judgment."
+- **A6's true scope was not "every `space.sm` in the app" — it was 8 files, not 19.** A first grep for
+  `space.sm` padding/gap anywhere under `mobile/app` hit 19 files, which would have blown past the
+  ~8-file one-phase budget. A background Explore agent then classified those hits: most were incidental
+  (icon-to-label gaps, Pill/button internals, single-row list items) rather than "card internal
+  padding." Only 6 files (10 style instances, since some files had 2–3) were genuine standalone
+  notice-card containers. That distinction — a bordered/tinted panel holding **stacked** rows, vs. a
+  single-row list item or an atomic control's own internal padding — is what A6's own wording turns
+  on ("card internal padding," "gap between stacked rows **inside** one card").
+- **Two of the agent's ten flagged instances were excluded on inspection, not converted:**
+  - `journeys.tsx`'s `metric` (the distance/duration stat tile inside `metricRow`) — a small tile in a
+    row of tiles, not itself the card; converting its padding to 16 would have made three tiles not fit
+    a phone-width row. Left untouched.
+  - `diagnostics.tsx`'s `row`/`rowHead` (one row per self-test check, ~9 of them, accordion-expandable)
+    — structurally the same repeated-list-row pattern as `ListItem.tsx`/`MemberRow.tsx`, which the
+    survey itself excluded elsewhere for being "single-row list items, not stacked rows inside a card."
+    Bumping padding to 16 on 9 repeated rows would have read as a bug, not a redesign. Left untouched.
+  Both are ordinary implementation judgment in the same category 6-D-2a/2b's per-occurrence icon calls
+  were — not written down as a separate spec-lock row.
+- **A5 needed no "is this pill on an active incident" check.** The spec's own wording momentarily reads
+  as if `danger`/`warn` might sometimes go outline too ("danger and warn pills involved in an active
+  incident... keep their filled treatment"), but the first sentence scopes the whole change to
+  `neutral`/`info` only — the second sentence is reassurance that those two tones are untouched, not a
+  second rule. Implemented as a pure `tone`-keyed branch; no new prop, no caller-side context threading.
 
 ## Known broken / deliberately skipped
 
-- **No screenshot exists of the changed screens** — same standing limitation as every 6-D UI phase:
-  no JDK/Android SDK on this machine (D-021), no `react-native-web` dependency, so neither a device
-  build nor `expo start --web` can render it here. Verified instead by `tsc`'s JSX/type check plus
-  reading each diff against the existing, already-typechecked component patterns (D-2a's own
-  precedent). `panic.tsx` and `incident/[id].tsx` — the two safety-critical files in this batch — got
-  the closest reading: every change there is a leaf-level glyph→icon swap with zero logic touched
-  (no state, no prop threading beyond the existing `colour`/`tone` variables already in scope).
+- **No screenshot exists of the changed screens** — same standing limitation as every 6-D UI phase: no
+  JDK/Android SDK on this machine (D-021), no `react-native-web` dependency. Verified by `tsc`'s
+  JSX/type check, the full green test suite (including `theme-contrast.test.ts`, which re-asserts every
+  `*Text`/fill pairing this phase relies on), and reading each diff against the existing,
+  already-typechecked patterns. None of these six screens are the two safety-critical ones
+  (`panic.tsx`/`incident/[id].tsx`) beyond the padding/gap change itself — no state, no logic, no prop
+  threading touched anywhere in this diff.
+- **Not yet pushed to `origin/shivam`** — commit `45fc5d18` is local only as of this handoff.
 
 ## Next session starts here
 
-- **Phase 6-D-3**: visual density — neutral/info `Pill` gets an outline variant, card padding moves
-  to `space.lg`/`space.md` minimum (A5/A6 in the spec). Danger/warn tones on active incidents/sessions
-  stay filled — nothing safety-critical is allowed to get quieter. Spec:
-  [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md) row A5/A6.
+- **Phase 6-D-4**: consent plumbing for Family Watch — the new `camera` scope. Spec:
+  [phase6b-redesign-and-family-watch.md](spec/phase6b-redesign-and-family-watch.md), section D
+  (D2–D6 are fixed inputs, not open questions — see that file's header for why D3, the on-device
+  indicator, is non-negotiable).
 - **First command:**
   ```
   git checkout shivam
-  git log --oneline -1              # confirm you're on 813f4aa3 or later
-  cd mobile && grep -rn "[⌂◎⚠⚙▣↯▮▤◉]" .   # confirm it still returns nothing
-  npm run verify
+  git log --oneline -1              # confirm you're on 45fc5d18 or later
+  cd mobile && npm run verify
   ```
 - **Watch out for:**
-  1. **The icon sweep (spec A4) is now fully done** — do not reopen it. Any future glyph you touch in
-     this codebase is one of the ~16 non-catalogued characters (`✓ ✕ ℹ • ⚑ ▁ — ⚿ ↗ ≋ ◇ ≈ ✚ ☰ ▦ ●
-     ◼`, etc.) that D-032 deliberately left alone; leave them alone too unless a *new* spec row asks
-     for them by name.
-  2. **`Pill` now has three ways to get a leading mark**: caller `icon` > caller `glyph` >
-     per-tone `DEFAULT_ICON` > per-tone `DEFAULT_GLYPH`. 6-D-3's outline-Pill work touches the same
-     component — read the current `PillImpl` fully before adding a fourth axis (outline vs filled) on
-     top of this, rather than layering a new prop combination.
-  3. **`vault.tsx`'s `KIND_GLYPH` is now `Partial`** — `KIND_GLYPH[kind]` can be `undefined` for
-     `document`. Nothing currently indexes it directly for `document` (both call sites go through
-     `kindMark()`), but a future edit that reaches into `KIND_GLYPH` directly needs to handle that.
-  4. **No JSX-rendering test harness still** — same as every 6-D UI phase. `tsc --noEmit` catches
-     type errors, not layout or visual bugs; no automated test fails if a chosen icon looks wrong.
+  1. **`Pill` now has an outline branch keyed purely on `tone`** (`neutral`/`info` outline,
+     `ok`/`warn`/`danger` filled, always). Any future Pill work should read `PillImpl` fully before
+     adding a context-dependent override — the deliberate choice this phase made was to avoid one.
+  2. **The `metric` tile in `journeys.tsx` and the `row`/`rowHead` pair in `diagnostics.tsx` were
+     excluded from A6 on purpose** (see Decisions above) — do not reopen them as a "missed spot" without
+     rereading why.
+  3. **No JSX-rendering test harness still** — same as every 6-D UI phase. `tsc --noEmit` and
+     `theme-contrast.test.ts` catch type/contrast errors, not layout; no automated test fails if
+     spacing looks wrong.
