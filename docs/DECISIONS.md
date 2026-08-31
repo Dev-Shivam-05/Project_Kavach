@@ -754,3 +754,27 @@ place of the text glyph when `icon` is given, same colour token, same slot width
 parallel `DEFAULT_ICON` map used only for the `warn` tone's default mark (`alert-triangle`); a
 caller-supplied `glyph` string still overrides it. This is the pattern 6-D-2b should reuse rather
 than inventing a second mechanism.
+
+## D-033 — Family Watch's frictionless auto-grant (F2) ships unwired; the join→store bridge does not exist yet
+
+**Decision.** 6-D-4 built spec F2's grant-creation mechanics (`buildFamilyMembershipGrant`,
+`grantFamilyMembershipScopes` in `store.ts`) as tested, exported, callable code — and deliberately
+did **not** wire it to any call site, and did not build the missing bridge either. Scope confirmed
+by the user mid-session (asked directly: plumbing-only-and-flag-it, vs. also building the bridge
+now, vs. narrowing to the one flow — `createFamily` — that is real end to end today). The user chose
+plumbing-only.
+**Why.** F2 assumes grant creation attaches to "the existing enrolment flow" — but no such flow
+reaches the safety-plane store. Two candidates exist and neither qualifies: `enrolStore.ts`'s P2P
+device-pairing (spoken-fingerprint SAS) is architecturally airgapped by its own header comment ("IT
+NEVER TALKS TO A SERVER… never touches `store.ts`"); the server-backed path W10-j proved exists
+server-side (`POST /v1/members`) has no client call site anywhere in mobile — only `POST /v1/family`
+(`createFamily`) is wired. Building the actual bridge (hooking `store.ts`'s bootstrap to read
+`enrolStore`'s `joined` state, or writing the missing `POST /v1/members` client call) is new
+architecture beyond F1–F4's locked spec rows, not a wire-up a consent-plumbing phase should absorb
+silently.
+**Consequence.** `grantFamilyMembershipScopes` is dead code by this repo's own convention #2
+("Exists ≠ is wired up") until a future phase builds the bridge. Do not report Family Watch's
+frictionless grant as working end to end. The phase that builds the bridge should call
+`grantFamilyMembershipScopes` directly rather than reimplementing the grant shape — see the 6-D-4
+entry in git history (`docs/HANDOFF.md` as of commit `822258ca`) for the exact call signature and
+the two candidate bridge designs.

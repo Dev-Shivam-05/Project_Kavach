@@ -1,7 +1,7 @@
 # HANDOFF — Kavach — Phase 6-D-4 — 2026-08-31
 
-Branch **`shivam`**, commit `94ed2b7b`, **not yet pushed**. This handoff supersedes the 31 Aug 6-D-3
-one (commit `7d7babff`), preserved in git history.
+Branch **`shivam`**, commit `822258ca`, **pushed** to `origin/shivam`. This handoff supersedes the
+31 Aug 6-D-3 one (commit `7d7babff`), preserved in git history.
 
 ## Done
 
@@ -76,6 +76,8 @@ one (commit `7d7babff`), preserved in git history.
 
 ## Decisions made
 
+Recorded as [DECISIONS.md](DECISIONS.md) **D-033**.
+
 - **F2's "existing enrolment flow" hook does not exist, and I asked rather than invented one.**
   Before writing code, I checked where "a member finishes joining a family" actually happens in this
   codebase and found two candidates, neither usable: (1) `enrolStore.ts`'s P2P device-pairing flow
@@ -113,7 +115,6 @@ one (commit `7d7babff`), preserved in git history.
   is the derivation layer 6-D-5 will call; the button rendering, the disabled-reason copy
   ("Not sharing location/camera/mic yet…", "{name} has turned this off.") and the live-view screen
   routes do not exist yet.
-- **Not yet pushed to `origin/shivam`** — commit `94ed2b7b` is local only as of this handoff.
 
 ## Next session starts here
 

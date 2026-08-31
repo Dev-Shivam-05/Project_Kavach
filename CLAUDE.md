@@ -162,6 +162,16 @@ not a `router.push`. `tsc --noEmit` is silent about this; only the test suite ca
   for (`action_routing_test.go`). `armTimers` and `tierFor` are ~20 deletable lines; deleting them
   means deciding what `projector_test.go`'s four tests become. Read D-026 and D-027 before you touch
   `armTimers`, `OnIncidentOpen`, `onIngestedIncident`, or either binary's data directory.
+- **There is no working "a member joined this family" event on the mobile client — do not assume
+  one to hook a feature to (D-033).** Two flows look like candidates and neither is: `enrolStore.ts`'s
+  P2P device-pairing (spoken-fingerprint SAS) is deliberately airgapped by its own header comment
+  ("IT NEVER TALKS TO A SERVER… never touches `store.ts`"); and although the backend route exists and
+  works (`POST /v1/members`, W10-j), **no client in `mobile/` calls it** — `net/api.ts` only wires
+  `POST /v1/family` (`createFamily`). `store.ts`'s `grantFamilyMembershipScopes` (6-D-4, spec F2) was
+  built and tested against this gap rather than papered over it, and ships with zero call sites for
+  that reason. Building the real bridge is new architecture (either wire `store.ts`'s bootstrap to
+  read `useEnrol.getState().joined`, or write the missing `POST /v1/members` client call) — do not
+  treat it as a five-minute wire-up inside an unrelated phase.
 
 ## Do not "fix" these
 
