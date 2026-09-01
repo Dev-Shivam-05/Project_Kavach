@@ -34,6 +34,14 @@ either** — the nine gates are Go, TypeScript and Node.
 Changes to the native Tier-0 plane are unverifiable from this checkout; say so rather than reporting
 Kotlin as done (D-021).
 
+**`10.0.2.2` is the Android EMULATOR's alias for the host's localhost, and it is the default in
+`app.json`** (`extra.apiBase`/`apiDirect` :8081, `wsBase` :8082 — `src/core/config.ts:41`). On a
+physical phone it resolves to nothing, so any APK meant for a real device must override
+`EXPO_PUBLIC_KAVACH_API` / `EXPO_PUBLIC_KAVACH_API_DIRECT` (and the ws base) at build time with a
+host the phone can reach. An APK can still be produced without a local Android SDK — `eas.json`'s
+`preview` profile builds an APK in Expo's cloud; D-021 blocks compiling Kotlin *here*, not shipping
+a build.
+
 **`expo start --web` is not a fallback for screenshotting UI changes either.** `react-native-web` is
 not a dependency (`npm run web` starts Metro but warns it is missing before anything renders), and
 Expo Go can't run this app regardless (D-001, custom native modules). A pure-JS/RN change with no

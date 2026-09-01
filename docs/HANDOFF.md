@@ -117,6 +117,33 @@ what 6-D-7b still owns). Session-local notes not worth their own entry:
   not worth the risk.
 - **No JSX-rendering test harness still**, same as every 6-D phase.
 
+## What a working APK still needs (asked 1 Sep, checked not assumed)
+
+An APK can be **built today** — `eas.json` has a `preview` profile that emits an APK, and EAS builds
+run in Expo's **cloud**, so this machine's missing Android SDK does not block it (D-021 blocks
+*compiling Kotlin here*, not *getting an APK*). What that APK would NOT do is anything involving
+another family member, for three separate reasons — all outside the app code:
+
+1. **No server a phone can reach.** `app.json`'s `extra.apiBase`/`apiDirect` are `http://10.0.2.2:8081`
+   and `wsBase` is `ws://10.0.2.2:8082`. `10.0.2.2` is the **Android emulator's** alias for the host's
+   localhost; on a physical phone it resolves to nothing. A real build must override
+   `EXPO_PUBLIC_KAVACH_API`, `EXPO_PUBLIC_KAVACH_API_DIRECT` and the ws base (`src/core/config.ts:41`)
+   with a host the phone can actually reach — and the backend has to be running there.
+   `docker compose up` has still never been run on this machine (no daemon).
+2. **No Firebase.** `app.json` has no `android.googleServicesFile`, and `KAVACH_FCM_CREDENTIALS` is
+   unset. No FCM means no push: the escalation ladder cannot wake anybody's phone, and 6-D-6's
+   Refresh button is push-triggered, so cross-member location cannot work either. Free, ~15 min,
+   **owner: the user** (D-018).
+3. **No way to add a second member from the app** (D-033, re-verified 1 Sep). `src/net/api.ts` wires
+   `POST /v1/family` (create) and the device routes, but **no client calls `POST /v1/members`** —
+   grep it. The backend route exists and works (W10-j); nothing in `mobile/` calls it. So the family
+   stays a family of one and every Watch card stays empty, however well the transport works.
+
+**What an APK built today WOULD prove**, which is not nothing: that the app installs, boots, and the
+on-device T0/SOS plane runs on real hardware. **Nothing from this checkout has ever run on a device**
+(D-001, D-021), so the first build failing on the `kavach-t0` native module or its config plugin is a
+live possibility. Worth finding out early, in parallel with (1)–(3), rather than after them.
+
 ## Next session starts here
 
 - **Phase 6-D-8** is the recommended next: geofencing arbitrary-location placement (spec G, an interim
