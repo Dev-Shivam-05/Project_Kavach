@@ -137,7 +137,7 @@ function buildSirenWav(): Uint8Array {
   );
 }
 
-export type CueKind = 'state' | 'ack' | 'resolve' | 'probe';
+export type CueKind = 'state' | 'ack' | 'resolve' | 'probe' | 'watch';
 
 const CUE_SEGMENTS: Record<CueKind, ToneSegment[]> = {
   // Neutral tick — the incident moved to a new state.
@@ -146,6 +146,18 @@ const CUE_SEGMENTS: Record<CueKind, ToneSegment[]> = {
   ack: [
     { freq: 880, ms: 100, harmonics: [1, 0.2], fadeMs: 8 },
     { freq: 1320, ms: 140, harmonics: [1, 0.2], fadeMs: 8 },
+  ],
+  // ★ Spec D2/D3 (6-D-7b) — a camera or microphone on this phone just opened
+  // for somebody else. Deliberately UNLIKE the other four: two rising notes a
+  // fifth apart, then a pause, then a third — a pattern nobody will confuse
+  // with an ack. This sound is not suppressible and is not a preference. A
+  // family member who has walked out of the room must be able to tell, from the
+  // sound alone, that the phone on the table started watching.
+  watch: [
+    { freq: 740, ms: 90, harmonics: [1, 0.18], fadeMs: 8 },
+    { freq: 1110, ms: 90, harmonics: [1, 0.18], fadeMs: 8 },
+    { freq: 0, ms: 70, harmonics: [0], fadeMs: 0 },
+    { freq: 1480, ms: 150, harmonics: [1, 0.18], fadeMs: 10 },
   ],
   // Falling third — it is over.
   resolve: [
@@ -437,6 +449,8 @@ const CUE_HAPTIC: Record<CueKind, () => Promise<void>> = {
   ack: () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
   resolve: () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
   probe: () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning),
+  // Warning, not Success: something started without this phone's owner asking.
+  watch: () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning),
 };
 
 /**

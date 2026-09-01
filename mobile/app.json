@@ -131,6 +131,7 @@
           }
         }
       ],
+      "@config-plugins/react-native-webrtc",
       "./plugins/withKavachT0Process"
     ],
     "extra": {
@@ -140,7 +141,14 @@
       "eas": {
         "projectId": "0329ef85-108d-443b-a3e1-9aeafc94e78f"
       },
-      "router": {}
+      "router": {},
+      "iceServers": [
+        "stun:stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302"
+      ],
+      "turnUrl": "",
+      "turnUsername": "",
+      "turnCredential": ""
     },
     "owner": "dev-shivam-05"
   }

@@ -14,6 +14,11 @@ type Extra = {
   apiDirect?: string;
   wsBase?: string;
   familyId?: string;
+  /** ★ Spec D1 (6-D-7b) — STUN URLs; the TURN relay is the three fields below. */
+  iceServers?: string[];
+  turnUrl?: string;
+  turnUsername?: string;
+  turnCredential?: string;
 };
 
 const extra = (Constants.expoConfig?.extra ?? {}) as Extra;
@@ -48,6 +53,22 @@ export const CONFIG = {
   /** Control plane + realtime. */
   controlBase: env('EXPO_PUBLIC_KAVACH_CONTROL') ?? extra.apiBase ?? 'http://10.0.2.2:8080',
   wsBase: env('EXPO_PUBLIC_KAVACH_WS') ?? extra.wsBase ?? 'ws://10.0.2.2:8082',
+
+  /**
+   * ★ Spec D1 (6-D-7b) — ICE for Family Watch.
+   *
+   * STUN alone gets two phones connected on most home and mobile networks. It
+   * does NOT get them connected across carrier-grade NAT, which is exactly the
+   * across-city case D1 names (Kabilpore→Surat) — that needs a TURN relay, and
+   * a TURN relay is infrastructure somebody has to run and pay for. So the
+   * fields exist, default to empty, and `iceServers()` simply omits the relay
+   * when they are unset: a session that cannot traverse then fails to connect
+   * honestly rather than appearing to work everywhere it was tested.
+   */
+  iceServers: (extra.iceServers ?? []).filter((u) => typeof u === 'string' && u.length > 0),
+  turnUrl: env('EXPO_PUBLIC_KAVACH_TURN_URL') ?? extra.turnUrl ?? '',
+  turnUsername: env('EXPO_PUBLIC_KAVACH_TURN_USER') ?? extra.turnUsername ?? '',
+  turnCredential: env('EXPO_PUBLIC_KAVACH_TURN_PASS') ?? extra.turnCredential ?? '',
 
   /** Timing budgets from the PRD, enforced in code. */
   t2BudgetMs: 500,

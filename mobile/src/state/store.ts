@@ -2128,6 +2128,10 @@ async function handleWsFrame(frame: WsFrame): Promise<void> {
  * revocation is instant locally, the key ratchet may lag) and a session invite
  * may arrive minutes after this context was built.
  */
+export function watchContextForUi(): WatchContext | null {
+  return watchContext();
+}
+
 function watchContext(): WatchContext | null {
   const s = useKavach.getState();
   const meId = s.me?.id ?? null;

@@ -33,6 +33,9 @@ import {
 import { DEGRADATION_LABELS, DegradationLevel } from '../src/core/types';
 import { t } from '../src/i18n';
 import { countUnacked, lastKnownFix, useKavach } from '../src/state/store';
+import { webrtcWatchMedia } from '../src/state/watchMedia';
+import { setWatchMedia } from '../src/state/watchSession';
+import { WatchIndicator } from '../src/ui/WatchIndicator';
 import { isActive } from '../src/t0/stateMachine.generated';
 import { BigCoordinates, Button, Call112Button } from '../src/ui/components';
 import { MIN_TOUCH_TARGET, colors, font, space, stateColor, weight } from '../src/ui/theme';
@@ -48,12 +51,30 @@ export default function RootLayout() {
     void useKavach.getState().bootstrap();
   }, []);
 
+  /*
+   * ★ Spec D1/E1 (6-D-7b) — the media transport is installed HERE, not in
+   * store.ts, and that is deliberate. `react-native-webrtc` is a native module;
+   * registering it from the store would drag it into every Node test's import
+   * graph and into the headless push path, neither of which can load it. A
+   * watch session only ever arrives over the WebSocket, which only exists while
+   * the app is running — which is exactly when this has mounted.
+   */
+  useEffect(() => {
+    setWatchMedia(webrtcWatchMedia);
+    return () => setWatchMedia(null);
+  }, []);
+
   return (
     <View style={styles.root}>
       {/* Dark theme only (hard rule 3): the status bar glyphs must be light. */}
       <StatusBar style="light" />
 
       <GlobalBars />
+      {/*
+       * ★ Above the navigator, on purpose (D2). The indicator is not a screen's
+       * business — no route may be on top of it, and no route may forget it.
+       */}
+      <WatchIndicator />
       <T0Presenter />
 
       {/*

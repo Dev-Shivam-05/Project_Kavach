@@ -9,11 +9,13 @@
  * rule Map enforces (`src/domain/consentStatus.ts`). 6-D-5 adds the Camera and
  * Listen icon-buttons (B1–B3), driven by 6-D-4's `grantStatusFor('camera'|
  * 'audio', ...)` — each renders disabled with the exact B3/F4 copy
- * (`disabledReasonFor`) until a real grant exists. What is still NOT here: the
- * live-view/listen screens themselves (D1–E4) need `react-native-webrtc` and a
- * TURN relay, neither of which exists until 6-D-7 — tapping an *enabled* button
- * says so honestly instead of opening a session (or writing an access-log row)
- * that has not actually happened.
+ * (`disabledReasonFor`) until a real grant exists. 6-D-7b makes those two
+ * buttons real: tapping an enabled one opens a live session through
+ * `state/watchSession.ts` and pushes `/watch-session`. There is no confirm step
+ * on this side by design (D1) — the gate is on the WATCHED phone, which
+ * re-checks its own grants before it answers, shows a banner and plays a sound
+ * it cannot suppress (D2), and writes the access-log row before the session
+ * opens (D5/E4).
  *
  * 6-D-6 adds the Refresh button (C1–C3): a push-triggered one-shot GPS fix on
  * the member's own phone, reported back over `realtime-gw`'s sealed
@@ -28,6 +30,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 
@@ -43,7 +46,8 @@ import {
 } from '../../src/domain/consentStatus';
 import { haversineM } from '../../src/domain/geofence';
 import { relativeTime, t } from '../../src/i18n';
-import { lastKnownFix, useKavach } from '../../src/state/store';
+import { lastKnownFix, useKavach, watchContextForUi } from '../../src/state/store';
+import { startWatchSession, watchMediaAvailable } from '../../src/state/watchSession';
 import {
   Card,
   MemberAvatar,
@@ -64,20 +68,51 @@ function useNow(intervalMs: number): number {
 }
 
 /**
- * ★ Spec D1/E1 (6-D-5 shell) — the honest thing to say when a grant exists but
- * the transport that would open a real session (6-D-7) does not. No session
- * starts, so no `AccessLogEntry` (D5/E4) is written here — writing one for a
- * session that never opened would be the exact fabrication this app's honest-
- * empty-state rule forbids.
+ * ★ Spec D1/E1 (6-D-7b) — Camera and Listen now open a real session.
+ *
+ * D1: "opens a live-view screen IMMEDIATELY — no approval dialog on the
+ * viewer's side." So there is no confirm step here on purpose; the consent that
+ * makes this legitimate was granted once, at enrolment (F2), and is re-checked
+ * on the WATCHED phone against its own grants before anything opens. What this
+ * function must never do is open the screen when it could not send the invite —
+ * `startWatchSession` returns null when a session is already running (1↔1 is
+ * locked), and a screen with no session behind it is the fake this codebase
+ * keeps refusing to ship (D-034).
  */
-function alertWatchActionNotBuilt(member: Member, scope: Extract<ConsentScope, 'camera' | 'audio'>): void {
-  const title = scope === 'camera' ? 'Camera view isn’t built yet' : 'Listening isn’t built yet';
-  const verb = scope === 'camera' ? 'viewing' : 'listening';
-  Alert.alert(
-    title,
-    `${member.displayName} has granted you this, but live ${verb} needs a feature this build doesn’t have yet. Nothing was sent to their phone.`,
-    [{ text: t('common.done') }],
-  );
+function startWatch(member: Member, scope: Extract<ConsentScope, 'camera' | 'audio'>): void {
+  const ctx = watchContextForUi();
+  if (ctx === null) {
+    // No identity or no family key yet — bootstrap has not finished, or this
+    // phone has not joined a family. Say which, rather than opening a screen
+    // that would sit on "asking…" for ever.
+    Alert.alert(
+      'Not ready yet',
+      'This phone has not finished setting up its family keys. Try again in a moment.',
+      [{ text: t('common.done') }],
+    );
+    return;
+  }
+  if (!watchMediaAvailable()) {
+    // Belt and braces: the transport is installed by app/_layout.tsx on mount,
+    // so this is only reachable in a build where that wiring was removed. It is
+    // still better to say so than to open a session that can carry nothing.
+    Alert.alert(
+      'Live view is unavailable in this build',
+      'The camera and microphone transport did not load. Nothing was sent to their phone.',
+      [{ text: t('common.done') }],
+    );
+    return;
+  }
+  const session = startWatchSession(scope === 'camera' ? 'camera' : 'audio', member.id, ctx);
+  if (session === null) {
+    Alert.alert(
+      'One at a time',
+      'Another camera or listening session is already open. End that one first.',
+      [{ text: t('common.done') }],
+    );
+    return;
+  }
+  router.push('/watch-session');
 }
 
 function WatchActionButton({
@@ -278,14 +313,14 @@ export default function WatchScreen(): React.ReactElement {
                       label={`View ${member.displayName}'s camera`}
                       disabled={cameraReason !== null}
                       reason={cameraReason}
-                      onPress={() => alertWatchActionNotBuilt(member, 'camera')}
+                      onPress={() => startWatch(member, 'camera')}
                     />
                     <WatchActionButton
                       icon="mic"
                       label={`Listen to ${member.displayName}`}
                       disabled={audioReason !== null}
                       reason={audioReason}
-                      onPress={() => alertWatchActionNotBuilt(member, 'audio')}
+                      onPress={() => startWatch(member, 'audio')}
                     />
                   </View>
                   {actionReasons.map((reason) => (
@@ -301,8 +336,8 @@ export default function WatchScreen(): React.ReactElement {
 
         <Text style={styles.footnote}>
           Camera and Listen use the same automatic family consent as this list — no separate
-          approval per session. The live view/listen screens themselves are coming in a later
-          update.
+          approval per session. Their phone shows a banner and makes a sound the moment one opens,
+          which they can stop at any time, and every session is written to their privacy log.
         </Text>
       </ScrollView>
     </SafeAreaView>

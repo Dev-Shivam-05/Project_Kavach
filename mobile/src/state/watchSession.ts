@@ -137,8 +137,17 @@ export interface WatchContext {
 export interface WatchMedia {
   /** Open the local peer connection. `emit` publishes SDP/ICE back to the peer. */
   start: (session: WatchSession, emit: (signal: WatchSignal) => void) => Promise<void>;
-  /** Apply one inbound SDP or ICE signal. */
-  applySignal: (session: WatchSession, signal: WatchSignal) => Promise<void>;
+  /**
+   * Apply one inbound SDP or ICE signal. `emit` is handed in rather than held
+   * by the transport, so answering an offer goes out through the same sealed
+   * path everything else does and the transport never talks to the peer behind
+   * this module's back.
+   */
+  applySignal: (
+    session: WatchSession,
+    signal: WatchSignal,
+    emit: (signal: WatchSignal) => void,
+  ) => Promise<void>;
   /** D3, on the watched device: switch which camera is streaming. */
   setFacing: (facing: 'front' | 'back') => Promise<void>;
   stop: () => Promise<void>;
@@ -423,7 +432,7 @@ export async function handleWatchSignal(payload: WatchSignalPayload, ctx: WatchC
     case 'ice':
       if (media === null) return;
       try {
-        await media.applySignal(s, signal);
+        await media.applySignal(s, signal, (out) => emit(ctx, s.id, s.peerMemberId, out));
       } catch {
         /* a rejected candidate degrades the connection; it does not end the session */
       }
