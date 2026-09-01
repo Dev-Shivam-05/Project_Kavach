@@ -162,6 +162,21 @@ export function locationStreamKey(groupSecret: Uint8Array, windowId: number): Ui
 }
 
 /**
+ * ★ Spec D1/E1 (6-D-7) — the key a Family Watch session's signalling is sealed
+ * under. Identical construction to the two above; the context is the session
+ * id, so two concurrent sessions in one family share no key material and a
+ * relayed signal cannot be replayed into a different session (`sealJson`'s AAD
+ * binds it to the same id a second time).
+ *
+ * It seals SDP and ICE, not media. The media itself is encrypted by DTLS-SRTP
+ * inside WebRTC, a different mechanism entirely — this key never touches a
+ * video frame.
+ */
+export function watchSessionKey(groupSecret: Uint8Array, sessionId: string): Uint8Array {
+  return deriveKey(groupSecret, 'watch', sessionId);
+}
+
+/**
  * Seal an object. Output: base64( [scheme 1][nonce 24][ciphertext+tag] ).
  * The server stores and routes this; it can never read it.
  */

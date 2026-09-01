@@ -194,11 +194,19 @@ import { computeRisk } from '../domain/riskContext';
 import { haversineM } from '../domain/geofence';
 import {
   buildFamilyMembershipGrant,
+  disabledReasonFor,
   dueForRenewal,
+  outboundGrantStatusFor,
   renewed,
   FAMILY_MEMBERSHIP_SCOPES,
 } from '../domain/consentStatus';
 import { refreshPresenceTier, startPresence, stopPresence } from '../domain/presenceService';
+import {
+  handleWatchSignal,
+  type WatchContext,
+  type WatchKind,
+  type WatchSignalPayload,
+} from './watchSession';
 import { connectWs, disconnectWs, onFrame, sendFrame, subscribeWsStatus, type WsFrame } from '../net/ws';
 import {
   emptyRouteHistory,
@@ -2067,11 +2075,94 @@ async function handleWsFrame(frame: WsFrame): Promise<void> {
       return;
     }
 
+    // ★ Spec D1/E1 (6-D-7) — Family Watch signalling. realtime-gw fans out per
+    // FAMILY, not per member, so every phone in the family sees every signal;
+    // `watchSession.ts` drops anything not addressed to this device, and the
+    // seal is the second half of that check — a signal for another session
+    // will not open under this session's key at all. The store's only job here
+    // is to validate the cleartext routing envelope and hand over the context
+    // (identity, group secret, send) this file owns and that file must not
+    // import back.
+    case 'watch.signal': {
+      const data = (frame.payload ?? {}) as {
+        sessionId?: unknown;
+        fromMemberId?: unknown;
+        toMemberId?: unknown;
+        sealed?: unknown;
+      };
+      const sessionId = typeof data.sessionId === 'string' ? data.sessionId : null;
+      const fromMemberId = asId(data.fromMemberId);
+      const toMemberId = asId(data.toMemberId);
+      const sealed = typeof data.sealed === 'string' ? data.sealed : null;
+      if (sessionId === null || fromMemberId === null || toMemberId === null || sealed === null) {
+        return;
+      }
+      const ctx = watchContext();
+      if (ctx === null) return;
+      await safe(
+        () => handleWatchSignal({ sessionId, fromMemberId, toMemberId, sealed }, ctx),
+        undefined,
+      );
+      return;
+    }
+
     default:
       // presence.update, device.battery and friends are LOW priority
       // projections the presence layer owns; nothing here needs them.
       return;
   }
+}
+
+/**
+ * ★ Spec D1–E4 (6-D-7) — the store's half of the Family Watch session plane.
+ *
+ * `watchSession.ts` is deliberately store-free (this file imports it, so it may
+ * not import this one back), and this is the one place the two are joined.
+ * Returns null — refusing to touch a session at all — whenever the identity or
+ * the group secret this device would need is not loaded: a signalling frame
+ * that arrives before `bootstrap()` has finished is a frame we cannot honestly
+ * answer, not one to answer with defaults.
+ *
+ * `mayBeWatchedBy` re-reads the store on every call rather than closing over a
+ * snapshot, because it is the AUTHORITATIVE revocation check (F-14: Layer-1
+ * revocation is instant locally, the key ratchet may lag) and a session invite
+ * may arrive minutes after this context was built.
+ */
+function watchContext(): WatchContext | null {
+  const s = useKavach.getState();
+  const meId = s.me?.id ?? null;
+  const secret = groupSecret;
+  if (meId === null || s.familyId.length === 0 || !secret) return null;
+  return {
+    meId,
+    familyId: s.familyId,
+    groupSecret: secret,
+    send: (frame) => sendFrame(frame),
+    mayBeWatchedBy: (peerMemberId: UUID, kind: WatchKind): string | null => {
+      const live = useKavach.getState();
+      const peer = live.members.find((m) => m.id === peerMemberId);
+      // Not a member of this family (yet) — the one refusal that is about
+      // enrolment rather than consent, so it does not borrow F4's copy.
+      if (peer === undefined) return 'They are not in your family list on this phone.';
+      const status = outboundGrantStatusFor(
+        kind,
+        peerMemberId,
+        live.me?.id ?? null,
+        live.grants,
+        Date.now(),
+      );
+      return disabledReasonFor(status, peer);
+    },
+    // D5/E4. Both legs, exactly as `findPhone` does them: the row on disk is
+    // the record, and the same row in `accessLog` is what Settings › Privacy
+    // is already rendering — a write that did only the first would not appear
+    // to the watched person until the next app launch, which is the opposite
+    // of what an indicator is for.
+    writeAccessLog: async (entry) => {
+      const rowId = (await safe(() => consentRepo.addLogEntry(entry), 0)) ?? 0;
+      useKavach.setState((prev) => ({ accessLog: [{ id: rowId, ...entry }, ...prev.accessLog] }));
+    },
+  };
 }
 
 /**

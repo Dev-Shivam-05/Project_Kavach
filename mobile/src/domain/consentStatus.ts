@@ -52,6 +52,44 @@ export function grantStatusFor(
   return { kind: 'granted', grant };
 }
 
+/**
+ * ★ Spec F1/D2 (6-D-7) — the same rule as `grantStatusFor`, read from the other
+ * end of the grant: what have *I* granted to `granteeMemberId`?
+ *
+ * The watched device needs this and `grantStatusFor` cannot express it. A
+ * viewer's own copy of the grant list decides whether its Camera button is
+ * enabled, but the viewer's copy is exactly the thing a revocation has not
+ * reached yet — F-14 makes Layer-1 revocation instant on the revoker's own
+ * phone and lets the key ratchet lag. So the authoritative check for "may this
+ * session open at all" has to run where the revocation happened: here, on the
+ * watched phone, against its own grants, before it answers an invite.
+ *
+ * `presence` is deliberately absent rather than optional: `monitoringPaused` is
+ * a statement about my own agent, and gating what I have granted *others* on it
+ * would silently turn a pause into a revocation.
+ */
+export function outboundGrantStatusFor(
+  scope: ConsentScope,
+  granteeMemberId: UUID,
+  meId: UUID | null,
+  grants: ConsentGrant[],
+  now: number,
+): ShareStatus {
+  if (meId === null) return { kind: 'none' };
+  if (granteeMemberId === meId) return { kind: 'self' };
+
+  const grant = grants
+    .filter(
+      (g) => g.grantorMemberId === meId && g.granteeMemberId === granteeMemberId && g.scope === scope,
+    )
+    .sort((a, b) => b.grantedAt - a.grantedAt)[0];
+
+  if (!grant) return { kind: 'none' };
+  if (grant.revokedAt !== null) return { kind: 'revoked', grant };
+  if (grant.expiresAt <= now) return { kind: 'expired', grant };
+  return { kind: 'granted', grant };
+}
+
 export function shareStatusFor(
   member: Member,
   meId: UUID | null,

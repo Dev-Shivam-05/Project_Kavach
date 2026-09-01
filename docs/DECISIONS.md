@@ -844,3 +844,74 @@ category of gap as D-033's join→store bridge: flagged, not silently folded int
 phase closing it should have a **foregrounded** device send over its own already-open `net/ws.ts`
 socket directly (`sendFrame({type:'location.report', ...})`, sealed the same way) rather than reusing
 `locationRefresh.ts`'s ticket+POST path, which exists specifically for the headless case.
+
+## D-036 — 6-D-7 split: the Family Watch session plane ships (and is testable here); the media does not, so nothing in `app/` may open a session yet
+
+**Decision.** 6-D-7's phase row bundles two things a single session cannot honestly deliver together
+on this machine: the **session plane** (who invited whom, whether the watched phone's own grants
+still allow it, the mandatory indicator's state, E2's 5-minute budget and "+5 min", D3's flip, D4's
+End, D5/E4's two access-log rows) and the **media** (`react-native-webrtc`, a peer connection, a TURN
+relay). The first is pure TS + one Go handler and is fully verifiable here. The second needs a device
+build: `java -version` now succeeds on this machine (JDK 17, `JAVA_HOME` set — PROJECT_MAP.md's "no
+JDK" line is stale) but **`ANDROID_HOME`/`ANDROID_SDK_ROOT` are still unset**, so D-021 stands
+unchanged in practice. Split into **6-D-7a** (this session) and **6-D-7b** (needs a device build the
+user triggers).
+
+**The plane ships with no UI call site, deliberately.** GLOSSARY.md's Family Watch entry is explicit:
+"This pairing — instant for the viewer, always visible to the watched — is what the spec calls the
+line between a consented family feature and stalkerware. **Do not build one half without the other.**"
+Wiring `watch.tsx`'s Camera/Listen buttons to `startWatchSession` in this build would open a session
+that tells someone *"X is viewing your camera"*, writes a `camera_view_started` access-log row, and
+carries no camera. That is the exact fabrication D-034 refused for the same buttons one phase ago, so
+6-D-5's honest "isn't built yet" alert stays in place and `watchSession.ts` ships with zero call sites
+from `app/` — the same deliberate state `grantFamilyMembershipScopes` shipped in for D-033's reason.
+`store.ts` **does** route inbound `watch.signal` frames into it, so the receive half is wired; nothing
+can send one until 6-D-7b installs a `WatchMedia`. Report this as "exists, not wired to the UI"
+(CLAUDE.md convention 2), not as Family Watch being done.
+
+**Design points worth not re-deriving.**
+1. **The watched phone is the authority on consent, not the viewer.** F-14 makes Layer-1 revocation
+   instant on the revoker's own phone and lets the key ratchet lag, so the viewer's grant list is
+   exactly the copy a revocation has not reached. `onInvite` therefore re-checks against the watched
+   device's own grants (`outboundGrantStatusFor`, new in `domain/consentStatus.ts` — `grantStatusFor`
+   reads "their grant to me" and could not express "my grant to them") and declines with F4's copy.
+2. **The access-log row is written BEFORE the accept goes out.** D2 pins the indicator at "before the
+   viewer's first frame renders, not after"; making the answer depend on the row is the only way to
+   guarantee that ordering rather than hope for it. Pinned by an ordered event log in the test, not
+   by reading the code.
+3. **Persistence is a `WatchContext` callback, not a `db/repos` import.** Two reasons, both real:
+   `db/repos.ts` cannot be imported under the Node test shim at all (it reaches
+   `t0/stateMachine.generated`, whose `.generated` reads as a file extension to the shim's
+   `resolveExtensionless`, so the specifier never gets `.ts` re-added), and the store keeps its own
+   in-memory `accessLog` that Settings › Privacy renders — a write straight to SQLite would leave that
+   list stale until the next launch. `store.ts` does both legs, exactly as `findPhone` already does.
+4. **`store.ts` imports `watchSession.ts`, so `watchSession.ts` may not import back.** Everything
+   store-shaped arrives as an explicit `WatchContext` — the same circular-value-import trap 6-D-6
+   split `readLocationRefreshFields` out to avoid. It also makes the whole plane drivable from a test
+   with no store, no socket and no database.
+5. **`watch.signal` is HIGH on the wire, not LOW and not CRITICAL.** LOW coalesces per key, which
+   would keep only the last ICE candidate and produce a session that never connects. CRITICAL is for
+   a responder's understanding of who is going (§2.5.2); a lost watch session is a feature degrading.
+6. **The gateway relays ciphertext and takes the sender from the TICKET.** `sessionId`/`toMemberId`
+   are cleartext routing fields; the signal body is sealed under a new `crypto.watchSessionKey`
+   (`deriveKey(secret, 'watch', sessionId)` — identical construction to `incidentContentKey`), with
+   `sealJson`'s AAD binding it to the same session id a second time so a relayed signal cannot be
+   replayed into another session. A body-supplied `fromMemberId` would let any family member forge an
+   invite from any other; `signal_test.go` pins that it is ignored.
+7. **`durationS` (D5/E4) is left derivable rather than persisted.** `AccessLogEntry` has no such
+   column and `db/schema.ts` still carries exactly one migration (the baseline). `ended.at − started.at`
+   for the same pair gives the same number; making this app's first-ever schema migration for a
+   derivable value is not the trade. Note also that `context` MUST stay `'routine'` — `consent.tsx`'s
+   `incidentTag` renders any other value as "During an incident".
+
+**Evidence.** `backend/cmd/realtime-gw/main.go` (`watch.signal` case in `handleMessage`) +
+`signal_test.go` (3 tests, incl. the F-20 reduced-session guard) · `mobile/src/crypto/index.ts`
+(`watchSessionKey`) · `mobile/src/domain/consentStatus.ts` (`outboundGrantStatusFor`) ·
+`mobile/src/state/watchSession.ts` (new) · `mobile/src/state/store.ts` (`watch.signal` case,
+`watchContext()`) · `mobile/test/watch-session.test.ts` (22 tests).
+
+**Consequence.** 6-D-7b owns: `react-native-webrtc` + TURN, a `WatchMedia` implementation behind
+`setWatchMedia()`, the viewer's live-view screen (D3's flip control, E2's countdown ring and "+5 min"),
+the watched device's non-suppressible banner + dot + start-sound (D2/D3), and only then wiring
+`watch.tsx`'s two buttons to `startWatchSession`. None of it is verifiable here until an Android SDK
+exists on this machine or the user runs a device build.
