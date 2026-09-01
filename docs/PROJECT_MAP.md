@@ -33,9 +33,10 @@ Re-running is not the fix; moving the build directory is:
 `GOTMPDIR=/d/Projects/Project_Kavach/backend/.gotmp go test ./cmd/sos-ingest/`. Delete `.gotmp`
 afterwards. Do not report this package's tests as passing without having run them that way.
 
-**Two other toolchains are absent here, and it matters.** No JDK and no `ANDROID_HOME`, so the
-Kotlin under `mobile/modules/kavach-t0/android/` **cannot be compiled on this machine** and no CI
-gate compiles it either — the nine gates are Go, TypeScript and Node. Any change to the native
+**Two other toolchains are absent here, and it matters.** Re-checked 1 Sep: a JDK **is** present now
+(OpenJDK 17, `JAVA_HOME` set — this line used to say otherwise), but `ANDROID_HOME` and
+`ANDROID_SDK_ROOT` are unset, so the Kotlin under `mobile/modules/kavach-t0/android/` still
+**cannot be compiled on this machine** and no CI gate compiles it either — the nine gates are Go, TypeScript and Node. Any change to the native
 Tier-0 plane is unverifiable from this checkout (D-021). No Firebase credentials either: see
 `KAVACH_FCM_CREDENTIALS` below.
 

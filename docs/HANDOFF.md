@@ -1,132 +1,132 @@
-# HANDOFF — Kavach — Phase 6-D-6 — 2026-08-31
+# HANDOFF — Kavach — Phase 6-D-7a — 2026-09-01
 
-Branch **`shivam`**, on top of commit `29a6d99e`. This handoff supersedes the 31 Aug 6-D-5 one
-(commit `71ba026d`), preserved in git history.
+Branch **`shivam`**, on top of commit `ae5cb3fd`. This handoff supersedes the 31 Aug 6-D-6 one
+(commit `35b7f4f6`), preserved in git history.
 
 ## Done
 
-- **6-D-6 shipped: on-demand location push for the Watch tab's Refresh button (spec C1–C3).**
-  Scoping it found the phase was bigger than its own row said: cross-member live location had
-  **never once been wired in either direction** before today, in real (non-demo-mode) use — see
-  **D-035** for the full finding and design. The user was asked whether to split into 6-D-6a/6-D-6b
-  or build both in one session; chose one session.
-- **Request leg (backend).** `notify.RequestLocationRefresh` — new, bypasses `Fanout` entirely (no
-  incident, no audience/drill/budget), Android-only FCM, skips revoked devices, honest errors
-  (`ErrPushUnregistered`/`ErrPushNotConfigured`/`ErrNoReachableDevice`) mirroring the existing
-  KV-NOTOKEN/KV-NOPUSHCFG pattern. `fcm.go`'s F-21 allowlist (`pushSafeKeys`) grew exactly 3 keys:
-  `type`, `requestId`, `deviceId`. New route `POST /v1/members/{id}/location-refresh` on
-  control-plane.
-- **Response leg (mobile).** New `mobile/src/state/locationRefresh.ts` — deliberately store-independent
-  (same discipline `pushReceive.ts`/`notifications.ts` already use): Expo's own docs confirm a
-  headless-launched task mounts no views, so `app/_layout.tsx`'s `bootstrap()` never runs and
-  `store.ts`'s module-level `groupSecret`/`authToken` are unset in that context. This file reads both
-  straight out of SecureStore, and never opens `t0ConfigRepo` (SQLite) to learn this device's own
-  identity — same trade D-020 already declined once, for locale. The push payload therefore carries
-  the target's own `deviceId`. Acquires one fix via `Promise.race` against an 8s timeout
-  (`getCurrentPositionAsync` has no built-in timeout — confirmed against the exact v57 docs per
-  `mobile/AGENTS.md`), seals it with the family's existing (previously uncalled) Location Stream Key
-  (`crypto.locationStreamKey` + `sealJson`), and reports it to a **new** `POST /v1/location-report`
-  on **realtime-gw** — not control-plane, because `net/api.ts`'s `stripClassA` and its comment are
-  explicit that no control-plane body may carry location, sealed or not (ADR-010). Reuses the
-  existing single-use connect ticket (F-16) rather than a new auth scheme, and a plain `fetch` rather
-  than a WebSocket — `net/ws.ts` is a stateful, SQLite-cursor-backed singleton, the wrong shape for a
-  fire-and-forget report from a task with seconds of budget left. **realtime-gw got its first tests
-  ever** (`report_test.go`).
-- **Receive leg.** `store.ts handleWsFrame`'s new `location.update` case is the only place
-  `openJson`/`locationStreamKey` are called client-side anywhere in this app. Decrypts, updates
-  `presence[memberId].location`, skips the echo of a device's own report back to itself.
-- **UI.** `watch.tsx`'s Refresh button (Feather `refresh-cw`, first of the three per spec B1's order),
-  8s spinner gated on `mayDrawPin(status)` (only meaningful when a location grant already exists),
-  distance-from-you (reused `geofence.haversineM`, not duplicated) and a `±Xm` accuracy chip shown
-  only past 30m (C2/C3).
-- **Verified green:** `tsc --noEmit` (0 errors), `npm test` **196/196** (was 186), `npm run verify`
-  exit 0. Backend: `go build`/`go vet`/staticcheck/archlint all clean; `go test` —
-  `internal/notify` 32 (+7), `cmd/control-plane` 21 (+2), `cmd/realtime-gw` 4 (all new — its first
-  ever), full sweep (`internal/store`, `internal/wal`, `internal/bus`, `internal/escalation`,
-  `internal/consent`, `internal/envelope`, `internal/incident`, `internal/logx`) green, `cmd/sos-ingest`
-  green via the `GOTMPDIR` workaround. `gen:check`/schema-lint/protolint unaffected — no
-  spec/proto/schema change this phase.
-- **No screenshot** — same rule as every 6-D UI phase (no JDK/Android SDK, no `react-native-web`):
-  verified by `tsc` + tests + reading the JSX.
+- **6-D-7 was split into 6-D-7a (shipped today) and 6-D-7b (still blocked) — D-036.** The phase row
+  bundled two things one session cannot honestly deliver together here: a **session plane** that is
+  pure TS plus one Go handler, and the **media** (`react-native-webrtc` + TURN), which needs a device
+  build. 6-D-7a is the first half, fully verified on this machine.
+- **Backend: `realtime-gw`'s `watch.signal` relay.** A new C→S case in `handleMessage` — the first
+  new frame type this binary has grown. It relays one opaque sealed blob plus two cleartext routing
+  fields (`sessionId`, `toMemberId`) and stamps the sender from the **connect ticket**, never the
+  request body; a body-supplied `fromMemberId` would let any family member forge a watch invite from
+  any other, and a test pins that it is ignored. **HIGH** priority, deliberately: LOW coalesces per
+  key and would keep only the last ICE candidate (a session that never connects), CRITICAL is
+  reserved for a responder's understanding of who is going (§2.5.2). The existing F-20 guard already
+  bars reduced/neighbour sessions from publishing it — also now pinned, because a new C→S type that
+  forgot to be inside that guard is invisible: every other test on the main path still passes.
+- **Mobile: `src/state/watchSession.ts` (new).** Owns everything about a Camera or Listen session
+  except the media — invite, the watched phone's auto-accept or decline, the indicator's state, D5/E4's
+  two access-log rows, E2's 5-minute Listen budget and repeatable "+5 min", D3's viewer-driven flip,
+  D4's End from either party, 1↔1 enforcement, and the routing/replay checks.
+- **Two properties that are the actual point of the phase, and are pinned by tests rather than by
+  reading the code:**
+  1. **The watched phone is the authority on consent.** F-14 makes Layer-1 revocation instant on the
+     revoker's own phone and lets the key ratchet lag — so the *viewer's* grant list is exactly the
+     copy a revocation has not reached. `onInvite` re-checks against the watched device's own grants
+     via `outboundGrantStatusFor` (new in `domain/consentStatus.ts`; the existing `grantStatusFor`
+     reads "their grant to me" and structurally cannot express "my grant to them") and declines with
+     F4's copy.
+  2. **The access-log row is on disk BEFORE the accept goes out.** D2 pins the indicator at "before
+     the viewer's first frame renders, not after"; making the answer depend on the row is the only
+     way to guarantee that ordering. The test asserts the exact event order
+     `['log:camera_view_started', 'send:accept']`.
+- **Crypto:** new `watchSessionKey(groupSecret, sessionId)` = `deriveKey(secret, 'watch', sessionId)`,
+  identical construction to `incidentContentKey`. `sealJson`'s AAD binds each signal to the same
+  session id a second time, so a relayed signal cannot be replayed into another session — tested
+  both ways (wrong AAD and wrong key both fail to open).
+- **⛔ It has ZERO call sites in `app/`, on purpose.** GLOSSARY.md's Family Watch entry: *"Do not
+  build one half without the other."* Without media, opening a session would tell someone
+  *"X is viewing your camera"*, write a `camera_view_started` row, and carry no camera — the exact
+  fabrication D-034 refused for these same buttons one phase ago. 6-D-5's honest "isn't built yet"
+  alert stays in `watch.tsx`, untouched. `store.ts` **does** route inbound `watch.signal` frames, so
+  the receive half is wired; nothing can send one until 6-D-7b installs a `WatchMedia`.
+- **Verified green:** `tsc --noEmit` (0 errors), `npm test` **218/218** (was 196), `npm run verify`
+  exit 0. Backend: `go build`, `go vet`, staticcheck, archlint (14 packages, 66 edges) all clean;
+  `go test` — `cmd/realtime-gw` **7** (was 4), full sweep (`cmd/control-plane`, `internal/{bus,
+  consent,envelope,escalation,incident,logx,notify,store,wal}`) green, `cmd/sos-ingest` green via the
+  `GOTMPDIR` workaround. `gen:check` in sync, `schema-lint` clean, `protolint` clean — no
+  spec/proto/schema change this phase. **`-race` not run** (no gcc, CI gate 3 only).
+- **No screenshot** — nothing rendered changed, and the usual rule applies anyway (no Android SDK, no
+  `react-native-web`).
 
 ## Files changed
 
-- `backend/internal/notify/fcm.go` — `pushSafeKeys` +3.
-- `backend/internal/notify/notify.go` — `locationRefreshPushPayload`, `RequestLocationRefresh`,
-  `ErrNoReachableDevice`.
-- `backend/internal/notify/location_refresh_test.go` — new, 7 tests.
-- `backend/cmd/control-plane/main.go` — `requestLocationRefresh` handler + route.
-- `backend/cmd/control-plane/location_refresh_test.go` — new, 2 tests.
-- `backend/cmd/realtime-gw/main.go` — `reportLocation` handler + route (first plain-HTTP handler in
-  this binary beyond `/healthz`).
-- `backend/cmd/realtime-gw/report_test.go` — new, 4 tests, this binary's first tests ever.
-- `mobile/src/net/api.ts` — `postLocationRefreshRequest`, `postLocationReport`, `realtimeHttpBase`.
-- `mobile/src/state/pushReceive.ts` — `readLocationRefreshFields`, `isActionResponse` extracted, task
-  dispatcher now routes on payload shape.
-- `mobile/src/state/locationRefresh.ts` — new. `handleLocationRefreshPush`, `acquireOneShotFix`
-  (exported for test), SecureStore-direct `groupSecret`/session readers.
-- `mobile/src/state/store.ts` — `handleWsFrame`'s new `location.update` case; `requestLocationRefresh`
-  store action; `FramePayload`'s doc comment corrected (no longer claims location never arrives on
-  any frame — `sealed` now does, opaquely).
-- `mobile/app/(tabs)/watch.tsx` — Refresh button, 8s spinner state, distance/accuracy display, header
-  comment updated.
-- `mobile/test/push-receive.test.ts` — 6 new tests for the dispatch-routing/parsing split.
-- `mobile/test/location-refresh.test.ts` — new, 4 tests for `acquireOneShotFix`'s timeout race.
-- `mobile/test/shim.mjs` — new controllable `expo-location` stub
-  (`__setNextFix`/`__setNextError`/`__setHang`).
-- `docs/DECISIONS.md` — **D-035** appended.
-- `docs/PHASES.md` — 6-D-6 row → done; `## Now` / `## Next 3` repointed to 6-D-7.
+- `backend/cmd/realtime-gw/main.go` — `watch.signal` case in `handleMessage`, doc comment updated.
+- `backend/cmd/realtime-gw/signal_test.go` — new, 3 tests (6 with subtests). First tests in this
+  binary to drive `handleMessage` rather than a plain HTTP handler.
+- `mobile/src/crypto/index.ts` — `watchSessionKey`.
+- `mobile/src/domain/consentStatus.ts` — `outboundGrantStatusFor`.
+- `mobile/src/state/watchSession.ts` — new, the whole session plane.
+- `mobile/src/state/store.ts` — `handleWsFrame`'s `watch.signal` case; `watchContext()`, which is the
+  single join point between the store and the plane.
+- `mobile/test/watch-session.test.ts` — new, 22 tests.
+- `docs/DECISIONS.md` — **D-036** appended.
+- `docs/PHASES.md` — 6-D-7 row split into 6-D-7a (✅) / 6-D-7b (⛔); `## Now` and `## Next 3`
+  repointed; stale "no JDK" blocker text corrected.
+- `docs/PROJECT_MAP.md`, `CLAUDE.md` — same stale-JDK correction, plus the shim/`repos.ts` trap below.
 - `docs/HANDOFF.md` — this file.
 
 ## Decisions made
 
-Recorded durably as [DECISIONS.md](DECISIONS.md) **D-035** (the scope discovery, the three design
-constraints — ADR-010, D-020, `net/ws.ts`'s wrong shape — and what is still NOT wired). Session-local
-notes not worth a DECISIONS.md entry on their own:
+Recorded durably as [DECISIONS.md](DECISIONS.md) **D-036** (the split, the seven design points, and
+what 6-D-7b still owns). Session-local notes not worth their own entry:
 
-- **The push payload carries the target's OWN `deviceId`, not just a correlation id.** This was the
-  one piece that made the whole headless response leg tractable without opening SQLite — worth
-  restating here because it is easy to "simplify" away in a later edit without realising why it is
-  there.
-- **`requestLocationRefresh`'s family lookup uses the target member's own `FamilyID`
-  (`s.st.Member(memberID).FamilyID`), not `s.familyID(r)`** — caught and fixed mid-session by
-  re-reading `findPhone`'s existing pattern (it derives family from the resource, not the caller's
-  header) rather than trusting whatever `X-Family-Id` a caller happens to send.
-- **`readLocationRefreshFields` lives in `pushReceive.ts`, not `locationRefresh.ts`.** The dispatcher
-  parses first and passes the typed result in, specifically so `locationRefresh.ts` never has to
-  import back from `pushReceive.ts` at the value level (only a type-only import, erased at compile
-  time) — avoids a real circular value-import between the two files.
-- **The `hasFix` block's wording changed** (added a distance prefix, replaced the always-shown
-  "accurate to about Xm" suffix with a conditional `±Xm` chip past 30m). This is additive — the block
-  only ever renders when a fix has actually arrived, which could not happen for another member before
-  today — not a rewrite of 6-D-1's already-shipped `locationLine()` status text, which is untouched.
+- **`db/repos.ts` cannot be imported from any test in this repo**, and that shaped the design.
+  It imports `'../t0/stateMachine.generated'`; the shim's `resolveExtensionless` bails whenever
+  `path.extname(specifier)` is non-empty, and `.generated` reads as an extension, so `.ts` is never
+  re-added and Node throws `ERR_MODULE_NOT_FOUND`. `watchSession.ts` therefore takes persistence as a
+  `WatchContext.writeAccessLog` callback — which turned out to be the better design anyway: the store
+  keeps its own in-memory `accessLog` that Settings › Privacy renders, so a write straight to SQLite
+  would have left that list stale until the next launch. `store.ts` does both legs, exactly as
+  `findPhone` already does. Now written into CLAUDE.md convention 7.
+- **`context` on a watch access-log row MUST stay `'routine'`.** `consent.tsx`'s `incidentTag` renders
+  any other value as "During an incident" — encoding a session id there would have made every watch
+  session read as an emergency in the privacy log. Asserted in the tests.
+- **`durationS` (D5/E4) is left derivable, not persisted.** `AccessLogEntry` has no such column and
+  `db/schema.ts` still carries exactly one migration (the baseline); `ended.at − started.at` for the
+  same pair gives the same number. Making this app's first-ever schema migration for a derivable value
+  was not the trade.
+- **A test that leaves an audio session open holds Node's event loop for five real minutes.**
+  `armExpiry` arms a genuine `setTimeout(LISTEN_SESSION_MS)`; the first run of `npm run verify` looked
+  hung rather than failed. Fixed with an `afterEach(__resetWatchSessionForTest)` and a comment saying
+  why it is not belt-and-braces.
+- **`java -version` now succeeds on this machine** (OpenJDK 17, `JAVA_HOME` set). `ANDROID_HOME` and
+  `ANDROID_SDK_ROOT` are still unset, so D-021's conclusion is unchanged — but the *check* named in
+  three docs was stale and would have passed misleadingly. All three corrected.
 
 ## Known broken / deliberately skipped
 
-- **Ambient/continuous cross-member sharing is still not wired.** Only a push-triggered Refresh
-  reports a fix. `presenceService.ts`'s ordinary `watchPositionAsync` tick — the "existing 10s-
-  foreground watch" C1's own spec prose assumes already broadcasts — still calls only
-  `noteLocationFix()`, which still never leaves the device. In the running app today, a member's card
-  updates only when someone taps Refresh, never ambiently while both apps are simply open. See D-035's
-  consequence note for the design a future phase should reuse (send directly over the sender's own
-  open `net/ws.ts` socket when foregrounded, rather than the ticket+POST path built for headless).
-- **F2's auto-grant-on-join (D-033) is still open** — unrelated to this phase, unchanged by it.
-- **No early-stop-on-arrival for the Refresh spinner.** It runs the full 8s regardless of whether a
-  fresher fix arrives sooner; the card itself updates immediately either way via the ordinary
-  `location.update` handler, so this only affects how long the spinner icon specifically keeps
-  spinning. Simple flat timer chosen over synchronizing it to presence updates — matches "boring over
-  clever."
-- **The realtime-gw report endpoint is unauthenticated beyond the ticket** — same trust model the WS
-  path already has (F-16), not a new gap.
-- **No JSX-rendering test harness still**, same as every 6-D UI phase.
+- **The whole of 6-D-7b.** No media, no live-view screen, no watched-side banner/dot/sound, no wiring
+  of `watch.tsx`'s Camera/Listen buttons. Tapping them still shows 6-D-5's honest alert.
+- **`watchSession.ts` has no call site in `app/`** — see above. Report it as "exists, not wired to the
+  UI" (CLAUDE.md convention 2), never as Family Watch being done.
+- **No TURN server exists**, and no ICE/STUN configuration has been written anywhere. `WatchSignal`
+  carries `ice` and `sdp` variants and the relay moves them, but nothing produces one yet.
+- **Ambient/continuous cross-member location sharing is still not wired** (D-035's consequence note),
+  and **F2's auto-grant-on-join (D-033) is still open** — both unrelated to this phase and unchanged
+  by it. D-033 in particular means that in the running app today virtually every member card shows
+  the B3 "not sharing yet" reason for camera/audio, so even a finished 6-D-7b would decline most
+  invites until D-033 is closed.
+- **`backend/.gotmp` is not empty and was left alone.** It holds `bus.test.exe`/`wal.test.exe` and
+  three temp dirs from an earlier session's two-real-process runs, so `rmdir` (the documented cleanup)
+  refuses. Nothing of mine is in it and git does not see it; deleting another session's artefacts was
+  not worth the risk.
+- **No JSX-rendering test harness still**, same as every 6-D phase.
 
 ## Next session starts here
 
-- **Phase 6-D-7**: Family Watch transport (camera + listen, live) — `react-native-webrtc` + TURN
-  relay + the actual live-view/listen screens (spec D1–D5, E1–E4). **Unverifiable on this machine —
-  no Android SDK/JDK (D-021).** Build the TS/state/signalling layer here; the live stream itself
-  needs a device build the user triggers. **6-D-8** (geofencing arbitrary-location placement) is the
-  fully-verifiable-here alternative if 6-D-7 stalls on the device-build blocker.
+- **Phase 6-D-8** is the recommended next: geofencing arbitrary-location placement (spec G, an interim
+  lat/lon text-entry fallback that does not need 6-B's MapLibre first). It is **fully verifiable on
+  this machine** and closes a real gap — today's form only ever centres a fence on your own current
+  position (`map.tsx:474`).
+- **Phase 6-D-7b** is the alternative and needs the user to trigger a device build: `react-native-webrtc`
+  + TURN, a `WatchMedia` implementation behind `setWatchMedia()`, the viewer's live-view screen (D3's
+  flip control, E2's countdown ring and "+5 min"), the watched device's non-suppressible banner + dot
+  + start-sound (D2/D3), and only then wiring `watch.tsx`'s two buttons to `startWatchSession`.
 - **First command:**
   ```
   git checkout shivam
@@ -135,13 +135,15 @@ notes not worth a DECISIONS.md entry on their own:
   cd ../backend && go build ./... && go vet ./... && go test $(go list ./... | grep -v cmd/sos-ingest)
   ```
 - **Watch out for:**
-  1. **6-D-7 needs a device build before ANY of it is verifiable.** Check `java -version` /
-     `ANDROID_HOME` first, same lesson W10-c and 6-C already paid for (D-021) — do not write a
-     session of native code assuming the check will pass later.
-  2. **Do not fold ambient/continuous location sharing into 6-D-7.** It is a real, separate gap
-     (D-035's consequence note) with its own design already sketched — give it its own phase rather
-     than discovering it again mid-session the way this phase discovered the relay gap.
-  3. **The D-020 "no SQLite on the headless wake path" rule now has two independent instances**
-     (`pushReceive.ts`'s locale fallback, `locationRefresh.ts`'s identity reads). If 6-D-7's live
-     session needs anything from a headless context, read it from SecureStore directly rather than
-     reaching for `t0ConfigRepo`/`store.ts`'s bootstrap — do not re-litigate this per file.
+  1. **`ANDROID_HOME`, not `java -version`, is the check that fails now.** A JDK arrived; the SDK did
+     not. Three docs said otherwise until today — if a fourth still does, fix it rather than trusting
+     a green `java -version` into a session of native code.
+  2. **If 6-D-7b is picked, read D-036 first.** The seam is `setWatchMedia()` and the session plane
+     underneath it is finished and tested — do not rebuild invite/accept/expiry/access-log logic
+     inside a WebRTC file. And do not wire `watch.tsx`'s buttons until media actually flows: the
+     indicator and the access-log row would otherwise describe something that is not happening.
+  3. **`watchSession.ts` must never import `store.ts`.** `store.ts` imports it; everything
+     store-shaped arrives as an explicit `WatchContext`. Same circular-value-import trap 6-D-6 split
+     `readLocationRefreshFields` out to avoid.
+  4. **Any new test that opens an audio session needs the `afterEach` reset**, or `npm test` will sit
+     for five minutes on a live expiry timer with no failing assertion to read.

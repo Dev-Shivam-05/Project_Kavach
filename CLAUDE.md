@@ -26,9 +26,11 @@ no gcc here — `go test -race` fails with `cgo: C compiler "gcc" not found`, wh
 gap, not a test failure. CI gate 3 is the only place the race detector has ever run. Do not report
 `-race` as passing locally; say it was not run.
 
-**There is no JDK and no Android SDK on this machine either** (`java` is not on PATH, `ANDROID_HOME`
-and `JAVA_HOME` are unset). The Kotlin under `mobile/modules/kavach-t0/android/` therefore cannot be
-compiled here, and **no CI gate compiles it either** — the nine gates are Go, TypeScript and Node.
+**There is no Android SDK on this machine** (`ANDROID_HOME` and `ANDROID_SDK_ROOT` are unset). A JDK
+**is** present as of 1 Sep (OpenJDK 17, `JAVA_HOME` set) — this line used to say there was none, so
+`java -version` is no longer the check that catches this; `ANDROID_HOME` is. The Kotlin under
+`mobile/modules/kavach-t0/android/` still cannot be compiled here, and **no CI gate compiles it
+either** — the nine gates are Go, TypeScript and Node.
 Changes to the native Tier-0 plane are unverifiable from this checkout; say so rather than reporting
 Kotlin as done (D-021).
 
@@ -84,7 +86,12 @@ not a `router.push`. `tsc --noEmit` is silent about this; only the test suite ca
 7. **A mobile test that imports an Expo module needs a stub in `mobile/test/shim.mjs`.** Node runs
    the tests directly; there is no Metro and no jest. Add the specifier to `STUBS` and its source to
    `STUB_SOURCE`. Keep stubs *controllable* (`__setX` / `__emitX` exports) so behaviour can be
-   driven, not just satisfied.
+   driven, not just satisfied. **`mobile/src/db/repos.ts` cannot be imported from a test at all**:
+   it imports `'../t0/stateMachine.generated'`, and the shim's `resolveExtensionless` bails on any
+   specifier whose `path.extname()` is non-empty — `.generated` reads as an extension, so `.ts` is
+   never re-added and Node throws `ERR_MODULE_NOT_FOUND`. A new module that wants to be tested takes
+   persistence as a caller-supplied callback (`watchSession.ts`'s `WatchContext`) rather than
+   importing a repo, unless you first fix that guard.
 8. **Never invent a persisted field name.** `backend/migrations/0001_init.sql` is the naming
    authority for anything the server stores, even though nothing runs it (ADR-006, D-003).
    `internal/store/store_test.go` now enforces this for the `device` table: its key list must match
