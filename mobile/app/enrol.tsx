@@ -194,6 +194,14 @@ function JoiningPanel({ deviceId, suggestedName }: { deviceId: string; suggested
   const createInvite = useEnrol((s) => s.createInvite);
   const discardInvite = useEnrol((s) => s.discardInvite);
   const accept = useEnrol((s) => s.accept);
+  /*
+   * ★ D-033 (6-D-7c) — the line that turns a pairing into a family.
+   * `enrolStore` is airgapped by design and stops at the group key; without
+   * this call `store.ts`'s roster never learns that anyone joined, which is
+   * exactly how POST /v1/members ended up with no caller in the whole app.
+   * Idempotent, so calling it from all three completion paths is safe.
+   */
+  const syncEnrolment = useKavach((s) => s.syncEnrolment);
   const chooseRole = useEnrol((s) => s.chooseRole);
 
   const [name, setName] = useState(suggestedName);
@@ -205,7 +213,7 @@ function JoiningPanel({ deviceId, suggestedName }: { deviceId: string; suggested
     (text: string) => {
       setScanning(null);
       setReply(text);
-      void accept(text);
+      void accept(text).then((ok) => (ok ? syncEnrolment() : undefined));
     },
     [accept],
   );
@@ -306,7 +314,7 @@ function JoiningPanel({ deviceId, suggestedName }: { deviceId: string; suggested
               label="Join the family"
               size="lg"
               disabled={normaliseCode(reply).length < 10}
-              onPress={() => void accept(reply)}
+              onPress={() => void accept(reply).then((ok) => (ok ? syncEnrolment() : undefined))}
             />
             <Button label="Start over" variant="quiet" onPress={() => void discardInvite()} />
           </Card>
@@ -328,6 +336,10 @@ function InvitingPanel({ familyId, guardianName }: { familyId: string; guardianN
   const review = useEnrol((s) => s.review);
   const dropReview = useEnrol((s) => s.dropReview);
   const confirmAndSeal = useEnrol((s) => s.confirmAndSeal);
+  /* ★ D-033 — see the twin call in JoiningPanel; the guardian is the side that
+     can actually register the new member, because it is the side that knows the
+     joiner's device id. */
+  const syncEnrolment = useKavach((s) => s.syncEnrolment);
   const clearResponse = useEnrol((s) => s.clearResponse);
   const chooseRole = useEnrol((s) => s.chooseRole);
 
@@ -388,7 +400,7 @@ function InvitingPanel({ familyId, guardianName }: { familyId: string; guardianN
           <Button
             label="They match — add this phone"
             size="lg"
-            onPress={() => void confirmAndSeal(familyId, guardianName)}
+            onPress={() => void confirmAndSeal(familyId, guardianName).then(syncEnrolment)}
           />
           <Button label="They do not match" variant="danger" onPress={dropReview} />
         </Card>

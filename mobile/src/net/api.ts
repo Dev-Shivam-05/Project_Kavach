@@ -37,6 +37,8 @@ import {
 } from '../t0/envelope';
 import type {
   AccessLogEntry,
+  Locale,
+  MemberRole,
   ConsentGrant,
   ConsentPurpose,
   ConsentScope,
@@ -636,6 +638,42 @@ export async function putDevicePushToken(
     // Keyed on the token, so re-sending an unchanged token on every boot is one
     // logical write rather than a new one each time.
     idempotencyKey: `push:${deviceId}:${token}`,
+    timeoutMs: 8000,
+  });
+}
+
+/**
+ * ★ D-033 (6-D-7c) — the call that had no client.
+ *
+ * `POST /v1/members` has existed and worked on the control plane since W10-j,
+ * and until now NOTHING in `mobile/` called it: `createFamily` was the only
+ * enrolment write wired up, so a family could be named but never joined, and
+ * every Watch card in the app stayed empty for want of a second row. This is
+ * that missing call.
+ *
+ * The id is client-supplied on purpose — `memberIdForDevice` derives it from
+ * the device id, so the guardian registering a member and the joiner
+ * recognising itself compute the same value without exchanging one (the server
+ * mints its own only when the field is empty).
+ */
+export interface MemberDraft {
+  id: UUID;
+  displayName: string;
+  /** Server-enforced: 1-8 ASCII letters, unique per family (F-18). */
+  asciiShortName: string;
+  role: MemberRole;
+  locale?: Locale;
+  identityPubkey?: string;
+  avatarColor?: string;
+}
+
+export async function postMember(draft: MemberDraft): Promise<ApiResponse<Member>> {
+  return control<Member>('/v1/members', {
+    method: 'POST',
+    body: draft,
+    // Re-registering the same member on a retry (or on the next boot, since the
+    // bridge is idempotent by design) must be one logical write, not a 409.
+    idempotencyKey: `member:${draft.id}`,
     timeoutMs: 8000,
   });
 }

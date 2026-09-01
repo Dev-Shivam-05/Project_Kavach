@@ -165,6 +165,7 @@ import {
   postFindPhone,
   postJourney,
   postLocationRefreshRequest,
+  postMember,
   postRelease,
   postResolve,
   putDevicePushToken,
@@ -200,7 +201,9 @@ import {
   renewed,
   FAMILY_MEMBERSHIP_SCOPES,
 } from '../domain/consentStatus';
+import { memberIdForDevice } from '../core/ids';
 import { refreshPresenceTier, startPresence, stopPresence } from '../domain/presenceService';
+import { useEnrol } from './enrolStore';
 import {
   handleWatchSignal,
   type WatchContext,
@@ -326,6 +329,11 @@ export interface KavachState {
    * YET — see this function's implementation for why.
    */
   grantFamilyMembershipScopes(otherMemberIds: UUID[]): Promise<void>;
+  /**
+   * ★ D-033 (6-D-7c) — turn a completed SAS pairing into an actual family.
+   * Idempotent and safe to call on every boot; see the implementation.
+   */
+  syncEnrolment(): Promise<void>;
   startJourney(j: { label: string; destName: string; etaMinutes: number }): Promise<void>;
   arriveJourney(id: UUID): Promise<void>;
   addGeofence(g: Omit<Geofence, 'id'>): Promise<void>;
@@ -741,6 +749,100 @@ export const useKavach = create<KavachState>()((set, get) => ({
   },
 
   /**
+   * ★ D-033 (6-D-7c) — the bridge that did not exist.
+   *
+   * `enrolStore.ts` runs a complete, airgapped SAS pairing and then stops: it
+   * writes the family key to SecureStore and a roster to its own file, and
+   * NOTHING carried either into `store.ts`. So `members` stayed one row long,
+   * `POST /v1/members` had no caller anywhere in `mobile/`, and every Watch card
+   * showed the B3 "not sharing yet" reason for a family that had genuinely
+   * paired. This is that missing step, and it is why F2's auto-grant
+   * (`grantFamilyMembershipScopes`, built in 6-D-4) finally has a call site.
+   *
+   * ★ IDEMPOTENT BY CONSTRUCTION ★ It runs on every bootstrap, not just after a
+   * pairing, because the pairing may have completed in a session that was killed
+   * before the server was reachable. Every step is keyed on
+   * `memberIdForDevice(deviceId)` — derived, not minted — so a second run adds
+   * nothing and a retry after a failed POST re-sends the same logical write.
+   *
+   * ★ WHAT IT CANNOT DO ★ The JOINING phone learns the family id and the group
+   * key, but not the guardian's device id, so it cannot derive the guardian's
+   * member id offline. It adopts the family here and picks the roster up from
+   * `GET /v1/family` on the next pull. Until a reachable server exists, pairing
+   * therefore populates the GUARDIAN's roster only — stated rather than papered
+   * over with a placeholder row.
+   */
+  async syncEnrolment(): Promise<void> {
+    const enrol = useEnrol.getState();
+    const ids = await identity();
+
+    // ── the joining phone ────────────────────────────────────────────────────
+    // Adopting the family it just joined means rewriting the identity triple:
+    // the familyId it minted on first launch belongs to a family that had one
+    // member and no longer exists (enrolStore's own words), and the memberId
+    // has to become the one the guardian will register for this device.
+    const joined = enrol.joined;
+    if (joined !== null && joined.familyId !== ids.familyId) {
+      const memberId = memberIdForDevice(ids.deviceId);
+      await safe(() => t0ConfigRepo.set('familyId', joined.familyId), undefined);
+      await safe(() => t0ConfigRepo.set('memberId', memberId), undefined);
+      cachedIds = { familyId: joined.familyId, deviceId: ids.deviceId, memberId };
+      set({ familyId: joined.familyId });
+      // The roster arrives from the server; there is nothing local to seed it
+      // with, and inventing a guardian row from a display name would be a
+      // member this phone cannot address.
+      void pullFromServer('boot');
+      return;
+    }
+
+    // ── the guardian's phone ─────────────────────────────────────────────────
+    const s = get();
+    const taken = new Set(s.members.map((m) => m.asciiShortName.toUpperCase()));
+    const added: UUID[] = [];
+    for (const device of enrol.roster) {
+      const memberId = memberIdForDevice(device.deviceId);
+      if (s.members.some((m) => m.id === memberId)) continue;
+      const member: Member = {
+        id: memberId,
+        familyId: s.familyId,
+        displayName: device.displayName,
+        asciiShortName: shortNameFor(device.displayName, taken),
+        // 'adult' is the only honest default: the pairing exchange carries a
+        // name and a key, never an age or a role, and guessing 'minor' or
+        // 'elder' from nothing would change how the escalation ladder treats
+        // them. Editable later; never inferred here.
+        role: 'adult',
+        dob: null,
+        locale: s.locale,
+        identityPubkey: device.boxPublic,
+        phoneE164: null,
+        membershipExpiresAt: null,
+        createdAt: device.enrolledAt,
+        avatarColor: '',
+      };
+      taken.add(member.asciiShortName.toUpperCase());
+      await safe(() => memberRepo.upsert(member), undefined);
+      set((prev) => ({ members: [...prev.members, member] }));
+      void safe(
+        () =>
+          postMember({
+            id: member.id,
+            displayName: member.displayName,
+            asciiShortName: member.asciiShortName,
+            role: member.role,
+            locale: member.locale,
+            identityPubkey: member.identityPubkey,
+          }),
+        null,
+      );
+      added.push(memberId);
+    }
+    // F2: the mutual camera/audio/location grants that make Family Watch
+    // frictionless. One call for all of them, after the rows exist.
+    if (added.length > 0) await get().grantFamilyMembershipScopes(added);
+  },
+
+  /**
    * ★ F-14 — TWO-LAYER REVOCATION, STATED HONESTLY ★
    *
    * Layer 1 (routing) is instant and local: revokedAt is set here in under a
@@ -1148,6 +1250,12 @@ async function doBootstrap(): Promise<void> {
     // with a policyVersion as if it had been negotiated. Fire-and-forget — the
     // cached policy is what T0 runs on either way.
     void pullFromServer('boot');
+
+    // ★ D-033 (6-D-7c) — on EVERY boot, not only after a pairing. A pairing
+    // that completed in a session which died before the server was reachable
+    // would otherwise stay invisible for ever; the action is idempotent
+    // precisely so this line can be unconditional.
+    void safe(() => useKavach.getState().syncEnrolment(), undefined);
 
     void safe(() => initNotifications(), false);
     // ★ W10 · 1.35 — the call site that makes a closed phone reachable. ★
@@ -2653,6 +2761,29 @@ async function refreshBattery(): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /** Run something that touches I/O and never let it reject into a caller. */
+/**
+ * ★ F-18 + P-033 — the SMS payload's 8-character name.
+ *
+ * The server's own CHECK is `^[A-Za-z]{1,8}$` and it must be unique per family,
+ * because ADR-020's 160-character ASCII SMS addresses a member by this string
+ * and one non-ASCII character flips the whole message to UCS-2 and cuts the
+ * payload to 70 characters — which does not fit. So this strips rather than
+ * transliterates (a name with no Latin letters at all yields nothing to work
+ * with, and 'FAM' is a truthful placeholder somebody can edit), and appends a
+ * digit-free suffix on collision by walking the alphabet.
+ */
+function shortNameFor(displayName: string, taken: Set<string>): string {
+  const letters = displayName.replace(/[^A-Za-z]/g, '').slice(0, 8);
+  const base = (letters.length > 0 ? letters : 'FAM').toUpperCase();
+  if (!taken.has(base)) return base;
+  const stem = base.slice(0, 7);
+  for (const suffix of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+    const candidate = stem + suffix;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return base; // 26 collisions on one stem in a family capped at 20 is impossible
+}
+
 async function safe<T>(fn: () => Promise<T> | T, fallback: T): Promise<T | null> {
   try {
     return await fn();

@@ -10,6 +10,11 @@
  * timeline reconstructed across devices is causally correct even under skew.
  */
 import 'react-native-get-random-values';
+import { sha256 } from '@noble/hashes/sha2.js';
+
+import type { UUID } from './types';
+
+const enc = new TextEncoder();
 
 const HEX = '0123456789abcdef';
 
@@ -101,6 +106,36 @@ export function uuidv7(now: number = Date.now()): string {
   b[8] = 0x80 | (b[8] & 0x3f); // variant 10
   const h = bytesToHex(b);
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
+ * ★ Spec F2 / D-033 (6-D-7c) — the member id a device is known by, derived from
+ * the device id rather than minted.
+ *
+ * The two phones in an SAS pairing exchange a device id and nothing else: the
+ * invitation's binary layout carries `boxPublic`, `deviceId` and a name, and it
+ * has no room for a member id without a code-format change. But BOTH sides need
+ * to agree on one — the guardian has to register the joiner with the server, and
+ * the joiner has to recognise its own id in an inbound watch invite or it will
+ * drop every one of them.
+ *
+ * Deriving it is what removes the conversation. SHA-256 over a fixed label and
+ * the device id, stamped as a UUIDv5-shaped value (version 5, RFC 4122 variant)
+ * because that is exactly what a name-based UUID is for. No randomness, so both
+ * phones compute the same answer offline, forever, from a value they already
+ * have.
+ *
+ * It is NOT a secret and must never be treated as one — anyone holding the
+ * device id can compute it. Device ids are already exchanged in the clear
+ * inside the pairing envelope, and a member id authorises nothing on its own.
+ */
+export function memberIdForDevice(deviceId: UUID): UUID {
+  const h = sha256(enc.encode(`kavach-member:${deviceId}`));
+  const b = h.slice(0, 16);
+  b[6] = 0x50 | (b[6] & 0x0f); // version 5 — name-based
+  b[8] = 0x80 | (b[8] & 0x3f); // variant 10
+  const hex = bytesToHex(b);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 /**
