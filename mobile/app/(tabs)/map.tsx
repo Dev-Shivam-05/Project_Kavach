@@ -43,6 +43,7 @@ import {
   untilText,
   type ShareStatus,
 } from '../../src/domain/consentStatus';
+import { haversineM, parseLatLon, type GeoPoint } from '../../src/domain/geofence';
 import { relativeTime, t } from '../../src/i18n';
 import { useKavach } from '../../src/state/store';
 import {
@@ -188,13 +189,22 @@ export default function MapScreen(): React.ReactElement {
   );
 
   const handleAddFence = useCallback(
-    (input: { label: string; radiusM: number; notifyOnEnter: boolean; notifyOnExit: boolean }) => {
-      if (!myFix || meId === null) return;
+    (input: {
+      label: string;
+      radiusM: number;
+      notifyOnEnter: boolean;
+      notifyOnExit: boolean;
+      at: GeoPoint | null;
+    }) => {
+      // ★ Spec G (6-D-8) — `at` is the typed centre; null keeps the original
+      // behaviour and reads the freshest fix at SAVE time, not at open time.
+      const at = input.at ?? myFix;
+      if (!at || meId === null) return;
       setFenceOpen(false);
       void addGeofence({
         label: input.label,
-        lat: myFix.lat,
-        lon: myFix.lon,
+        lat: at.lat,
+        lon: at.lon,
         radiusM: input.radiusM,
         notifyOnEnter: input.notifyOnEnter,
         notifyOnExit: input.notifyOnExit,
@@ -571,6 +581,8 @@ interface FenceSheetProps {
     radiusM: number;
     notifyOnEnter: boolean;
     notifyOnExit: boolean;
+    /** ★ Spec G (6-D-8) — null means "this phone's current position", as before. */
+    at: GeoPoint | null;
   }) => void;
   onClose: () => void;
 }
@@ -580,26 +592,49 @@ function FenceSheet({ visible, centre, bottomInset, onSave, onClose }: FenceShee
   const [radiusM, setRadiusM] = useState<number>(150);
   const [onEnter, setOnEnter] = useState(true);
   const [onExit, setOnExit] = useState(false);
+  /**
+   * ★ Spec G (6-D-8) — where the fence goes.
+   *
+   * 'here' is the behaviour that already existed and stays the default, because
+   * it is right most of the time and needs no typing. 'typed' is the gap being
+   * closed: a fence around a school could previously only be created by
+   * standing at the school.
+   */
+  const [mode, setMode] = useState<'here' | 'typed'>('here');
+  const [typed, setTyped] = useState('');
 
   const trimmed = label.trim();
+  const typedPoint = useMemo(() => (typed.trim().length === 0 ? null : parseLatLon(typed)), [typed]);
+  const target: GeoPoint | null = mode === 'here' ? centre : typedPoint;
+
+  const reset = useCallback(() => {
+    setLabel('');
+    setRadiusM(150);
+    setOnEnter(true);
+    setOnExit(false);
+    setMode('here');
+    setTyped('');
+  }, []);
 
   const close = useCallback(() => {
-    setLabel('');
-    setRadiusM(150);
-    setOnEnter(true);
-    setOnExit(false);
+    reset();
     onClose();
-  }, [onClose]);
+  }, [onClose, reset]);
 
   const save = useCallback(() => {
-    if (trimmed.length === 0) return;
-    const payload = { label: trimmed, radiusM, notifyOnEnter: onEnter, notifyOnExit: onExit };
-    setLabel('');
-    setRadiusM(150);
-    setOnEnter(true);
-    setOnExit(false);
+    if (trimmed.length === 0 || target === null) return;
+    const payload = {
+      label: trimmed,
+      radiusM,
+      notifyOnEnter: onEnter,
+      notifyOnExit: onExit,
+      // 'here' still passes null so the caller reads the freshest fix at save
+      // time rather than whatever this sheet was opened with.
+      at: mode === 'here' ? null : target,
+    };
+    reset();
     onSave(payload);
-  }, [trimmed, radiusM, onEnter, onExit, onSave]);
+  }, [trimmed, radiusM, onEnter, onExit, onSave, mode, target, reset]);
 
   return (
     <Modal
@@ -625,12 +660,35 @@ function FenceSheet({ visible, centre, bottomInset, onSave, onClose }: FenceShee
           keyboardShouldPersistTaps="handled"
         >
           <Text accessibilityRole="header" style={styles.sheetTitle}>
-            Add a fence here
+            Add a fence
           </Text>
           <Text style={styles.sheetBody}>
-            Centred on where this phone is standing. The centre is stored on this device only — it is
-            never uploaded (ADR-010).
+            The centre is stored on this device only — it is never uploaded (ADR-010).
           </Text>
+
+          {/* ★ Spec G (6-D-8) — the choice that used not to exist. */}
+          <View style={styles.chipRowWrap}>
+            {(['here', 'typed'] as const).map((option) => {
+              const selected = option === mode;
+              const optionLabel = option === 'here' ? 'Where I am now' : 'Type a location';
+              return (
+                <PressableScale
+                  key={option}
+                  onPress={() => setMode(option)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={optionLabel}
+                  highlightColor={colors.focus}
+                  highlightRadius={radius.pill}
+                  style={[styles.chip, selected ? styles.chipSelected : null]}
+                >
+                  <Text style={[styles.chipText, selected ? styles.chipTextSelected : null]}>
+                    {optionLabel}
+                  </Text>
+                </PressableScale>
+              );
+            })}
+          </View>
 
           <TextInput
             value={label}
@@ -688,13 +746,50 @@ function FenceSheet({ visible, centre, bottomInset, onSave, onClose }: FenceShee
             hint="A quiet note when this phone leaves the circle"
           />
 
-          {centre === null ? (
-            <Text style={styles.hint}>No position fix, so there is nothing to centre on.</Text>
-          ) : (
+          {mode === 'typed' ? (
+            <>
+              <TextInput
+                value={typed}
+                onChangeText={setTyped}
+                placeholder="19.07600, 72.87770"
+                placeholderTextColor={colors.textFaint}
+                style={styles.input}
+                accessibilityLabel="Latitude and longitude"
+                autoCapitalize="none"
+                autoCorrect={false}
+                inputMode="text"
+                maxLength={120}
+                returnKeyType="done"
+              />
+              {typed.trim().length > 0 && typedPoint === null ? (
+                // Says what IS accepted rather than only that this was not.
+                <Text style={styles.hint}>
+                  Not a coordinate pair. Type latitude then longitude — “19.076, 72.8777” — or paste
+                  a Google Maps link. Degrees-and-minutes is not read here, because reading it
+                  half-right would put the fence somewhere else entirely.
+                </Text>
+              ) : null}
+            </>
+          ) : null}
+
+          {target === null ? (
+            <Text style={styles.hint}>
+              {mode === 'here'
+                ? 'No position fix, so there is nothing to centre on.'
+                : 'Enter a latitude and longitude to place this fence.'}
+            </Text>
+          ) : mode === 'here' && centre !== null ? (
             <Text style={styles.coords}>
               {`${centre.lat.toFixed(5)}, ${centre.lon.toFixed(5)} · ±${Math.round(
                 centre.accuracyM,
               )} m · fixed ${relativeTime(centre.at)}`}
+            </Text>
+          ) : (
+            <Text style={styles.coords}>
+              {`${target.lat.toFixed(5)}, ${target.lon.toFixed(5)}` +
+                (centre === null
+                  ? ''
+                  : ` · ${Math.round(haversineM(centre, target) / 100) / 10} km from you`)}
             </Text>
           )}
 
@@ -702,12 +797,14 @@ function FenceSheet({ visible, centre, bottomInset, onSave, onClose }: FenceShee
             label={t('common.save')}
             variant="primary"
             size="lg"
-            disabled={trimmed.length === 0 || centre === null}
+            disabled={trimmed.length === 0 || target === null}
             onPress={save}
             accessibilityLabel={
               trimmed.length === 0
                 ? 'Name the fence first'
-                : `Save the ${trimmed} fence, ${radiusM} metres across your current position`
+                : `Save the ${trimmed} fence, ${radiusM} metres across ${
+                    mode === 'here' ? 'your current position' : 'the location you typed'
+                  }`
             }
           />
           <Button label={t('common.cancel')} variant="quiet" onPress={close} />

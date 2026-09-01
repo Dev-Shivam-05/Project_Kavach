@@ -981,6 +981,18 @@ func (c *conn) handleMessage(ctx context.Context, data []byte) {
 	var in struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
+		// ★ 6-D-7d — the client has ALWAYS sent this field, and this handler has
+		// always read only `data`. `mobile/src/net/ws.ts`'s `WsFrame` has no
+		// `data` at all: it is `{type, hlc, key, payload, priority}`. So every
+		// C→S frame the app ever sent arrived here with `Data == nil`, was
+		// relayed with a null body, and was then dropped by the client on the
+		// far side for having nothing in it — silently, because a nil
+		// json.RawMessage marshals to `null` rather than failing.
+		//
+		// Accepting both is the fix that does not require every already-built
+		// client to change. `data` still wins when present, so nothing that
+		// works today changes shape.
+		Payload json.RawMessage `json:"payload"`
 	}
 	if err := json.Unmarshal(data, &in); err != nil {
 		c.emit(ctx, notify.Frame{
@@ -1001,6 +1013,10 @@ func (c *conn) handleMessage(ctx context.Context, data []byte) {
 			Data: map[string]any{"code": "KV-2001", "detail": "reduced session may not publish " + in.Type},
 		})
 		return
+	}
+
+	if len(in.Data) == 0 {
+		in.Data = in.Payload
 	}
 
 	now := time.Now().UnixMilli()

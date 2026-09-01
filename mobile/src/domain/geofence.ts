@@ -82,6 +82,52 @@ const EARTH_R_M = 6_371_008.8; // IUGG mean radius
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 
 /** Great-circle distance in metres. Accurate to ~0.5% at any distance on Earth. */
+/**
+ * ★ Spec G (6-D-8) — parse a typed-in coordinate pair.
+ *
+ * Until now a fence could only ever be centred on this phone's own current
+ * position (`map.tsx handleAddFence`), which means a fence around a child's
+ * school could only be created by standing at the school. That is a real gap,
+ * not a preference. 6-B's MapLibre will make it a tap on a map; this is the
+ * interim that does not need it.
+ *
+ * Accepts what people actually paste: "19.076, 72.8777", the same with a
+ * degree sign, tabs, or a Google Maps URL's `@lat,lon,zoom` fragment. It does
+ * NOT accept degrees-minutes-seconds — a half-understood DMS parse that lands a
+ * fence a kilometre away is worse than a refusal, and the error says so.
+ *
+ * Returns null rather than throwing, and rejects out-of-range values outright:
+ * a latitude of 91 is not a coordinate that needs clamping, it is a typo, and
+ * silently clamping it would put the fence at the North Pole.
+ */
+export function parseLatLon(text: string): GeoPoint | null {
+  // A Google Maps URL carries the pair after an '@'; take that fragment first
+  // so a pasted link works without the person having to edit it down.
+  const at = text.lastIndexOf('@');
+  const body = at >= 0 ? text.slice(at + 1) : text;
+
+  const numbers = body
+    .replace(/[°\s]+/g, ' ')
+    .split(/[,;]|\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+
+  if (numbers.length < 2) return null;
+  // Anything with a cardinal letter is either DMS or a hemisphere suffix this
+  // does not handle. Refuse rather than half-read it.
+  if (/[NSEWnsew]/.test(numbers[0]) || /[NSEWnsew]/.test(numbers[1])) return null;
+
+  const lat = Number(numbers[0]);
+  const lon = Number(numbers[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < -90 || lat > 90) return null;
+  if (lon < -180 || lon > 180) return null;
+  // 0,0 is in the Gulf of Guinea and is what an empty or half-typed field
+  // produces far more often than it is somebody's actual intent.
+  if (lat === 0 && lon === 0) return null;
+  return { lat, lon };
+}
+
 export function haversineM(a: GeoPoint, b: GeoPoint): number {
   const dLat = toRad(b.lat - a.lat);
   const dLon = toRad(b.lon - a.lon);

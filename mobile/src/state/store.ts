@@ -210,7 +210,15 @@ import {
   type WatchKind,
   type WatchSignalPayload,
 } from './watchSession';
-import { connectWs, disconnectWs, onFrame, sendFrame, subscribeWsStatus, type WsFrame } from '../net/ws';
+import {
+  connectWs,
+  disconnectWs,
+  onFrame,
+  sendFrame,
+  subscribeWsStatus,
+  wsStatus,
+  type WsFrame,
+} from '../net/ws';
 import {
   emptyRouteHistory,
   predictEta,
@@ -2681,15 +2689,18 @@ function falsePositiveStreak(): number {
  * Record a position fix. Called by the location layer; also the ONLY way the
  * cached fix T0 reads ever changes.
  *
- * ★ Precise coordinates are Class A: they go to the local database and the
- *   in-memory cache, and nowhere else. What reaches the server is the ≈1 km
- *   coarse cell, and only inside an incident (§10.2).
+ * ★ Precise coordinates are Class A: they go to the local database, the
+ *   in-memory cache, and — SEALED, never in the clear — the family's own
+ *   realtime stream. What reaches the SERVER in readable form is the ≈1 km
+ *   coarse cell, and only inside an incident (§10.2). `broadcastFix` below is
+ *   the sealed leg; the server relays ciphertext it cannot open (F-19).
  */
 export async function noteLocationFix(fix: T0Location): Promise<void> {
   cachedFix = fix;
   const s = useKavach.getState();
   const memberId = s.me?.id ?? s.deviceId;
   if (!memberId || !s.familyId) return;
+  broadcastFix(fix);
   await safe(
     () =>
       locationRepo.append({
@@ -2706,6 +2717,55 @@ export async function noteLocationFix(fix: T0Location): Promise<void> {
       }),
     0,
   );
+}
+
+/**
+ * ★ D-035's open consequence, closed (6-D-7d) — ambient location sharing.
+ *
+ * Until now the ONLY way a family member's pin ever moved on someone else's
+ * phone was somebody tapping Refresh (6-D-6), because `noteLocationFix` wrote
+ * to the local database and stopped there. C1's own prose assumes "the existing
+ * 10s foreground watch" already broadcasts. It did not. This is that broadcast.
+ *
+ * ★ WHY STRAIGHT DOWN THE OPEN SOCKET ★
+ * D-035 sketched exactly this and it is the cheap half: a foregrounded phone
+ * already holds a `net/ws.ts` connection, so a fix costs one frame. The
+ * ticket+POST path in `locationRefresh.ts` exists for the HEADLESS case, where
+ * there is no socket and no store — reusing it here would mint a connect ticket
+ * every ten seconds for no reason.
+ *
+ * ★ THREE REFUSALS, EACH DELIBERATE ★
+ *  · No group secret — nothing to seal with, and an unsealed coordinate on the
+ *    family stream is precisely the Class A leak §10.2 exists to prevent.
+ *  · `monitoringPaused` — P-066. A pause is the person's own decision and it
+ *    has to actually stop the sending, not merely stop the drawing.
+ *  · Socket not open — `sendFrame` would queue it, and a queue of stale
+ *    positions flushed on reconnect is a track of where somebody has been.
+ *    LOW frames coalesce per key, so at most the newest survives, but not
+ *    sending at all is the honest behaviour for a fix nobody can use yet.
+ */
+function broadcastFix(fix: T0Location): void {
+  if (!groupSecret) return;
+  const s = useKavach.getState();
+  const meId = s.me?.id ?? null;
+  if (meId === null) return;
+  if (s.presence[meId]?.monitoringPaused === true) return;
+  if (wsStatus() !== 'open') return;
+  try {
+    const sealed = sealJson(locationStreamKey(groupSecret, locationWindowId(fix.at)), {
+      lat: fix.lat,
+      lon: fix.lon,
+      accuracyM: fix.accuracyM,
+      at: fix.at,
+    });
+    // The exact frame realtime-gw's `handleMessage` "location.report" case
+    // already understands — the same one a headless refresh produces through
+    // POST /v1/location-report, so a receiver cannot tell the two apart.
+    sendFrame({ type: 'location.report', priority: 'LOW', key: 'loc', payload: sealed });
+  } catch {
+    // Sealing failed. A position that cannot be sealed is not sent in the
+    // clear; it stays on this phone, which is where Class A belongs.
+  }
 }
 
 /** The cached fix T0 will seal into the next envelope. */

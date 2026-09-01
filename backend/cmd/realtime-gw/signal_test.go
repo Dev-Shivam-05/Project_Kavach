@@ -188,3 +188,48 @@ func TestWatchSignal_ReducedSessionMayNotPublish(t *testing.T) {
 		t.Error("the reduced sender was told nothing")
 	}
 }
+
+// ── the payload/data alias (6-D-7d) ──────────────────────────────────────────
+
+// `mobile/src/net/ws.ts`'s WsFrame is `{type, hlc, key, payload, priority}` — it
+// has no `data` field and never has. This handler read only `data`, so every
+// C→S frame the app ever sent arrived with a nil body and was relayed as
+// `"sealed": null`, which the receiving client then dropped for being empty.
+// Nothing failed anywhere: a nil json.RawMessage marshals to `null`. These two
+// tests are the only thing standing between that and happening again.
+func TestClientFrame_PayloadIsAcceptedAsDataAlias(t *testing.T) {
+	gw := newTestGateway(t)
+	c := newTestConn(t, gw, signalTicket())
+
+	ch, cancel := gw.bus.Subscribe(notify.StreamSubject(signalFamID), 0)
+	defer cancel()
+
+	// Exactly the shape sendFrame() puts on the wire for an ambient fix.
+	c.handleMessage(context.Background(),
+		[]byte(`{"type":"location.report","key":"loc","priority":"LOW","payload":"AQIDc2VhbGVk"}`))
+
+	f := awaitFrame(t, ch)
+	if f.Type != "location.update" {
+		t.Fatalf("frame.Type = %q, want location.update", f.Type)
+	}
+	sealed, _ := f.Data["sealed"].(string)
+	if sealed != "AQIDc2VhbGVk" {
+		t.Errorf("data.sealed = %#v, want the ciphertext — a null here is the silent drop this test exists for", f.Data["sealed"])
+	}
+}
+
+func TestClientFrame_DataStillWinsOverPayload(t *testing.T) {
+	gw := newTestGateway(t)
+	c := newTestConn(t, gw, signalTicket())
+
+	ch, cancel := gw.bus.Subscribe(notify.StreamSubject(signalFamID), 0)
+	defer cancel()
+
+	c.handleMessage(context.Background(),
+		[]byte(`{"type":"location.report","data":"REAL","payload":"ALIAS"}`))
+
+	f := awaitFrame(t, ch)
+	if sealed, _ := f.Data["sealed"].(string); sealed != "REAL" {
+		t.Errorf("data.sealed = %q, want REAL — the alias must not shadow a client that does send data", sealed)
+	}
+}

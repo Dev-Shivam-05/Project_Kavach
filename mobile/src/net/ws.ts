@@ -62,6 +62,11 @@ const CRITICAL_TYPES = new Set([
 /** Safe to coalesce: only the newest value per key has any meaning. */
 const LOW_TYPES = new Set([
   'location.update',
+  // ★ 6-D-7d — the OUTBOUND twin. Ambient fixes leave every ~10s while the app
+  // is foregrounded; without this they default to HIGH, which neither coalesces
+  // nor drops, so a flaky socket would flush a whole track of stale positions
+  // on reconnect instead of the one that is still true.
+  'location.report',
   'presence.update',
   'device.battery',
   'device.heartbeat',
