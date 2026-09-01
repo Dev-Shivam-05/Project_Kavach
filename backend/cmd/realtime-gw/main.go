@@ -975,7 +975,8 @@ func (c *conn) reader(ctx context.Context, cancel context.CancelFunc) {
 	}
 }
 
-// handleMessage processes C→S frames (§9.2: heartbeat, location.report, ack).
+// handleMessage processes C→S frames (§9.2: heartbeat, location.report, ack;
+// 6-D-7 adds watch.signal).
 func (c *conn) handleMessage(ctx context.Context, data []byte) {
 	var in struct {
 		Type string          `json:"type"`
@@ -1026,6 +1027,45 @@ func (c *conn) handleMessage(ctx context.Context, data []byte) {
 			},
 		}
 		c.publish(f)
+	case "watch.signal":
+		// ★ Spec D1/E1 (phase6b-redesign-and-family-watch) — Family Watch
+		// signalling. The gateway relays one opaque blob and two routing fields;
+		// it never sees an SDP offer, an ICE candidate, or even which of the two
+		// capabilities is in play. All of that is sealed on the device under the
+		// family's own per-session key, the same §10.2 rule location.report
+		// already follows — which is also why a session id is a cleartext
+		// routing field here and the AAD binding the ciphertext to it is not.
+		//
+		// HIGH, not CRITICAL, and deliberately not LOW: a lost signalling frame
+		// costs a failed (or relay-only) watch session, which is a feature
+		// degrading rather than a responder losing track of who is going
+		// (§2.5.2) — but LOW coalesces per key, and coalescing an ICE
+		// candidate stream keeps only the last candidate, which is a session
+		// that never connects.
+		var sig struct {
+			SessionID  string          `json:"sessionId"`
+			ToMemberID string          `json:"toMemberId"`
+			Sealed     json.RawMessage `json:"sealed"`
+		}
+		if err := json.Unmarshal(in.Data, &sig); err != nil ||
+			sig.SessionID == "" || sig.ToMemberID == "" || len(sig.Sealed) == 0 {
+			c.emit(ctx, notify.Frame{
+				V: notify.FrameVersion, Type: "error", Priority: notify.PriorityHigh,
+				FamilyID: c.ticket.FamilyID, At: now,
+				Data: map[string]any{"code": "KV-1001", "detail": "malformed watch.signal"},
+			})
+			return
+		}
+		c.publish(notify.Frame{
+			V: notify.FrameVersion, Type: "watch.signal", Priority: notify.PriorityHigh,
+			FamilyID: c.ticket.FamilyID, At: now,
+			Data: map[string]any{
+				"sessionId":    sig.SessionID,
+				"fromMemberId": c.ticket.MemberID, "fromDeviceId": c.ticket.DeviceID,
+				"toMemberId": sig.ToMemberID,
+				"sealed":     sig.Sealed, "at": now,
+			},
+		})
 	case "ack":
 		f := notify.Frame{
 			V: notify.FrameVersion, Type: "incident.acked", Priority: notify.PriorityCritical,
