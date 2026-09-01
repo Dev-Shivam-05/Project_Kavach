@@ -33,3 +33,15 @@ data/
 
 # built APKs — never commit binaries (RISK 11)
 *.apk
+
+# ── Firebase / FCM ────────────────────────────────────────────────────────────
+# ★ The SERVICE ACCOUNT KEY is a real secret and must never be committed. ★ It
+# authorises sending a push to every device in every family this project owns.
+# `google-services.json` is NOT in this list on purpose: it is not a secret (it
+# ships inside the APK), and EAS builds from the git tree — ignoring it would
+# produce a build with no push at all, which fails silently at 3am rather than
+# at build time.
+*-firebase-adminsdk-*.json
+service-account*.json
+fcm-credentials*.json
+secrets/
