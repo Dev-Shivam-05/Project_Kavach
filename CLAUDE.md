@@ -34,6 +34,15 @@ either** — the nine gates are Go, TypeScript and Node.
 Changes to the native Tier-0 plane are unverifiable from this checkout; say so rather than reporting
 Kotlin as done (D-021).
 
+**A C→S WebSocket frame must carry its body in `payload`, and `realtime-gw` accepts BOTH names.**
+`mobile/src/net/ws.ts`'s `WsFrame` is `{type, hlc, key, payload, priority}` — there is no `data`
+field and there never was — while `handleMessage` unmarshalled only `{"type","data"}`. Every C→S
+frame the app ever sent therefore arrived with `Data == nil`, was relayed with a null body, and was
+dropped by the receiving client for being empty, **with nothing failing anywhere**: a nil
+`json.RawMessage` marshals to `null`. Fixed 1 Sep (D-037) by accepting `payload` as an alias, `data`
+still winning; `signal_test.go` pins both halves. If you add a C→S frame type, assert end-to-end
+that the body ARRIVES, not just that it was published.
+
 **`10.0.2.2` is the Android EMULATOR's alias for the host's localhost, and it is the default in
 `app.json`** (`extra.apiBase`/`apiDirect` :8081, `wsBase` :8082 — `src/core/config.ts:41`). On a
 physical phone it resolves to nothing, so any APK meant for a real device must override
@@ -183,8 +192,26 @@ not a `router.push`. `tsc --noEmit` is silent about this; only the test suite ca
   for (`action_routing_test.go`). `armTimers` and `tierFor` are ~20 deletable lines; deleting them
   means deciding what `projector_test.go`'s four tests become. Read D-026 and D-027 before you touch
   `armTimers`, `OnIncidentOpen`, `onIngestedIncident`, or either binary's data directory.
-- **There is no working "a member joined this family" event on the mobile client — do not assume
-  one to hook a feature to (D-033).** Two flows look like candidates and neither is: `enrolStore.ts`'s
+- **`memberIdForDevice` is FROZEN. Changing it silently unpairs every family.** The two phones in an
+  SAS pairing never exchange a member id — the envelope's binary layout
+  (`header ‖ createdAt(48) ‖ boxPublic(32) ‖ deviceId(16) ‖ len ‖ name`) has no room for one, and
+  widening it changes the length of the code people read aloud. So both sides DERIVE it from the
+  device id (`core/ids.ts`, UUIDv5-shaped). If the label or the hash changes, two phones on different
+  app versions compute different ids, `handleWatchSignal` drops every invite whose `toMemberId` does
+  not match, and the Camera button just does nothing — no error, no log. `test/member-id.test.ts`
+  hard-codes the expected value for exactly this reason; a failure there means a migration, not a new
+  expectation (D-037).
+- **The `WatchMedia` seam is the only place `react-native-webrtc` may be imported from.**
+  `watchSession.ts` (consent, timers, access log, indicator state) is store-free and native-free and
+  is where all 22 of its tests live; `watchMedia.ts` is the native half. The transport is registered
+  in `app/_layout.tsx`, NOT in `store.ts`, so the native module stays out of every Node test's import
+  graph and off the headless push path. Do not "simplify" that by registering it in the store.
+- ~~**There is no working "a member joined this family" event on the mobile client**~~ — **closed
+  1 Sep by `store.syncEnrolment()` (D-037).** The note below is kept because its reasoning still
+  explains the shape of the fix; what changed is that the bridge now exists and is called from
+  `bootstrap` plus all three `enrol.tsx` completion paths. The joiner still cannot derive the
+  guardian's member id offline, so it adopts the family and reads the roster from `GET /v1/family`.
+  Original note (D-033): Two flows look like candidates and neither is: `enrolStore.ts`'s
   P2P device-pairing (spoken-fingerprint SAS) is deliberately airgapped by its own header comment
   ("IT NEVER TALKS TO A SERVER… never touches `store.ts`"); and although the backend route exists and
   works (`POST /v1/members`, W10-j), **no client in `mobile/` calls it** — `net/api.ts` only wires

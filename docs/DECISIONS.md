@@ -915,3 +915,64 @@ can send one until 6-D-7b installs a `WatchMedia`. Report this as "exists, not w
 the watched device's non-suppressible banner + dot + start-sound (D2/D3), and only then wiring
 `watch.tsx`'s two buttons to `startWatchSession`. None of it is verifiable here until an Android SDK
 exists on this machine or the user runs a device build.
+
+## D-037 — 6-D-7b/c/d + 6-D-8 built in one session on the user's explicit instruction; the media is written but has never run
+
+**Decision.** The user asked, twice and explicitly, for everything remaining to be finished in one
+session ("sab ek saath complete kijiye"), keeping only the two items that are genuinely theirs
+(Firebase, a reachable host) pending. The concern that camera/mic cannot be *verified* here was
+stated once and the instruction was reaffirmed, so the full scope was built. This breaks the ~8-file
+rule in CLAUDE.md deliberately and with the user's decision on record, not by drift.
+
+**What was built, in dependency order.**
+1. **6-D-7b — the media.** `react-native-webrtc@124.0.8` + `@config-plugins/react-native-webrtc@15.0.2`.
+   `mobile/src/state/watchMedia.ts` fills 6-D-7a's `WatchMedia` seam. The VIEWER offers (it is the
+   party that pressed a button); the watched device captures and answers; ICE is trickled. The
+   viewer's own camera and microphone are **never** opened — one direction only, so the transport is
+   not one bug away from a two-way call nobody consented to. `app/watch-session.tsx` is the viewer
+   screen (D3's flip, E2's ring + "+5 min", honest waiting/ended copy). `src/ui/WatchIndicator.tsx`
+   is the other half GLOSSARY.md forbids omitting: banner + dot + a new distinctive `watch` cue in
+   `t0/alarm.ts`, mounted **above** the navigator in `_layout.tsx` so no route can cover it or forget
+   it, with no prop, no setting and no dismiss. D-034's honest alert is retired because the thing it
+   was honest about now exists.
+2. **6-D-7c — the enrolment bridge (closes D-033).** `store.syncEnrolment()`, called from `bootstrap`
+   on every boot and from all three `enrol.tsx` completion paths. `POST /v1/members` finally has a
+   caller, and `grantFamilyMembershipScopes` (built in 6-D-4, unused since) finally has a call site.
+3. **6-D-7d — ambient location (closes D-035's consequence).** `noteLocationFix` now seals and sends
+   `location.report` down the already-open socket.
+4. **6-D-8 — arbitrary-location geofences.** `parseLatLon` + a mode chooser in `map.tsx`'s fence
+   sheet.
+
+**Two design points worth not re-deriving.**
+- **The two phones DERIVE the joiner's member id rather than exchanging one** (`memberIdForDevice`,
+  UUIDv5-shaped over the device id). The SAS envelope's binary layout is
+  `header ‖ createdAt(48) ‖ boxPublic(32) ‖ deviceId(16) ‖ len ‖ name` with no room for a member id,
+  and widening it would change the length of the code people read aloud. The derivation is frozen by
+  a hard-coded fixture in `test/member-id.test.ts`, because drift there is silent: every watch invite
+  to that phone is dropped by `handleWatchSignal`'s `toMemberId !== ctx.meId` guard and the Camera
+  button simply does nothing.
+- **`ANDROID_HOME` is unset but EAS builds in the cloud**, so adding a native dependency is not
+  blocked by D-021 — only *verifying* it is. Every gate that exists here passes; no frame of video
+  has ever moved.
+
+**★ A live contract bug was found and fixed while wiring the ambient leg.** `realtime-gw`'s
+`handleMessage` unmarshalled only `{"type", "data"}`, and `mobile/src/net/ws.ts`'s `WsFrame` has no
+`data` field at all — it is `{type, hlc, key, payload, priority}`. **Every C→S frame the app has ever
+sent arrived with `Data == nil`**, was relayed with a null body, and was dropped by the receiving
+client for being empty. Nothing ever failed: a nil `json.RawMessage` marshals to `null` rather than
+erroring. The gateway now accepts `payload` as an alias (`data` still wins when present), pinned by
+`TestClientFrame_PayloadIsAcceptedAsDataAlias` and `TestClientFrame_DataStillWinsOverPayload`. This
+is the second time this repo has shipped a complete, tested, silently-disconnected path; it was found
+by writing a *new* caller for an *old* endpoint, which is the only reason it surfaced.
+
+**Evidence.** `tsc --noEmit` clean · `npm test` 233/233 (was 196 at session start) · `npm run verify`
+exit 0 · `go build`/`go vet`/staticcheck/archlint clean · `cmd/realtime-gw` 9 tests · full backend
+sweep + `cmd/sos-ingest` green · `gen:check`/schema-lint/protolint clean.
+
+**Consequence — what is STILL not done, and whose it is.** Nothing in Family Watch can work end to
+end until (a) a backend the phone can actually reach exists — `app.json` still defaults to
+`10.0.2.2`, the Android emulator's host alias, which resolves to nothing on a real phone — and (b) a
+Firebase project supplies `google-services.json` + `KAVACH_FCM_CREDENTIALS`. Both are the user's.
+A TURN relay is a third, needed only for across-city sessions; STUN is configured and the viewer
+screen says so honestly when no relay is set. And **no camera or microphone stream has ever been
+observed** — the first device build is the first test.

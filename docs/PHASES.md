@@ -43,24 +43,38 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 > carried over from the user's own 21 Aug decision, not open for reinterpretation in any later 6-D
 > phase.
 >
-> **1 Sep — 6-D-7 split into 6-D-7a (landed) and 6-D-7b (blocked), per D-036.** The row bundled two
-> things one session cannot honestly deliver together here. **6-D-7a shipped the session plane**:
-> `realtime-gw`'s `watch.signal` relay (opaque ciphertext + two routing fields, sender taken from the
-> connect ticket) and `mobile/src/state/watchSession.ts` — invite/auto-accept/decline, the watched
-> phone's own grants as the authority (F-14: the viewer's copy is the one a revocation has not
-> reached), D5/E4's two access-log rows with the row written **before** the accept goes out (D2's
-> ordering), E2's 5-minute Listen budget and repeatable "+5 min", D3's viewer-driven flip, D4's End
-> from either party. ⛔ **It has no call site in `app/` on purpose.** GLOSSARY.md: "Do not build one
-> half without the other" — without media, opening a session would tell someone *"X is viewing your
-> camera"* and carry no camera, the exact fabrication D-034 refused one phase ago. 6-D-5's honest
-> "isn't built yet" alert stays; `store.ts` routes inbound `watch.signal` frames, so the receive half
-> is wired and nothing can send one until a `WatchMedia` is installed.
+> ★★★ **1 Sep — Phase 6-D is code-complete. 6-D-1 through 6-D-8 have all landed** (D-036, D-037).
+> Today closed, in one session at the user's explicit instruction: **6-D-7a** the Family Watch
+> session plane (invite/accept/decline, the watched phone's own grants as the authority, D5/E4's
+> access-log rows written *before* the accept goes out, E2's budget, D3's flip, D4's End);
+> **6-D-7b** the WebRTC media, the viewer's live-view screen and the non-suppressible
+> banner+dot+sound on the watched phone; **6-D-7c** the enrolment bridge that closes **D-033**
+> (`POST /v1/members` finally has a caller and F2's auto-grant finally has a call site);
+> **6-D-7d** ambient location sharing that closes **D-035's** consequence; and **6-D-8** typed
+> lat/lon geofence placement.
 >
-> **Next: 6-D-7b** — `react-native-webrtc` + TURN + the live-view/listen screens + the watched
-> device's non-suppressible banner/dot/sound, then wiring `watch.tsx`'s two buttons. **Still
-> unverifiable here**: `java -version` now succeeds (JDK 17, `JAVA_HOME` set — PROJECT_MAP.md's "no
-> JDK" line is stale), but `ANDROID_HOME`/`ANDROID_SDK_ROOT` are unset, so D-021 stands in practice.
-> 6-D-8 (geofencing arbitrary-location placement) remains the fully-verifiable-here alternative.
+> ★ **A live contract bug surfaced while wiring 6-D-7d and is fixed**: `realtime-gw` read only a
+> `data` field from client frames and `mobile`'s `WsFrame` has never had one — so every C→S frame the
+> app ever sent arrived with a nil body and was dropped silently by the receiver. `payload` is now
+> accepted as an alias, with two tests. See D-037.
+>
+> ⛔ **Three things stand between this and a working APK, and none of them is code in this repo.**
+> **(1)** No server a phone can reach: `app.json` still defaults to `10.0.2.2`, the Android
+> *emulator's* alias for its host, which resolves to nothing on a real handset — a real build must
+> set `EXPO_PUBLIC_KAVACH_API` / `_API_DIRECT` / `_WS`, and the backend must be running somewhere.
+> **(2)** No Firebase: no `android.googleServicesFile`, no `KAVACH_FCM_CREDENTIALS`, so no push,
+> no escalation ladder reaching anyone, and no push-triggered Refresh (D-018). **(3)** No TURN
+> relay — STUN is configured and works for most pairs; across-city sessions need a relay, and the
+> viewer's screen says so rather than pretending. (1) and (2) are the user's; (3) is optional
+> infrastructure.
+>
+> ⛔ **No camera or microphone stream has ever been observed.** `ANDROID_HOME` is unset here, so
+> 6-D-7b is `tsc`-clean, test-green and otherwise unrun. The first device build is the first test —
+> treat a failure there as expected work, not a regression. **An APK can still be built today**:
+> EAS builds in Expo's cloud, so the missing local SDK does not block `npm run build:apk`.
+>
+> **Next: Phase 1's remaining work**, or a first device build — whichever the user picks. See the
+> Phase 6-D table below and [DECISIONS.md](DECISIONS.md) D-029 through D-037.
 
 > ★ **D-026 and D-027 are both closed (20 Aug, W10-h + W10-i), and Phase 1's last arrow connects.**
 > Observed, not argued: `ops/e2e-two-binaries.sh` posts a real SOS to the `sos-ingest` binary and
@@ -149,16 +163,14 @@ that nobody has run `docker compose up`.
 
 ## Next 3
 
-> ★★★ **Superseded for now by Phase 6-D (29 Aug).** The actual next 2, in order: **6-D-7b** (native
-> WebRTC camera/mic transport — hits the D-021 wall; the TS/state/signalling layer was built
-> separately as 6-D-7a and is done), **6-D-8** (geofencing arbitrary-location placement, an interim
-> lat/lon text-entry fallback that does not need 6-B's MapLibre first, fully verifiable on this
-> machine). 6-D-1 through 6-D-7a are closed — 6-D-6 (31 Aug) touched Go as well as TS
-> (`internal/notify`, `cmd/control-plane`, `cmd/realtime-gw` — the last of these got its first-ever
-> tests) and is the reason "backend" stopped meaning "no JDK needed but also no Go" for this phase
-> group. The device-gated list below is what comes after Phase 6-D's verifiable slice (6-D-1 through
-> 6-D-7a, 6-D-8) is done.
-
+> ★★★ **Phase 6-D is code-complete as of 1 Sep — 6-D-1 through 6-D-8 have all landed** (D-036,
+> D-037). It is NOT proven: 6-D-7b's camera/mic media has never been run, and nothing in Family
+> Watch works end to end until a reachable backend and a Firebase project exist (both the user's).
+> The honest next two are therefore **(1) a first device build** — `npm run build:apk` runs in
+> Expo's cloud and does not need the missing local SDK; it is the only way anything below the
+> TypeScript layer gets tested, and it has never been done from this checkout — and **(2) whichever
+> of the deployment blockers the user closes first**. After that, Phase 1's remaining work.
+>
 > ⚠ **All three need an Android SDK. Check `ANDROID_HOME` before picking one, not after** — and
 > note that `java -version` is no longer the check that fails (a JDK arrived; the SDK did not).
 > W10-d exists because that check was run first on 11 Aug; the alternative was a session of Kotlin
@@ -593,8 +605,10 @@ demoable thing.
 | 6-D-5 | Watch tab actions | ✅ | Landed 31 Aug. Each member card in `watch.tsx` gets Camera/Listen icon-buttons (Feather `video`/`mic`), enabled state from `grantStatusFor('camera'\|'audio', member, meId, undefined, grants, now)` (`presence` deliberately `undefined` — camera/audio don't gate on `monitoringPaused`). New `disabledReasonFor()` in `consentStatus.ts` renders the exact B3 ("Not sharing location/camera/mic yet…") and F4 ("{name} has turned this off.") copy, deduped to one line when camera/audio share a reason and split to two when a member has revoked only one (F1's "separately revocable"). Tapping an *enabled* button is honest that the live session doesn't exist yet (D-034) rather than opening a fake one or writing a fake `AccessLogEntry` — that stays 6-D-7's job. **Refresh is NOT in this row** — confirmed against this table mid-session and corrected out of the phase; it is 6-D-6. Verified: `tsc --noEmit` clean, `npm test` 186/186, `npm run verify` exit 0. Backend untouched, not re-run |
 | 6-D-6 | On-demand location push | ✅ | Landed 31 Aug. Turned out to need more than the Refresh button: cross-member location had **never once been wired in either direction** before this phase (D-035) — `noteLocationFix` only ever wrote to the local DB, and `realtime-gw`'s existing `location.report`→`location.update` relay plus `crypto.locationStreamKey` had zero callers. Built: **(1)** the request leg — `notify.RequestLocationRefresh` (Android-only FCM, bypasses `Fanout`), `POST /v1/members/{id}/location-refresh` on control-plane, `fcm.go`'s `pushSafeKeys` +3 (`type`/`requestId`/`deviceId`). **(2)** the response leg — `mobile/src/state/locationRefresh.ts`, a headless-safe handler (reads `groupSecret`/session straight from SecureStore, per D-020's precedent never opens `t0ConfigRepo`) that acquires one fix (`Promise.race`, 8s — `getCurrentPositionAsync` has no built-in timeout), seals it with the Location Stream Key, and reports it to a NEW `POST /v1/location-report` on **realtime-gw** (its first-ever tests) rather than control-plane (ADR-010: no control-plane body carries location, sealed or not) — reusing the existing single-use connect ticket (F-16), never opening a WebSocket from a headless task. **(3)** the receive leg — `store.ts handleWsFrame`'s new `location.update` case is the only place `openJson`/`locationStreamKey` are called client-side; feeds `presence[memberId].location` for both the push-triggered path and, incidentally, any future foregrounded sender. **(4)** `watch.tsx`'s Refresh button (Feather `refresh-cw`, first in the row per B1), 8s spinner gated on `mayDrawPin`, distance-from-you (`geofence.haversineM`, reused not duplicated) + a `±Xm` accuracy chip past 30m (C3). ⛔ **Ambient/continuous sharing still not wired** — only a push-triggered Refresh reports a fix; `presenceService.ts`'s regular watch-position tick still never leaves the device. Verified: `tsc --noEmit` clean, `npm test` 196/196, `npm run verify` exit 0; `go build`/`go vet`/staticcheck/archlint clean; `go test` — `internal/notify` 32 (+7), `cmd/control-plane` 21 (+2), `cmd/realtime-gw` 4 (its first ever); `gen:check`/schema-lint/protolint unaffected (no schema/proto change) |
 | 6-D-7a | Family Watch session plane (no media) | ✅ | Landed 1 Sep. Split out of 6-D-7 because the row bundled a fully-verifiable TS/Go layer with a device-only one (D-036). Built: **(1)** `realtime-gw`'s `watch.signal` C→S case — relays one opaque sealed blob plus `sessionId`/`toMemberId`, stamps the sender from the connect **ticket** (a body-supplied `fromMemberId` would let any member forge an invite from any other), HIGH priority because LOW coalesces per key and would keep only the last ICE candidate; the existing F-20 guard already bars reduced/neighbour sessions and a test now pins that. **(2)** `mobile/src/state/watchSession.ts` — invite → the watched phone's auto-accept against **its own** grants (`outboundGrantStatusFor`, new in `consentStatus.ts`; `grantStatusFor` reads "their grant to me" and cannot express "my grant to them"), decline with F4's copy, D5/E4's `camera_view_*`/`listen_*` rows with the row on disk **before** the accept is sent (D2 pins the indicator at "before the viewer's first frame renders"), E2's 5-min budget + repeatable "+5 min" extending from the current expiry not from now, D3's viewer-driven flip, D4's End from either party, 1↔1 enforced. **(3)** `crypto.watchSessionKey` (`deriveKey(secret,'watch',sessionId)`, same construction as `incidentContentKey`) with `sealJson`'s AAD binding each signal to its session. **(4)** `store.ts`'s `watch.signal` case + `watchContext()`. ⛔ **Zero call sites in `app/` on purpose** — GLOSSARY.md's "do not build one half without the other"; a session with no media would claim "X is viewing your camera" and carry none (D-034's rule). `durationS` (D5) is left derivable from the two rows rather than triggering this app's first-ever schema migration. Verified: `tsc --noEmit` clean, `npm test` **218/218** (was 196), `npm run verify` exit 0; `go build`/`go vet`/staticcheck/archlint clean; `go test` — `cmd/realtime-gw` 7 (+3), full sweep green, `cmd/sos-ingest` green via `GOTMPDIR`; `gen:check`/schema-lint/protolint unaffected |
-| 6-D-7b | Family Watch transport (camera + listen, live) | ⛔ | What 6-D-7a deliberately left: `react-native-webrtc` (new native dep) + TURN relay (new infra), a `WatchMedia` implementation behind `setWatchMedia()`, the viewer's live-view screen (D3's flip control, E2's countdown ring and "+5 min" button), the watched device's non-suppressible banner + dot + start-sound (D2/D3), and only then wiring `watch.tsx`'s Camera/Listen buttons to `startWatchSession`. **Unverifiable on this machine**: a JDK now exists (17, `JAVA_HOME` set) but `ANDROID_HOME`/`ANDROID_SDK_ROOT` are unset, so D-021's conclusion is unchanged — needs a device build the user triggers |
-| 6-D-8 | Geofencing — arbitrary-location placement | 🔨 | Today's form only centres a fence on your own current position (a real gap, not a preference — `map.tsx:474`). Real fix rides 6-B's MapLibre (tap-anywhere-on-map); an interim lat/lon text-entry fallback can ship independently of 6-B |
+| 6-D-7b | Family Watch transport (camera + listen, live) | 🔨 | Landed 1 Sep, **written but never run** (D-037). `react-native-webrtc@124.0.8` + its Expo config plugin; `src/state/watchMedia.ts` fills 6-D-7a's `WatchMedia` seam (viewer offers, watched device captures and answers, trickle ICE, one direction only — the viewer's own camera/mic are never opened); `app/watch-session.tsx` is the viewer screen (D3 flip, E2 ring + "+5 min", honest waiting/ended copy); `src/ui/WatchIndicator.tsx` is D2/E3's banner + dot + a new `watch` cue in `t0/alarm.ts`, mounted ABOVE the navigator in `_layout.tsx` with no prop, no setting and no dismiss; `watch.tsx`'s buttons now open real sessions and D-034's honest alert is retired. STUN configured, TURN optional and absent — the screen says so. ⛔ **No frame of video has ever moved**: `ANDROID_HOME` is unset, so this is `tsc`-clean and test-green and otherwise unobserved. The first device build is the first test |
+| 6-D-7c | Enrolment bridge — SAS pairing → family roster | ✅ | Landed 1 Sep, **closes D-033**. `store.syncEnrolment()` carries a completed SAS pairing into `store.ts`: `POST /v1/members` finally has a caller anywhere in `mobile/`, and 6-D-4's `grantFamilyMembershipScopes` finally has a call site. Called from `bootstrap` on EVERY boot (a pairing whose session died before the server was reachable would otherwise stay invisible) and from all three `enrol.tsx` completion paths; idempotent because every step keys on `memberIdForDevice(deviceId)` — **derived, not minted**, because the pairing envelope's binary layout has no room for a member id and widening it would change the length of the spoken code. The derivation is frozen by a fixture (`test/member-id.test.ts`): drift is silent, since `handleWatchSignal` just drops invites whose `toMemberId` does not match. ⛔ Honest limit: the JOINER cannot derive the guardian's member id offline (it never learns the guardian's device id), so it adopts the family and picks the roster up from `GET /v1/family` — pairing populates the guardian's roster only until a reachable server exists |
+| 6-D-7d | Ambient location sharing | ✅ | Landed 1 Sep, **closes D-035's open consequence**. `noteLocationFix` now seals each fix with the Location Stream Key and sends `location.report` straight down the already-open `net/ws.ts` socket — the cheap path for a foregrounded phone, where `locationRefresh.ts`'s ticket+POST exists for the headless case. Three refusals: no group secret, `monitoringPaused` (P-066), socket not open. Added to `LOW_TYPES` so a flaky socket coalesces rather than flushing a track of stale positions on reconnect. ★ **Found a live contract bug while wiring it**: `realtime-gw`'s `handleMessage` read only `data`, and `WsFrame` has no such field — every C→S frame the app has ever sent arrived with a nil body and was dropped silently by the receiver (a nil `json.RawMessage` marshals to `null`, so nothing ever errored). The gateway now accepts `payload` as an alias, `data` still wins, two tests pin both halves |
+| 6-D-8 | Geofencing — arbitrary-location placement | ✅ | Landed 1 Sep. New `parseLatLon` in `domain/geofence.ts` plus a "Where I am now" / "Type a location" chooser in `map.tsx`'s fence sheet, so a fence around a school no longer requires standing at the school. Accepts what people paste (comma/space/semicolon, degree signs, a Google Maps `@lat,lon,zoom` link) and **refuses** what it cannot read exactly: DMS, out-of-range values (never clamped — 91° clamped to 90° silently moves the fence to the Pole) and 0,0. Shows the distance from you when both points are known. 9 tests. The tap-anywhere-on-map version still rides 6-B's MapLibre; this is the interim that ships without it |
 
 ---
 
