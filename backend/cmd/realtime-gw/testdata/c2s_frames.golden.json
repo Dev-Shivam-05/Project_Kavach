@@ -1,0 +1,31 @@
+{
+  "heartbeat": {
+    "type": "heartbeat",
+    "priority": "LOW",
+    "payload": {
+      "at": 1700000000000
+    }
+  },
+  "location.report": {
+    "type": "location.report",
+    "key": "loc",
+    "priority": "LOW",
+    "payload": "AQIDc2VhbGVk"
+  },
+  "ping": {
+    "type": "ping",
+    "priority": "LOW",
+    "payload": {
+      "at": 1700000000000
+    }
+  },
+  "watch.signal": {
+    "type": "watch.signal",
+    "priority": "HIGH",
+    "payload": {
+      "sessionId": "sess-1",
+      "toMemberId": "22222222-2222-7222-8222-222222222222",
+      "sealed": "AQIDc2VhbGVk"
+    }
+  }
+}

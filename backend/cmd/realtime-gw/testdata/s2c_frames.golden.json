@@ -1,0 +1,394 @@
+{
+  "consent.access_surfaced": {
+    "v": 1,
+    "type": "consent.access_surfaced",
+    "priority": "HIGH",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "count": 1,
+      "items": [
+        {
+          "accessorMemberId": "55555555-5555-7555-8555-555555555555",
+          "at": 1700000000000,
+          "what": "live_location"
+        }
+      ],
+      "subjectMemberId": "22222222-2222-7222-8222-222222222222"
+    }
+  },
+  "consent.granted": {
+    "v": 1,
+    "type": "consent.granted",
+    "priority": "HIGH",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "expiresAt": 1700086400000,
+      "grantId": "77777777-7777-7777-8777-777777777777",
+      "granteeMemberId": "55555555-5555-7555-8555-555555555555",
+      "purpose": "safety",
+      "scope": "live_location"
+    }
+  },
+  "consent.revoked": {
+    "v": 1,
+    "type": "consent.revoked",
+    "priority": "HIGH",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "grantId": "77777777-7777-7777-8777-777777777777",
+      "granteeMemberId": "55555555-5555-7555-8555-555555555555",
+      "keyRotationPending": true,
+      "scope": "live_location"
+    }
+  },
+  "device.agent_died": {
+    "v": 1,
+    "type": "device.agent_died",
+    "priority": "HIGH",
+    "key": "dev:33333333-3333-7333-8333-333333333333",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "at": 1700000000000,
+      "deviceId": "33333333-3333-7333-8333-333333333333",
+      "expectedMs": 300000,
+      "gapMs": 5400000,
+      "memberId": "22222222-2222-7222-8222-222222222222",
+      "source": "boot"
+    }
+  },
+  "device.find_phone": {
+    "v": 1,
+    "type": "device.find_phone",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "at": 1700000000000,
+      "deviceId": "33333333-3333-7333-8333-333333333333",
+      "requestedBy": "55555555-5555-7555-8555-555555555555"
+    }
+  },
+  "device.health_changed": {
+    "v": 1,
+    "type": "device.health_changed",
+    "priority": "HIGH",
+    "key": "dev:33333333-3333-7333-8333-333333333333",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "agentHealthy": true,
+      "batteryPct": 61,
+      "degradationLevel": 0,
+      "deviceId": "33333333-3333-7333-8333-333333333333"
+    }
+  },
+  "error": {
+    "v": 1,
+    "type": "error",
+    "priority": "HIGH",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "code": "KV-2001",
+      "detail": "reduced session may not publish location.report"
+    }
+  },
+  "frame.undecodable": {
+    "v": 1,
+    "type": "frame.undecodable",
+    "priority": "CRITICAL",
+    "familyId": "",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "raw": "not json"
+    }
+  },
+  "geofence.crossing": {
+    "v": 1,
+    "type": "geofence.crossing",
+    "priority": "HIGH",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "at": 1700000000000,
+      "geofenceId": "99999999-9999-7999-8999-999999999999",
+      "memberId": "22222222-2222-7222-8222-222222222222",
+      "transition": "exit"
+    }
+  },
+  "incident.acked": {
+    "v": 1,
+    "type": "incident.acked",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "incidentId": "44444444-4444-7444-8444-444444444444",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "firstAckAt": 1700000000000,
+      "isDrill": false,
+      "memberId": "55555555-5555-7555-8555-555555555555",
+      "state": "OWNED",
+      "trigger": "MANUAL"
+    }
+  },
+  "incident.claimed": {
+    "v": 1,
+    "type": "incident.claimed",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "incidentId": "44444444-4444-7444-8444-444444444444",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "firstAckAt": 1700000000000,
+      "isDrill": false,
+      "ownerMemberId": "55555555-5555-7555-8555-555555555555",
+      "state": "OWNED",
+      "trigger": "MANUAL"
+    }
+  },
+  "incident.notified": {
+    "v": 1,
+    "type": "incident.notified",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "incidentId": "44444444-4444-7444-8444-444444444444",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "audience": [
+        "33333333-3333-7333-8333-333333333333"
+      ],
+      "duress": false,
+      "isDrill": false,
+      "label": "L1",
+      "repeat": false,
+      "sealed": "AZ+sealed+ciphertext+placeholder",
+      "state": "ACTIVE_L1",
+      "subject": "PRIYA",
+      "tier": 1,
+      "trigger": "MANUAL"
+    }
+  },
+  "incident.notified (reduced)": {
+    "v": 1,
+    "type": "incident.notified",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "incidentId": "44444444-4444-7444-8444-444444444444",
+    "at": 1700000000000,
+    "reduced": true,
+    "cursor": "42",
+    "payload": {
+      "coarseCell": "c7:23.02:72.57",
+      "show112": true,
+      "state": "ACTIVE_L2",
+      "subject": "PRIYA",
+      "tier": 2,
+      "trigger": "MANUAL"
+    }
+  },
+  "incident.released": {
+    "v": 1,
+    "type": "incident.released",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "incidentId": "44444444-4444-7444-8444-444444444444",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "isDrill": false,
+      "previousOwnerMemberId": "55555555-5555-7555-8555-555555555555",
+      "state": "OWNED",
+      "trigger": "MANUAL"
+    }
+  },
+  "incident.state_changed": {
+    "v": 1,
+    "type": "incident.state_changed",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "incidentId": "44444444-4444-7444-8444-444444444444",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "event": "CLAIM",
+      "from": "ACTIVE_L1",
+      "hlc": "0000018bcfe0000100aabbccdd",
+      "isDrill": false,
+      "policyVersion": 1,
+      "state": "OWNED",
+      "to": "OWNED",
+      "trigger": "MANUAL"
+    }
+  },
+  "incident.state_changed (reduced)": {
+    "v": 1,
+    "type": "incident.state_changed",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "incidentId": "44444444-4444-7444-8444-444444444444",
+    "at": 1700000000000,
+    "reduced": true,
+    "cursor": "42",
+    "payload": {
+      "coarseCell": "c7:23.02:72.57",
+      "isDrill": false,
+      "state": "OWNED",
+      "trigger": "MANUAL"
+    }
+  },
+  "journey.started": {
+    "v": 1,
+    "type": "journey.started",
+    "priority": "HIGH",
+    "key": "journey:88888888-8888-7888-8888-888888888888",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "dest": "Home",
+      "etaAt": 1700001800000,
+      "journeyId": "88888888-8888-7888-8888-888888888888",
+      "memberId": "22222222-2222-7222-8222-222222222222"
+    }
+  },
+  "journey.updated": {
+    "v": 1,
+    "type": "journey.updated",
+    "priority": "HIGH",
+    "key": "journey:88888888-8888-7888-8888-888888888888",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "arrivedAt": 1700000000000,
+      "etaAt": 1700001800000,
+      "journeyId": "88888888-8888-7888-8888-888888888888",
+      "state": "arrived"
+    }
+  },
+  "location.update": {
+    "v": 1,
+    "type": "location.update",
+    "priority": "LOW",
+    "key": "loc:22222222-2222-7222-8222-222222222222",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "at": 1700000000000,
+      "deviceId": "33333333-3333-7333-8333-333333333333",
+      "memberId": "22222222-2222-7222-8222-222222222222",
+      "sealed": "AQIDc2VhbGVk"
+    }
+  },
+  "member.checked_in": {
+    "v": 1,
+    "type": "member.checked_in",
+    "priority": "HIGH",
+    "key": "checkin:22222222-2222-7222-8222-222222222222",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "at": 1700000000000,
+      "memberId": "22222222-2222-7222-8222-222222222222"
+    }
+  },
+  "notify.delivered": {
+    "v": 1,
+    "type": "notify.delivered",
+    "priority": "HIGH",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "incidentId": "44444444-4444-7444-8444-444444444444",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "channel": "fcm",
+      "deviceId": "33333333-3333-7333-8333-333333333333",
+      "latencyMs": 180,
+      "notificationId": "66666666-6666-7666-8666-666666666666"
+    }
+  },
+  "pong": {
+    "v": 1,
+    "type": "pong",
+    "priority": "HIGH",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "at": 1700000000000
+    }
+  },
+  "presence.changed": {
+    "v": 1,
+    "type": "presence.changed",
+    "priority": "LOW",
+    "key": "presence:22222222-2222-7222-8222-222222222222",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "deviceId": "33333333-3333-7333-8333-333333333333",
+      "lastSeenAt": 1700000000000,
+      "memberId": "22222222-2222-7222-8222-222222222222"
+    }
+  },
+  "presence.paused": {
+    "v": 1,
+    "type": "presence.paused",
+    "priority": "LOW",
+    "key": "paused:22222222-2222-7222-8222-222222222222",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "at": 1700000000000,
+      "memberId": "22222222-2222-7222-8222-222222222222",
+      "paused": true
+    }
+  },
+  "sync.complete": {
+    "v": 1,
+    "type": "sync.complete",
+    "priority": "CRITICAL",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "truncated": false
+    }
+  },
+  "watch.signal": {
+    "v": 1,
+    "type": "watch.signal",
+    "priority": "HIGH",
+    "familyId": "11111111-1111-7111-8111-111111111111",
+    "at": 1700000000000,
+    "cursor": "42",
+    "payload": {
+      "at": 1700000000000,
+      "fromDeviceId": "33333333-3333-7333-8333-333333333333",
+      "fromMemberId": "55555555-5555-7555-8555-555555555555",
+      "sealed": "AQIDc2VhbGVk",
+      "sessionId": "sess-1",
+      "toMemberId": "22222222-2222-7222-8222-222222222222"
+    }
+  }
+}

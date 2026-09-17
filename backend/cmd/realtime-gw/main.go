@@ -11,6 +11,13 @@
 // tuning knob. ★ A dropped state transition means a responder's phone still
 // believes the incident is unclaimed, and two people either both stand down or
 // both drive across town. See §2.5.2.
+//
+// ★ This binary is the ONLY place the server→client wire shape is decided. ★
+// internal/notify.Frame is the bus record (its body is `data`); the socket
+// carries wireFrame (its body is `payload`, plus `cursor`). The translation
+// lives in toWire and nowhere else, and testdata/s2c_frames.golden.json pins
+// the bytes a phone sees — the mirror of D-037, where the C→S body name was
+// wrong for months with nothing failing (§2.5.2, F-16, F-20).
 package main
 
 import (
@@ -29,6 +36,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,7 +70,13 @@ const (
 )
 
 const (
-	maxPayload       = 1 << 20 // 1 MiB; nothing legitimate here is close
+	// maxPayload bounds one C→S message. It is the same 64 KiB the POST twin
+	// (reportLocation) has always enforced: a sealed location fix is a few
+	// hundred bytes and a sealed SDP offer a few kilobytes, and everything a
+	// client publishes here is appended to a family stream that is never
+	// compacted and relayed to every family socket, so the cap is a storage and
+	// fan-out bound, not a protocol nicety.
+	maxPayload       = 1 << 16
 	criticalCap      = 256
 	overflowCap      = 200 // HIGH: bounded overflow queue
 	criticalBlockFor = 5 * time.Second
@@ -71,13 +85,24 @@ const (
 	pingEvery        = 20 * time.Second
 	pongDeadline     = 30 * time.Second
 	subprotocol      = "kavach.v1"
+
+	// ticketSpentSubject records a consumed ticket beside the mint on the same
+	// durable log, so a gateway that restarts inside a ticket's 60 s window (or
+	// a second gateway instance) replays the mint AND the spend and does not
+	// resurrect a burned credential (F-16: single use means single use).
+	ticketSpentSubject = notify.TicketSubject + ".spent"
 )
 
 func main() {
 	var (
-		addr    = flag.String("addr", env("KAVACH_RT_ADDR", ":8082"), "listen address")
-		busDir  = flag.String("bus", env("KAVACH_BUS_DIR", "./data/bus"), "bus directory")
-		dev     = flag.Bool("dev", env("KAVACH_DEV", "1") == "1", "developer logging")
+		addr   = flag.String("addr", env("KAVACH_RT_ADDR", ":8082"), "listen address")
+		busDir = flag.String("bus", env("KAVACH_BUS_DIR", "./data/bus"), "bus directory")
+		// Both knobs are honoured, in the safe direction: KAVACH_ENV=production
+		// (the switch cmd/control-plane reads via logx.Dev) OR KAVACH_DEV=0 (the
+		// switch ops/README.md documents) turns developer logging off. Two
+		// binaries in one deployment reading two different switches is how a
+		// production gateway ends up logging device ids unredacted.
+		dev     = flag.Bool("dev", logx.Dev() && env("KAVACH_DEV", "1") == "1", "developer logging")
 		allowNT = flag.Bool("allow-no-ticket", env("KAVACH_RT_ALLOW_NO_TICKET", "0") == "1",
 			"accept connections without a ticket (local development only)")
 	)
@@ -93,13 +118,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tickets := newTicketCache(log)
-	go tickets.follow(ctx, b)
+	tickets := newTicketCache(log, b)
+	go tickets.follow(ctx)
 
 	gw := &gateway{log: log, bus: b, tickets: tickets, allowNoTicket: *allowNT}
+	if err := gw.startLiveRelay(ctx); err != nil {
+		log.Error("live_relay_subscribe_failed", "err", err)
+		os.Exit(1)
+	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/stream", gw.stream)
+	mux.HandleFunc("GET /v1/stream", gw.stream)
 	mux.HandleFunc("POST /v1/location-report", gw.reportLocation)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -155,15 +184,21 @@ type ticket struct {
 type ticketCache struct {
 	mu   sync.Mutex
 	log  *slog.Logger
+	bus  *bus.Bus
 	rows map[string]ticket
+	now  func() time.Time
 }
 
-func newTicketCache(log *slog.Logger) *ticketCache {
-	return &ticketCache{log: log, rows: map[string]ticket{}}
+func newTicketCache(log *slog.Logger, b *bus.Bus) *ticketCache {
+	return &ticketCache{log: log, bus: b, rows: map[string]ticket{}, now: time.Now}
 }
 
-func (c *ticketCache) follow(ctx context.Context, b *bus.Bus) {
-	ch, cancel := b.Subscribe(notify.TicketSubject, 0)
+// follow tails both the mint subject and the spend subject. The pattern is
+// rt.> rather than two subscriptions so that a mint and its spend arrive in
+// log order — a spend replayed before its mint would be a no-op and the ticket
+// would come back to life.
+func (c *ticketCache) follow(ctx context.Context) {
+	ch, cancel := c.bus.Subscribe("rt.>", 0)
 	defer cancel()
 	sweep := time.NewTicker(30 * time.Second)
 	defer sweep.Stop()
@@ -175,42 +210,71 @@ func (c *ticketCache) follow(ctx context.Context, b *bus.Bus) {
 			if !ok {
 				return
 			}
-			var t ticket
-			if err := json.Unmarshal(m.Data, &t); err != nil || t.Ticket == "" {
-				continue
-			}
-			c.mu.Lock()
-			// Replayed tickets from before this process started are already
-			// expired and get swept immediately; keeping them costs nothing and
-			// avoids special-casing the boot replay.
-			c.rows[t.Ticket] = t
-			c.mu.Unlock()
+			c.apply(m)
 		case <-sweep.C:
-			now := time.Now().UnixMilli()
-			c.mu.Lock()
-			for k, v := range c.rows {
-				if v.ExpiresAt <= now {
-					delete(c.rows, k)
-				}
-			}
-			c.mu.Unlock()
+			c.sweep()
 		}
 	}
 }
 
-// consume validates and burns a ticket. Single use: a replayed ticket is a
-// replayed credential, and the whole point of a 60-second single-use token is
-// that observing it once buys nothing.
-func (c *ticketCache) consume(raw string) (ticket, bool) {
+// apply is one record from rt.> — a mint or a spend.
+func (c *ticketCache) apply(m bus.Msg) {
+	var t ticket
+	if err := json.Unmarshal(m.Data, &t); err != nil || t.Ticket == "" {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	switch m.Subject {
+	case ticketSpentSubject:
+		delete(c.rows, t.Ticket)
+	case notify.TicketSubject:
+		// The boot replay walks every ticket ever minted. A ticket whose window
+		// has already closed is never usable, so it is not worth a map entry —
+		// this is what keeps memory bounded by LIVE tickets rather than by the
+		// lifetime count of socket connects.
+		if t.ExpiresAt <= c.now().UnixMilli() {
+			return
+		}
+		c.rows[t.Ticket] = t
+	}
+}
+
+func (c *ticketCache) sweep() {
+	now := c.now().UnixMilli()
+	c.mu.Lock()
+	for k, v := range c.rows {
+		if v.ExpiresAt <= now {
+			delete(c.rows, k)
+		}
+	}
+	c.mu.Unlock()
+}
+
+// consume validates and burns a ticket. Single use: a replayed ticket is a
+// replayed credential, and the whole point of a 60-second single-use token is
+// that observing it once buys nothing. The spend is published so that "once"
+// survives a restart of this process and holds across instances.
+func (c *ticketCache) consume(raw string) (ticket, bool) {
+	c.mu.Lock()
 	t, ok := c.rows[raw]
 	if !ok {
+		c.mu.Unlock()
 		return ticket{}, false
 	}
 	delete(c.rows, raw)
-	if t.ExpiresAt <= time.Now().UnixMilli() {
+	c.mu.Unlock()
+	if t.ExpiresAt <= c.now().UnixMilli() {
 		return ticket{}, false
+	}
+	if c.bus != nil {
+		// Best effort: the local delete already happened. Only the ticket
+		// string travels; the identity it was bound to is already in the mint
+		// record beside it.
+		spent, _ := json.Marshal(map[string]any{"ticket": t.Ticket, "spentAt": c.now().UnixMilli()})
+		if err := c.bus.Publish(ticketSpentSubject, spent); err != nil {
+			c.log.Warn("ticket_spend_publish_failed", "err", err)
+		}
 	}
 	return t, true
 }
@@ -266,8 +330,74 @@ func (g *gateway) closeAll(code int, reason string) {
 	}
 }
 
-// stream is the only endpoint. GET /v1/stream?cursor=<seq>
+// startLiveRelay is the ephemeral half of delivery: frames that are never
+// written to disk (Family Watch signalling, presence) reach the live sockets
+// of their family through here. ONE subscription per subject kind for the
+// whole process, fanned out by subject, rather than one per connection —
+// internal/bus never prunes a closed EphSub from its list, so a per-socket
+// subscription would leak a 256-slot channel on every reconnect.
+//
+// Exactly the two subjects a socket can be attached to, and not fam.>: the
+// Class A′ precise-location fan-out cmd/sos-ingest runs is ephemeral too, on a
+// different leaf, and this binary must never be a subscriber of it (F-20).
+func (g *gateway) startLiveRelay(ctx context.Context) error {
+	var subs []*bus.EphSub
+	for _, pattern := range []string{"fam.*.stream", "fam.*.reduced"} {
+		e, err := g.bus.SubscribeEphemeral(pattern, g.relayLive)
+		if err != nil {
+			for _, s := range subs {
+				s.Close()
+			}
+			return err
+		}
+		subs = append(subs, e)
+	}
+	go func() {
+		<-ctx.Done()
+		for _, s := range subs {
+			s.Close()
+		}
+	}()
+	return nil
+}
+
+// relayLive hands one ephemeral record to every socket on its subject. It
+// runs on the bus's single fan-out goroutine, so it must not block: a live
+// frame is HIGH or LOW by construction, and anything else is queued as HIGH
+// rather than parked on one slow socket's CRITICAL backpressure.
+func (g *gateway) relayLive(m bus.Msg) error {
+	of := toWire(0, m.Data)
+	g.mu.Lock()
+	targets := make([]*conn, 0, len(g.conns))
+	for c := range g.conns {
+		if c.subject == m.Subject {
+			targets = append(targets, c)
+		}
+	}
+	g.mu.Unlock()
+	for _, c := range targets {
+		if of.wf.Priority == notify.PriorityLow {
+			c.pushLow(of.wf.Key+"|"+of.wf.Type, of)
+		} else {
+			c.pushHigh(of)
+		}
+	}
+	return nil
+}
+
+// stream is the only endpoint. GET /v1/stream?cursor=<opaque>
+//
+// Order matters: the handshake is checked BEFORE the ticket is consumed. Every
+// check in checkUpgrade is stateless, so a proxy that strips `Upgrade` or a
+// client with a broken handshake gets its 400 without having burned the
+// single-use ticket it will need for the retry.
 func (g *gateway) stream(w http.ResponseWriter, r *http.Request) {
+	if err := checkUpgrade(r); err != nil {
+		writeUpgradeError(w, err)
+		g.log.Warn("upgrade_refused", "err", err, "remote", r.RemoteAddr)
+		return
+	}
+
 	proto := r.Header.Get("Sec-WebSocket-Protocol")
 	tk, ok := g.authorise(proto)
 	if !ok {
@@ -278,7 +408,7 @@ func (g *gateway) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	netConn, brw, err := upgrade(w, r)
+	netConn, brw, err := hijack(w, r)
 	if err != nil {
 		g.log.Warn("upgrade_failed", "err", err, "remote", r.RemoteAddr)
 		return
@@ -292,25 +422,48 @@ func (g *gateway) stream(w http.ResponseWriter, r *http.Request) {
 		subject = notify.ReducedSubject(tk.FamilyID)
 	}
 
-	var cursor uint64
-	if v := r.URL.Query().Get("cursor"); v != "" {
-		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
-			cursor = n
-		}
-	}
+	cursor := g.resumeCursor(r.URL.Query().Get("cursor"))
 
-	c := &conn{
-		gw: g, log: g.log.With("device", tk.DeviceID, "family", tk.FamilyID),
-		raw: netConn, br: brw.Reader, bw: brw.Writer,
-		ticket: tk, subject: subject, cursor: cursor,
-		critical: make(chan []byte, criticalCap),
-		wake:     make(chan struct{}, 1),
-		room:     make(chan struct{}, 1),
-		coalesce: map[string][]byte{},
-	}
+	c := newConn(g, tk, subject, cursor)
+	c.raw, c.br, c.bw = netConn, brw.Reader, brw.Writer
 	g.track(c)
 	c.run(r.Context())
 	g.untrack(c)
+}
+
+// newConn is the one place a conn's queues are sized, shared with the tests
+// that drive handleMessage without a socket.
+func newConn(g *gateway, tk ticket, subject string, cursor uint64) *conn {
+	return &conn{
+		gw: g, log: g.log.With("device", tk.DeviceID, "family", tk.FamilyID),
+		ticket: tk, subject: subject, cursor: cursor,
+		critical: make(chan *outFrame, criticalCap),
+		wake:     make(chan struct{}, 1),
+		room:     make(chan struct{}, 1),
+		coalesce: map[string]*outFrame{},
+	}
+}
+
+// resumeCursor turns the client's echoed cursor back into a bus position. The
+// cursor is opaque to the client (it stores and returns the string verbatim),
+// so anything that is not a position this bus could have issued — an old
+// HLC-shaped value from before the cursor was a Seq, or a position past the
+// end of a stream that has since been wiped — means "start from the current
+// snapshot" rather than "stay silent for ever".
+func (g *gateway) resumeCursor(raw string) uint64 {
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		g.log.Warn("resume_cursor_unparseable", "len", len(raw))
+		return 0
+	}
+	if last := g.bus.LastSeq(); n > last {
+		g.log.Warn("resume_cursor_past_end", "cursor", n, "last", last)
+		return last
+	}
+	return n
 }
 
 // reportLocation is 6-D-6 · spec C1's response leg: a fire-and-forget sealed
@@ -331,11 +484,20 @@ func (g *gateway) reportLocation(w http.ResponseWriter, r *http.Request) {
 			http.StatusUnauthorized)
 		return
 	}
+	// F-20, the second door: the socket path refuses a reduced session that
+	// tries to publish, and a plain POST with the same ticket is the same
+	// session. A neighbour is not a cryptographic member of the family and may
+	// not inject presence into its sealed stream over either transport.
+	if tk.Reduced {
+		http.Error(w, `{"code":"KV-2001","detail":"reduced session may not publish location.report"}`,
+			http.StatusForbidden)
+		return
+	}
 	defer r.Body.Close()
 	var in struct {
 		Sealed json.RawMessage `json:"sealed"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil || len(in.Sealed) == 0 {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxPayload)).Decode(&in); err != nil || len(in.Sealed) == 0 {
 		http.Error(w, `{"code":"KV-1001","detail":"malformed body"}`, http.StatusBadRequest)
 		return
 	}
@@ -377,31 +539,52 @@ func (g *gateway) authorise(proto string) (ticket, bool) {
 
 // ── Handshake ────────────────────────────────────────────────────────────────
 
-func upgrade(w http.ResponseWriter, r *http.Request) (net.Conn, *bufio.ReadWriter, error) {
+// upgradeError carries the HTTP status a refused handshake is answered with.
+type upgradeError struct {
+	status int
+	msg    string
+}
+
+func (e upgradeError) Error() string { return e.msg }
+
+// checkUpgrade is every RFC 6455 §4.2.1 precondition, and nothing with a side
+// effect: it can run before the ticket is spent.
+func checkUpgrade(r *http.Request) error {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return nil, nil, errors.New("ws: not a GET")
+		return upgradeError{http.StatusMethodNotAllowed, "ws: not a GET"}
 	}
 	if !headerContainsToken(r.Header.Get("Connection"), "upgrade") ||
 		!strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
-		http.Error(w, "expected websocket upgrade", http.StatusBadRequest)
-		return nil, nil, errors.New("ws: not an upgrade")
+		return upgradeError{http.StatusBadRequest, "ws: not an upgrade"}
 	}
 	if r.Header.Get("Sec-WebSocket-Version") != "13" {
-		w.Header().Set("Sec-WebSocket-Version", "13")
-		http.Error(w, "unsupported websocket version", http.StatusUpgradeRequired)
-		return nil, nil, errors.New("ws: bad version")
+		return upgradeError{http.StatusUpgradeRequired, "ws: bad version"}
 	}
 	key := r.Header.Get("Sec-WebSocket-Key")
 	if key == "" {
-		http.Error(w, "missing Sec-WebSocket-Key", http.StatusBadRequest)
-		return nil, nil, errors.New("ws: missing key")
+		return upgradeError{http.StatusBadRequest, "ws: missing key"}
 	}
 	if raw, err := base64.StdEncoding.DecodeString(key); err != nil || len(raw) != 16 {
-		http.Error(w, "malformed Sec-WebSocket-Key", http.StatusBadRequest)
-		return nil, nil, errors.New("ws: malformed key")
+		return upgradeError{http.StatusBadRequest, "ws: malformed key"}
 	}
+	return nil
+}
 
+func writeUpgradeError(w http.ResponseWriter, err error) {
+	var ue upgradeError
+	if !errors.As(err, &ue) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if ue.status == http.StatusUpgradeRequired {
+		w.Header().Set("Sec-WebSocket-Version", "13")
+	}
+	http.Error(w, ue.msg, ue.status)
+}
+
+// hijack completes a handshake checkUpgrade has already approved.
+func hijack(w http.ResponseWriter, r *http.Request) (net.Conn, *bufio.ReadWriter, error) {
+	key := r.Header.Get("Sec-WebSocket-Key")
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -566,6 +749,103 @@ func tooBigErr(n int64) error {
 	return wsError{closeTooBig, fmt.Sprintf("payload %d exceeds limit", n)}
 }
 
+// ── The wire shape (S→C) ─────────────────────────────────────────────────────
+
+// wireFrame is what a phone receives, and the ONLY shape it receives. Its body
+// is `payload` — the same name the client has always used for the body of the
+// frames it sends (mobile/src/net/ws.ts WsFrame) — and `cursor` is the resume
+// position the client stores verbatim and echoes as ?cursor= on reconnect.
+//
+// Every other field is copied from the producer's notify.Frame unchanged, so
+// `incidentId`, `key`, `priority`, `at` and `reduced` are top-level and the
+// producer-specific fields (state, ownerMemberId, sealed, …) are inside
+// `payload`. testdata/s2c_frames.golden.json is the catalogue.
+type wireFrame struct {
+	V          int             `json:"v"`
+	Type       string          `json:"type"`
+	Priority   notify.Priority `json:"priority"`
+	Key        string          `json:"key,omitempty"`
+	FamilyID   string          `json:"familyId"`
+	IncidentID string          `json:"incidentId,omitempty"`
+	At         int64           `json:"at"`
+	Reduced    bool            `json:"reduced,omitempty"`
+	Cursor     string          `json:"cursor"`
+	Payload    json.RawMessage `json:"payload"`
+}
+
+// busFrame is notify.Frame as read back off the bus, with the body kept raw so
+// a sealed blob is relayed byte-for-byte rather than round-tripped through a
+// map[string]any (which would reorder keys under a client's AAD).
+type busFrame struct {
+	V          int             `json:"v"`
+	Type       string          `json:"type"`
+	Priority   notify.Priority `json:"priority"`
+	Key        string          `json:"key"`
+	FamilyID   string          `json:"familyId"`
+	IncidentID string          `json:"incidentId"`
+	At         int64           `json:"at"`
+	Reduced    bool            `json:"reduced"`
+	Data       json.RawMessage `json:"data"`
+}
+
+// outFrame is one queued S→C frame. seq is the bus position it came from (0
+// for a frame this process originated: sync.complete, error, pong, and every
+// ephemeral relay). The cursor is stamped by the writer at the moment of the
+// write, never earlier — see conn.watermark.
+type outFrame struct {
+	seq uint64
+	wf  wireFrame
+}
+
+var emptyObject = json.RawMessage(`{}`)
+
+// toWire translates a bus record into the wire shape. An undecodable record is
+// still delivered — as CRITICAL, with the raw bytes in the payload — because
+// we would rather hand the client something it cannot classify than silently
+// swallow what might have been a state transition.
+func toWire(seq uint64, data []byte) *outFrame {
+	var bf busFrame
+	if err := json.Unmarshal(data, &bf); err != nil || bf.Type == "" {
+		raw, _ := json.Marshal(map[string]any{"raw": string(data)})
+		return &outFrame{seq: seq, wf: wireFrame{
+			V: notify.FrameVersion, Type: "frame.undecodable", Priority: notify.PriorityCritical,
+			At: time.Now().UnixMilli(), Payload: raw,
+		}}
+	}
+	payload := bf.Data
+	if len(payload) == 0 || string(payload) == "null" {
+		payload = emptyObject
+	}
+	return &outFrame{seq: seq, wf: wireFrame{
+		V: bf.V, Type: bf.Type, Priority: bf.Priority, Key: bf.Key,
+		FamilyID: bf.FamilyID, IncidentID: bf.IncidentID, At: bf.At, Reduced: bf.Reduced,
+		Payload: payload,
+	}}
+}
+
+// serverFrame builds a frame this process originates.
+func serverFrame(familyID, typ string, prio notify.Priority, payload map[string]any) *outFrame {
+	body := emptyObject
+	if payload != nil {
+		if b, err := json.Marshal(payload); err == nil {
+			body = b
+		}
+	}
+	return &outFrame{wf: wireFrame{
+		V: notify.FrameVersion, Type: typ, Priority: prio,
+		FamilyID: familyID, At: time.Now().UnixMilli(), Payload: body,
+	}}
+}
+
+// replayable says whether a durable record is worth re-delivering on
+// reconnect. Family Watch signalling is live-only: an invite replayed on a
+// reconnect would open the watched phone's camera for a viewer who left an
+// hour ago — the exact failure D-029 exists to forbid, produced by the
+// transport rather than by anyone's intent. New builds publish watch.signal
+// ephemerally (never on disk); this filter is the belt for records an older
+// build left on the durable stream.
+func replayable(typ string) bool { return typ != "watch.signal" }
+
 // ── Connection ───────────────────────────────────────────────────────────────
 
 type conn struct {
@@ -577,10 +857,16 @@ type conn struct {
 
 	ticket  ticket
 	subject string
+
+	// seqMu guards the cursor bookkeeping: cursor is the newest bus position
+	// the pump has seen for this subject, pending the positions taken in but
+	// not yet written (ascending). Together they give the watermark.
+	seqMu   sync.Mutex
 	cursor  uint64
+	pending []uint64
 
 	// CRITICAL: a bounded channel. Producers block on it deliberately.
-	critical chan []byte
+	critical chan *outFrame
 	// room signals a producer that a critical slot freed up.
 	room chan struct{}
 
@@ -590,14 +876,15 @@ type conn struct {
 	// an enqueue.
 	mu            sync.Mutex
 	wmu           sync.Mutex
-	seqMu         sync.Mutex
-	overflow      [][]byte          // HIGH
-	coalesce      map[string][]byte // LOW: latest per key
+	overflow      []*outFrame          // HIGH
+	coalesce      map[string]*outFrame // LOW: latest per key
 	coalesceOrder []string
 	overflowDrops int
-	closeOnce     sync.Once
-	closeCode     int
-	closeReason   string
+
+	closeOnce   sync.Once
+	closeMu     sync.Mutex
+	closeCode   int
+	closeReason string
 
 	wake chan struct{}
 }
@@ -615,14 +902,18 @@ func (c *conn) run(parent context.Context) {
 	// Closing the socket is the only thing that unblocks the reader, which is
 	// parked in a blocking read. So the first goroutine to give up cancels the
 	// context, and this watcher turns that into a close frame plus a hangup.
+	watcherDone := make(chan struct{})
 	go func() {
+		defer close(watcherDone)
 		<-ctx.Done()
 		c.shutdown(closeNormal, "session ended")
 	}()
 
 	wg.Wait()
-	c.log.Info("connection_closed",
-		"code", c.closeCode, "reason", c.closeReason, "overflowDrops", c.overflowDrops)
+	cancel()
+	<-watcherDone
+	code, reason := c.closeInfo()
+	c.log.Info("connection_closed", "code", code, "reason", reason, "overflowDrops", c.overflowDrops)
 }
 
 // ── Enqueue: the backpressure policy ─────────────────────────────────────────
@@ -632,18 +923,18 @@ func (c *conn) run(parent context.Context) {
 // waiting for room, and if it still cannot deliver, the socket is closed with
 // a resync code so the client reconnects from its cursor and rebuilds. Losing
 // the frame silently is the one outcome that is not allowed.
-func (c *conn) pushCritical(ctx context.Context, data []byte) {
+func (c *conn) pushCritical(ctx context.Context, of *outFrame) {
 	deadline := time.NewTimer(criticalBlockFor)
 	defer deadline.Stop()
 	for {
 		select {
-		case c.critical <- data:
+		case c.critical <- of:
 			c.signal()
 			return
 		default:
 		}
 		select {
-		case c.critical <- data:
+		case c.critical <- of:
 			c.signal()
 			return
 		case <-c.room:
@@ -661,35 +952,42 @@ func (c *conn) pushCritical(ctx context.Context, data []byte) {
 
 // pushHigh uses a bounded overflow queue. Messages and alerts matter, but a
 // client 200 frames behind on chat is not a correctness problem, so the oldest
-// is dropped rather than blocking the socket.
-func (c *conn) pushHigh(data []byte) {
+// is dropped rather than blocking the socket. A dropped frame is marked done:
+// the policy accepted its loss, and holding the watermark back for it would
+// turn every later reconnect into a replay of everything since.
+func (c *conn) pushHigh(of *outFrame) {
 	c.mu.Lock()
 	if len(c.overflow) >= overflowCap {
+		dropped := c.overflow[0]
 		c.overflow = c.overflow[1:]
 		c.overflowDrops++
+		c.done(dropped.seq)
 	}
-	c.overflow = append(c.overflow, data)
+	c.overflow = append(c.overflow, of)
 	c.mu.Unlock()
 	c.signal()
 }
 
 // pushLow coalesces. A client forty frames behind on location wants the newest
 // position, not a replay of a forty-second-old track — so we keep exactly one
-// frame per key and overwrite it.
-func (c *conn) pushLow(key string, data []byte) {
+// frame per key and overwrite it. The superseded frame is done: the newer one
+// carries everything it said.
+func (c *conn) pushLow(key string, of *outFrame) {
 	if key == "" {
 		key = "default"
 	}
 	c.mu.Lock()
-	if _, seen := c.coalesce[key]; !seen {
+	if old, seen := c.coalesce[key]; seen {
+		c.done(old.seq)
+	} else {
 		c.coalesceOrder = append(c.coalesceOrder, key)
 	}
-	c.coalesce[key] = data
+	c.coalesce[key] = of
 	c.mu.Unlock()
 	c.signal()
 }
 
-func (c *conn) popHigh() ([]byte, bool) {
+func (c *conn) popHigh() (*outFrame, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.overflow) == 0 {
@@ -700,7 +998,7 @@ func (c *conn) popHigh() ([]byte, bool) {
 	return d, true
 }
 
-func (c *conn) popLow() ([]byte, bool) {
+func (c *conn) popLow() (*outFrame, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for len(c.coalesceOrder) > 0 {
@@ -728,23 +1026,62 @@ func (c *conn) freeRoom() {
 	}
 }
 
+// ── Cursor bookkeeping ───────────────────────────────────────────────────────
+//
+// The cursor a frame carries is a promise: "everything this connection owed
+// you up to here has been written". Strict priority makes that promise hard —
+// a CRITICAL frame at Seq 100 is written before a HIGH one at Seq 90 that was
+// queued earlier, so stamping each frame with its own Seq would let a client
+// that persisted "100" and then lost the socket resume past 90 and never see
+// it. So the stamp is a WATERMARK: the newest position such that no earlier
+// position is still queued. It is monotonic within a connection, it is what
+// sync.complete carries, and resuming from it can only ever re-deliver, never
+// skip.
+
+// track records a bus position this connection has taken responsibility for.
+func (c *conn) track(seq uint64) {
+	if seq == 0 {
+		return
+	}
+	c.seqMu.Lock()
+	c.cursor = seq
+	// Positions arrive ascending from the pump; the sort is only for safety.
+	c.pending = append(c.pending, seq)
+	if n := len(c.pending); n > 1 && c.pending[n-2] > seq {
+		sort.Slice(c.pending, func(i, j int) bool { return c.pending[i] < c.pending[j] })
+	}
+	c.seqMu.Unlock()
+}
+
+// done records that a position has been written, superseded or dropped.
+func (c *conn) done(seq uint64) {
+	if seq == 0 {
+		return
+	}
+	c.seqMu.Lock()
+	i := sort.Search(len(c.pending), func(i int) bool { return c.pending[i] >= seq })
+	if i < len(c.pending) && c.pending[i] == seq {
+		c.pending = append(c.pending[:i], c.pending[i+1:]...)
+	}
+	c.seqMu.Unlock()
+}
+
+// watermark is the resume position the next written frame may advertise.
+func (c *conn) watermark() uint64 {
+	c.seqMu.Lock()
+	defer c.seqMu.Unlock()
+	if len(c.pending) == 0 {
+		return c.cursor
+	}
+	return c.pending[0] - 1
+}
+
 // ── Writer ───────────────────────────────────────────────────────────────────
 
 func (c *conn) writer(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
 	ping := time.NewTicker(pingEvery)
 	defer ping.Stop()
-
-	write := func(data []byte) bool {
-		c.wmu.Lock()
-		defer c.wmu.Unlock()
-		_ = c.raw.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := writeFrame(c.bw, opText, data); err != nil {
-			c.log.Debug("write_failed", "err", err)
-			return false
-		}
-		return true
-	}
 
 	for {
 		// Strict priority: drain CRITICAL to empty before touching anything
@@ -754,20 +1091,20 @@ func (c *conn) writer(ctx context.Context, cancel context.CancelFunc) {
 			return
 		case d := <-c.critical:
 			c.freeRoom()
-			if !write(d) {
+			if !c.write(d) {
 				return
 			}
 			continue
 		default:
 		}
 		if d, ok := c.popHigh(); ok {
-			if !write(d) {
+			if !c.write(d) {
 				return
 			}
 			continue
 		}
 		if d, ok := c.popLow(); ok {
-			if !write(d) {
+			if !c.write(d) {
 				return
 			}
 			continue
@@ -778,7 +1115,7 @@ func (c *conn) writer(ctx context.Context, cancel context.CancelFunc) {
 			return
 		case d := <-c.critical:
 			c.freeRoom()
-			if !write(d) {
+			if !c.write(d) {
 				return
 			}
 		case <-c.wake:
@@ -794,12 +1131,38 @@ func (c *conn) writer(ctx context.Context, cancel context.CancelFunc) {
 	}
 }
 
+// write stamps the cursor and puts one frame on the socket. The position is
+// marked done before the write rather than after: if the write fails the
+// socket is gone, and the client resumes from the last cursor it actually
+// received, which is at most this one.
+func (c *conn) write(of *outFrame) bool {
+	c.done(of.seq)
+	of.wf.Cursor = strconv.FormatUint(c.watermark(), 10)
+	data, err := json.Marshal(of.wf)
+	if err != nil {
+		c.log.Error("frame_marshal_failed", "type", of.wf.Type, "err", err)
+		return true
+	}
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	_ = c.raw.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := writeFrame(c.bw, opText, data); err != nil {
+		c.log.Debug("write_failed", "err", err)
+		return false
+	}
+	return true
+}
+
 // ── Bus pump ─────────────────────────────────────────────────────────────────
 
 // pump replays from the cursor, emits sync.complete, then goes live. The
 // replay burst is capped: a client that has been offline for a week wants the
 // current state of the world, not a week of history, and it can fetch the rest
 // over HTTP if sync.truncated says it should.
+//
+// Only the DURABLE stream comes through here. Frames that are never written
+// to disk — Family Watch signalling and presence — arrive through
+// gateway.relayLive, carry no position, and never move the cursor.
 func (c *conn) pump(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
 	ch, unsub := c.gw.bus.Subscribe(c.subject, c.cursor)
@@ -807,20 +1170,16 @@ func (c *conn) pump(ctx context.Context, cancel context.CancelFunc) {
 
 	replaying := true
 	truncated := false
-	var buf []busItem
+	var buf []*outFrame
 	idle := time.NewTimer(replayIdle)
 	defer idle.Stop()
 
 	finishReplay := func() {
-		for _, it := range buf {
-			c.deliver(ctx, it.data)
+		for _, of := range buf {
+			c.deliver(ctx, of)
 		}
 		buf = nil
-		c.emit(ctx, notify.Frame{
-			V: notify.FrameVersion, Type: "sync.complete", Priority: notify.PriorityCritical,
-			FamilyID: c.ticket.FamilyID, At: time.Now().UnixMilli(),
-			Data: map[string]any{"cursor": c.lastSeq(), "truncated": truncated},
-		})
+		c.emit(ctx, "sync.complete", notify.PriorityCritical, map[string]any{"truncated": truncated})
 		replaying = false
 	}
 
@@ -832,11 +1191,21 @@ func (c *conn) pump(ctx context.Context, cancel context.CancelFunc) {
 			if !ok {
 				return
 			}
-			c.setSeq(m.Seq)
+			of := toWire(m.Seq, m.Data)
+			if replaying && !replayable(of.wf.Type) {
+				// Seen, not owed: the cursor moves past it without it ever
+				// entering pending.
+				c.seqMu.Lock()
+				c.cursor = m.Seq
+				c.seqMu.Unlock()
+				continue
+			}
+			c.track(m.Seq)
 			if replaying {
-				buf = append(buf, busItem{seq: m.Seq, data: m.Data})
+				buf = append(buf, of)
 				if len(buf) > maxReplayFrames {
-					buf = buf[len(buf)-maxReplayFrames:]
+					c.done(buf[0].seq)
+					buf = buf[1:]
 					truncated = true
 				}
 				if !idle.Stop() {
@@ -848,7 +1217,7 @@ func (c *conn) pump(ctx context.Context, cancel context.CancelFunc) {
 				idle.Reset(replayIdle)
 				continue
 			}
-			c.deliver(ctx, m.Data)
+			c.deliver(ctx, of)
 		case <-idle.C:
 			if replaying {
 				finishReplay()
@@ -857,50 +1226,26 @@ func (c *conn) pump(ctx context.Context, cancel context.CancelFunc) {
 	}
 }
 
-type busItem struct {
-	seq  uint64
-	data []byte
-}
-
-// deliver classifies a bus payload and routes it to the right queue. The
-// producer stamped the priority; the gateway trusts it, because the producer is
-// the only party that knows what the frame means.
-func (c *conn) deliver(ctx context.Context, data []byte) {
-	var hdr struct {
-		Priority notify.Priority `json:"priority"`
-		Key      string          `json:"key"`
-		Type     string          `json:"type"`
-	}
-	if err := json.Unmarshal(data, &hdr); err != nil {
-		// An undecodable frame is treated as CRITICAL: we would rather deliver
-		// something we could not classify than silently swallow a transition.
-		c.pushCritical(ctx, data)
-		return
-	}
-	switch hdr.Priority {
+// deliver routes one frame to the right queue. The producer stamped the
+// priority; the gateway trusts it, because the producer is the only party
+// that knows what the frame means. Anything unclassifiable is CRITICAL.
+func (c *conn) deliver(ctx context.Context, of *outFrame) {
+	switch of.wf.Priority {
 	case notify.PriorityLow:
-		c.pushLow(hdr.Key+"|"+hdr.Type, data)
+		c.pushLow(of.wf.Key+"|"+of.wf.Type, of)
 	case notify.PriorityHigh:
-		c.pushHigh(data)
+		c.pushHigh(of)
 	default:
-		c.pushCritical(ctx, data)
+		c.pushCritical(ctx, of)
 	}
 }
 
-func (c *conn) emit(ctx context.Context, f notify.Frame) {
-	c.pushCritical(ctx, f.Encode())
-}
-
-func (c *conn) setSeq(s uint64) {
-	c.seqMu.Lock()
-	c.cursor = s
-	c.seqMu.Unlock()
-}
-
-func (c *conn) lastSeq() uint64 {
-	c.seqMu.Lock()
-	defer c.seqMu.Unlock()
-	return c.cursor
+// emit queues a frame this process originates. It always takes the CRITICAL
+// (never-dropped) path whatever priority it is labelled with: there are only
+// ever a handful per connection and every one of them is an answer the client
+// is waiting for.
+func (c *conn) emit(ctx context.Context, typ string, prio notify.Priority, payload map[string]any) {
+	c.pushCritical(ctx, serverFrame(c.ticket.FamilyID, typ, prio, payload))
 }
 
 // ── Reader ───────────────────────────────────────────────────────────────────
@@ -975,13 +1320,19 @@ func (c *conn) reader(ctx context.Context, cancel context.CancelFunc) {
 	}
 }
 
-// handleMessage processes C→S frames (§9.2: heartbeat, location.report, ack;
-// 6-D-7 adds watch.signal).
+// handleMessage processes C→S frames. The catalogue the gateway accepts is
+// exactly: ping, heartbeat, location.report, watch.signal. Everything else —
+// including `ack` (t4 is `POST /v1/incidents/{id}/ack` on the control plane,
+// where the engine that records it lives) and `incident.open` (an SOS goes to
+// cmd/sos-ingest over the HTTPS legs; a relay through this binary would add a
+// hop to the one path ADR-002 exists to keep short) — is answered with an
+// `error` frame and published nowhere. testdata/c2s_frames.golden.json pins
+// the accepted shapes.
 func (c *conn) handleMessage(ctx context.Context, data []byte) {
 	var in struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
-		// ★ 6-D-7d — the client has ALWAYS sent this field, and this handler has
+		// ★ 6-D-7d — the client has ALWAYS sent this field, and this handler had
 		// always read only `data`. `mobile/src/net/ws.ts`'s `WsFrame` has no
 		// `data` at all: it is `{type, hlc, key, payload, priority}`. So every
 		// C→S frame the app ever sent arrived here with `Data == nil`, was
@@ -989,29 +1340,20 @@ func (c *conn) handleMessage(ctx context.Context, data []byte) {
 		// far side for having nothing in it — silently, because a nil
 		// json.RawMessage marshals to `null` rather than failing.
 		//
-		// Accepting both is the fix that does not require every already-built
-		// client to change. `data` still wins when present, so nothing that
-		// works today changes shape.
+		// `payload` is canonical; `data` is kept as an alias (and still wins
+		// when both are present) so nothing already built changes shape.
 		Payload json.RawMessage `json:"payload"`
 	}
 	if err := json.Unmarshal(data, &in); err != nil {
-		c.emit(ctx, notify.Frame{
-			V: notify.FrameVersion, Type: "error", Priority: notify.PriorityHigh,
-			FamilyID: c.ticket.FamilyID, At: time.Now().UnixMilli(),
-			Data: map[string]any{"code": "KV-1001", "detail": "malformed client frame"},
-		})
+		c.emitError(ctx, "KV-1001", "malformed client frame")
 		return
 	}
 
-	// A neighbour connection is read-mostly by construction: it may acknowledge
-	// an alert, but it may not inject location or presence into a family it is
-	// not a cryptographic member of (F-20).
-	if c.ticket.Reduced && in.Type != "ack" && in.Type != "heartbeat" {
-		c.emit(ctx, notify.Frame{
-			V: notify.FrameVersion, Type: "error", Priority: notify.PriorityHigh,
-			FamilyID: c.ticket.FamilyID, At: time.Now().UnixMilli(),
-			Data: map[string]any{"code": "KV-2001", "detail": "reduced session may not publish " + in.Type},
-		})
+	// A neighbour connection is read-mostly by construction: it may keep its
+	// own socket alive, but it may not inject location, presence or Family
+	// Watch signalling into a family it is not a cryptographic member of (F-20).
+	if c.ticket.Reduced && in.Type != "ping" {
+		c.emitError(ctx, "KV-2001", "reduced session may not publish "+in.Type)
 		return
 	}
 
@@ -1022,18 +1364,25 @@ func (c *conn) handleMessage(ctx context.Context, data []byte) {
 	now := time.Now().UnixMilli()
 	switch in.Type {
 	case "heartbeat":
-		f := notify.Frame{
+		// Presence is transient by definition (§2.5.2: a 45 s TTL). It is
+		// relayed live and never written: a presence tick on the durable stream
+		// would be replayed to every reconnecting socket for the life of the
+		// deployment. The client's body is not echoed — nothing reads it, and an
+		// unbounded echo is a fan-out amplifier.
+		c.publishEphemeral(notify.Frame{
 			V: notify.FrameVersion, Type: "presence.changed", Priority: notify.PriorityLow,
 			Key: "presence:" + c.ticket.MemberID, FamilyID: c.ticket.FamilyID, At: now,
 			Data: map[string]any{
-				"memberId": c.ticket.MemberID, "deviceId": c.ticket.DeviceID,
-				"lastSeenAt": now, "raw": json.RawMessage(in.Data),
+				"memberId": c.ticket.MemberID, "deviceId": c.ticket.DeviceID, "lastSeenAt": now,
 			},
-		}
-		c.publish(f)
+		})
 	case "location.report":
 		// Sealed on the device; the gateway relays ciphertext and never parses
 		// coordinates out of it (§10.2 — the server holds no Class A plaintext).
+		if len(in.Data) == 0 {
+			c.emitError(ctx, "KV-1001", "malformed location.report")
+			return
+		}
 		f := notify.Frame{
 			V: notify.FrameVersion, Type: "location.update", Priority: notify.PriorityLow,
 			Key: "loc:" + c.ticket.MemberID, FamilyID: c.ticket.FamilyID, At: now,
@@ -1058,6 +1407,10 @@ func (c *conn) handleMessage(ctx context.Context, data []byte) {
 		// (§2.5.2) — but LOW coalesces per key, and coalescing an ICE
 		// candidate stream keeps only the last candidate, which is a session
 		// that never connects.
+		//
+		// EPHEMERAL, never durable: signalling that outlives the session is an
+		// invite that re-opens a camera on the next reconnect (D-029). Live
+		// sockets on this gateway see it; nothing else ever will.
 		var sig struct {
 			SessionID  string          `json:"sessionId"`
 			ToMemberID string          `json:"toMemberId"`
@@ -1065,14 +1418,10 @@ func (c *conn) handleMessage(ctx context.Context, data []byte) {
 		}
 		if err := json.Unmarshal(in.Data, &sig); err != nil ||
 			sig.SessionID == "" || sig.ToMemberID == "" || len(sig.Sealed) == 0 {
-			c.emit(ctx, notify.Frame{
-				V: notify.FrameVersion, Type: "error", Priority: notify.PriorityHigh,
-				FamilyID: c.ticket.FamilyID, At: now,
-				Data: map[string]any{"code": "KV-1001", "detail": "malformed watch.signal"},
-			})
+			c.emitError(ctx, "KV-1001", "malformed watch.signal")
 			return
 		}
-		c.publish(notify.Frame{
+		c.publishEphemeral(notify.Frame{
 			V: notify.FrameVersion, Type: "watch.signal", Priority: notify.PriorityHigh,
 			FamilyID: c.ticket.FamilyID, At: now,
 			Data: map[string]any{
@@ -1082,47 +1431,55 @@ func (c *conn) handleMessage(ctx context.Context, data []byte) {
 				"sealed":     sig.Sealed, "at": now,
 			},
 		})
-	case "ack":
-		f := notify.Frame{
-			V: notify.FrameVersion, Type: "incident.acked", Priority: notify.PriorityCritical,
-			FamilyID: c.ticket.FamilyID, At: now,
-			Data: map[string]any{
-				"memberId": c.ticket.MemberID, "deviceId": c.ticket.DeviceID,
-				"detail": json.RawMessage(in.Data),
-			},
-		}
-		c.publish(f)
 	case "ping":
-		c.emit(ctx, notify.Frame{
-			V: notify.FrameVersion, Type: "pong", Priority: notify.PriorityHigh,
-			FamilyID: c.ticket.FamilyID, At: now,
-		})
+		c.emit(ctx, "pong", notify.PriorityHigh, map[string]any{"at": now})
+	case "incident.open":
+		c.emitError(ctx, "KV-1001", "incident.open is not accepted over the socket; an SOS goes to sos-ingest over the HTTPS legs")
 	default:
-		c.emit(ctx, notify.Frame{
-			V: notify.FrameVersion, Type: "error", Priority: notify.PriorityHigh,
-			FamilyID: c.ticket.FamilyID, At: now,
-			Data: map[string]any{"code": "KV-1001", "detail": "unknown frame type " + in.Type},
-		})
+		c.emitError(ctx, "KV-1001", "unknown frame type "+in.Type)
 	}
 }
 
+func (c *conn) emitError(ctx context.Context, code, detail string) {
+	c.emit(ctx, "error", notify.PriorityHigh, map[string]any{"code": code, "detail": detail})
+}
+
+// publish appends to the family's durable stream: history a reconnecting
+// socket is owed.
 func (c *conn) publish(f notify.Frame) {
 	if err := c.gw.bus.Publish(notify.StreamSubject(c.ticket.FamilyID), f.Encode()); err != nil {
 		c.log.Error("client_publish_failed", "type", f.Type, "err", err)
 	}
 }
 
+// publishEphemeral hands a frame to the live sockets of this family on this
+// gateway and to nobody else, ever. Nothing is written; no cursor moves.
+func (c *conn) publishEphemeral(f notify.Frame) {
+	c.gw.bus.PublishEphemeral(bus.Msg{
+		Subject: notify.StreamSubject(c.ticket.FamilyID), FamilyID: c.ticket.FamilyID,
+		At: f.At, Data: f.Encode(),
+	})
+}
+
 // shutdown sends a close frame once and tears the socket down. Telling the
 // client *why* is what makes a resync automatic rather than a support ticket.
 func (c *conn) shutdown(code int, reason string) {
 	c.closeOnce.Do(func() {
+		c.closeMu.Lock()
 		c.closeCode, c.closeReason = code, reason
+		c.closeMu.Unlock()
 		c.wmu.Lock()
 		_ = c.raw.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		_ = writeFrame(c.bw, opClose, closePayload(code, reason))
 		c.wmu.Unlock()
 		_ = c.raw.Close()
 	})
+}
+
+func (c *conn) closeInfo() (int, string) {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	return c.closeCode, c.closeReason
 }
 
 func env(k, def string) string {
