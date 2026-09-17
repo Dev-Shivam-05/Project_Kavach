@@ -75,6 +75,15 @@ This file is the **status of that plan against the code at HEAD**, re-verified 2
 >
 > **Next: Phase 1's remaining work**, or a first device build — whichever the user picks. See the
 > Phase 6-D table below and [DECISIONS.md](DECISIONS.md) D-029 through D-037.
+>
+> ★★★ **17 Sep — the 5–6 Sep completion-mode audit is committed, and the first 6-D preview APK is
+> built.** That session left 111 files (+5080/−1525) uncommitted with no handoff; they landed as
+> `3203af49`…`cc99b901` after three stale *tests* (not code) were corrected, plus `52734150`
+> (`expo-font` as a direct dependency, per expo-doctor). EAS build `f6ace485` (preview, versionCode
+> 3, commit `52734150`) **finished** — [APK](https://expo.dev/artifacts/eas/VaEXsoi_It-e8KsYt5Jc2AYivW3OGqpfKvyTaw0i9PA.apk).
+> ⛔ **Built ≠ working.** The EAS `preview` environment has no variables, so the APK carries the
+> emulator host `10.0.2.2` (and `withKavachNetworkSecurity` blocks cleartext in release anyway);
+> no Firebase. It proves install + the on-device T0/L0 plane only. Not yet installed on a phone.
 
 > ★ **D-026 and D-027 are both closed (20 Aug, W10-h + W10-i), and Phase 1's last arrow connects.**
 > Observed, not argued: `ops/e2e-two-binaries.sh` posts a real SOS to the `sos-ingest` binary and
