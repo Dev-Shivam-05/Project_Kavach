@@ -86,6 +86,10 @@ var (
 	ErrBadPurpose     = errors.New("consent: unknown purpose")
 	ErrSelfGrant      = errors.New("consent: grantor and grantee are the same member")
 	ErrNotFound       = errors.New("consent: grant not found")
+	// ErrNotMember: the grantor or the grantee is not a live member of the
+	// family the grant is being written into. A grant "from" somebody who is
+	// not in the family is the shape of a forged one.
+	ErrNotMember = errors.New("consent: grantor and grantee must both be members of the family")
 )
 
 // ── Decisions ────────────────────────────────────────────────────────────────
@@ -149,7 +153,13 @@ type Store interface {
 	PutGrant(store.Grant) error
 	RevokeGrant(id string) error
 	AccessLog(familyID string) []store.Access
-	AppendAccess(store.Access) error
+	// AppendAccessID returns the id the store gave the row: Decision.AccessLogID
+	// must name THIS read, not whichever row happened to be highest afterwards.
+	AppendAccessID(store.Access) (int64, error)
+	// MarkAccessSurfaced flips surfaced_to_subject on rows the subject has now
+	// been told about. The accountability fields stay immutable; this flag is
+	// the row's live state and the migration indexes on it.
+	MarkAccessSurfaced(familyID string, ids []int64) error
 }
 
 type Deps struct {
@@ -244,6 +254,19 @@ func (s *Service) Grant(req GrantRequest) (store.Grant, error) {
 	if req.Hours > MaxGrantHours {
 		return store.Grant{}, ErrExpiryTooLong
 	}
+	// Both parties must be live members of THIS family. The handler fills the
+	// family from the caller's tenancy, but grantor and grantee arrive in the
+	// body, and a body can name anyone: without this check any token holder
+	// could mint a "victim → me" grant, or one between two ids from another
+	// family, and the ledger would show it as granted_via self. This is the
+	// anti-stalkerware boundary the package exists to hold.
+	live := map[string]bool{}
+	for _, m := range s.st.Members(req.FamilyID) {
+		live[m.ID] = true
+	}
+	if !live[req.GrantorMemberID] || !live[req.GranteeMemberID] {
+		return store.Grant{}, ErrNotMember
+	}
 	via := req.GrantedVia
 	if via == "" {
 		via = "self"
@@ -288,6 +311,12 @@ func (s *Service) Revoke(familyID, grantID string) error {
 	}
 	if found == nil {
 		return ErrNotFound
+	}
+	if found.RevokedAt > 0 {
+		// Already revoked: idempotent, and silent. A second frame would tell the
+		// family "revoked again" about a grant that has been dead since the
+		// first one — noise on the ledger with nothing new in it.
+		return nil
 	}
 	if err := s.st.RevokeGrant(grantID); err != nil {
 		return err
@@ -442,19 +471,11 @@ func (s *Service) recordAccess(req CheckRequest, d Decision) (int64, error) {
 		SurfacedToSubject: d.Reason == ReasonSelf,
 		DegradedPlaintext: req.DegradedPlaintext,
 	}
-	if err := s.st.AppendAccess(a); err != nil {
-		return 0, err
-	}
-	// The store assigns the row id on append, so read it back. The log is
-	// append-only and monotonic, which makes the highest id in the family the
-	// row we just wrote.
-	var id int64
-	for _, r := range s.st.AccessLog(req.FamilyID) {
-		if r.ID > id {
-			id = r.ID
-		}
-	}
-	return id, nil
+	// The store assigns the row id on append and hands it back. Scanning the
+	// family's log for the highest id afterwards named somebody else's row
+	// under two concurrent checks, and cost a copy-and-sort of the ledger per
+	// request.
+	return s.st.AppendAccessID(a)
 }
 
 // AccessLog is the "who looked at my data, when" feed, newest first.
@@ -522,18 +543,17 @@ func (s *Service) SurfaceOnce() int {
 		for _, a := range pending {
 			bySubject[a.SubjectMemberID] = append(bySubject[a.SubjectMemberID], a)
 		}
-		delivered := true
+		var undelivered []store.Access
 		for subject, rows := range bySubject {
 			items := make([]map[string]any, 0, len(rows))
+			ids := make([]int64, 0, len(rows))
 			for _, a := range rows {
 				items = append(items, map[string]any{
 					"id": a.ID, "accessorMemberId": a.AccessorMemberID,
 					"what": a.What, "context": a.Context, "at": a.At,
 					"grantId": a.GrantID, "degradedPlaintext": a.DegradedPlaintext,
 				})
-				if oldest == 0 || a.At < oldest {
-					oldest = a.At
-				}
+				ids = append(ids, a.ID)
 			}
 			if err := s.emit(fam.ID, "consent.access_surfaced", map[string]any{
 				"subjectMemberId": subject,
@@ -542,13 +562,28 @@ func (s *Service) SurfaceOnce() int {
 			}); err != nil {
 				// Leave the watermark where it is; these rows will be retried.
 				s.log.Error("surfacing_publish_failed", "family", fam.ID, "err", err)
-				delivered = false
-				break
+				undelivered = append(undelivered, rows...)
+				continue
 			}
 			total += len(items)
+			// The row now says what the watermark says. A failure here is not a
+			// failure to surface — the frame went out — so it is logged, and the
+			// watermark below still guarantees the row is not announced twice.
+			if err := s.st.MarkAccessSurfaced(fam.ID, ids); err != nil {
+				s.log.Warn("access_surfaced_mark_failed", "family", fam.ID, "err", err)
+			}
 		}
-		if !delivered {
-			backlog += len(pending)
+		if len(undelivered) > 0 {
+			// Only what is STILL unsurfaced ages the backlog. Counting the rows
+			// this very pass just delivered made every restart after >15 min of
+			// downtime page a false P1 (O-21) and report Health() stalled for a
+			// tick, and delayed a real recovery by one interval.
+			backlog += len(undelivered)
+			for _, a := range undelivered {
+				if oldest == 0 || a.At < oldest {
+					oldest = a.At
+				}
+			}
 			continue
 		}
 		s.mu.Lock()

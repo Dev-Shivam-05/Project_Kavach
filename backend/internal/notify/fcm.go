@@ -65,6 +65,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,11 @@ var (
 	// identically, so the ladder must move on rather than burn the incident's
 	// seconds on it.
 	ErrPushRejected = errors.New("notify: FCM rejected the message")
+
+	// ErrPushTransient is FCM (or the network between here and it) saying "not
+	// right now": 429, 5xx, a dropped connection. Send retries it once inside
+	// its own time budget; a leg that still fails is recorded KV-PUSHFAIL.
+	ErrPushTransient = errors.New("notify: FCM temporarily unavailable")
 )
 
 // PushSender is the consumer-defined slice of "can send a push" that fan-out
@@ -384,49 +390,102 @@ func (c *FCMClient) Send(ctx context.Context, token string, data map[string]stri
 		return err
 	}
 
+	// One attempt, and one retry on a transient answer, inside the SAME 10 s the
+	// client already budgets for a single send — a push that has not landed by
+	// then has lost its race with the SMS leg either way, and two full timeouts
+	// back to back would hold the fan-out goroutine open on a delivery that no
+	// longer matters. Retry-After is honoured when FCM sends one; otherwise the
+	// retry is immediate, because the common 5xx is a single bad backend and the
+	// next connection lands elsewhere.
+	ctx, cancel := context.WithTimeout(ctx, c.http.Timeout)
+	defer cancel()
+	wait, err := c.sendOnce(ctx, access, body)
+	if !errors.Is(err, ErrPushTransient) {
+		return err
+	}
+	if wait > 0 {
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return err
+		case <-t.C:
+		}
+	}
+	_, err = c.sendOnce(ctx, access, body)
+	return err
+}
+
+// sendOnce is one HTTP round trip. The duration is FCM's Retry-After, when the
+// answer was transient and carried one.
+func (c *FCMClient) sendOnce(ctx context.Context, access string, body []byte) (time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.sendURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+access)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("notify: fcm send: %w", err)
+		if ctx.Err() != nil {
+			// Our own deadline or the notifier's shutdown, not the network's
+			// fault: nothing to retry.
+			return 0, fmt.Errorf("notify: fcm send: %w", err)
+		}
+		return 0, fmt.Errorf("%w: %v", ErrPushTransient, err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return nil
+		return 0, nil
 	case resp.StatusCode == http.StatusNotFound, isUnregistered(respBody):
-		return ErrPushUnregistered
+		return 0, ErrPushUnregistered
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
 		// The cached token is worthless; drop it so the next attempt re-signs
 		// rather than replaying a rejected credential for the next hour.
 		c.mu.Lock()
 		c.token, c.tokenExp = "", time.Time{}
 		c.mu.Unlock()
-		return fmt.Errorf("%w: %d %s", ErrPushRejected, resp.StatusCode,
+		return 0, fmt.Errorf("%w: %d %s", ErrPushRejected, resp.StatusCode,
 			strings.TrimSpace(string(respBody)))
+	case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode >= 500:
+		return retryAfter(resp.Header.Get("Retry-After")), fmt.Errorf("%w: %d %s", ErrPushTransient,
+			resp.StatusCode, strings.TrimSpace(string(respBody)))
 	default:
-		return fmt.Errorf("%w: %d %s", ErrPushRejected, resp.StatusCode,
+		return 0, fmt.Errorf("%w: %d %s", ErrPushRejected, resp.StatusCode,
 			strings.TrimSpace(string(respBody)))
 	}
 }
 
-// isUnregistered reads FCM's error detail. A dead token can arrive as 404 or as
-// a 400 whose body names UNREGISTERED or INVALID_ARGUMENT on the token field, so
-// the status code alone is not enough to tell "this handset is gone" from "this
-// deployment is misconfigured" — and only the first should clear a stored token.
+// retryAfter parses the delay-seconds form of Retry-After. The HTTP-date form
+// is not worth parsing here: a push that waits more than a few seconds has
+// already lost to the SMS leg, and an unparseable header means "retry now".
+func retryAfter(h string) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(h))
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// isUnregistered reads FCM's error detail. A dead token can arrive as 404, as a
+// body naming UNREGISTERED, or as a 400 INVALID_ARGUMENT whose field violation
+// is on message.token, so the status code alone is not enough to tell "this
+// handset is gone" from "this deployment is misconfigured" — and only the first
+// should clear a stored token. INVALID_ARGUMENT on any OTHER field is our bug,
+// not the handset's, and must not be read as a dead token.
 func isUnregistered(body []byte) bool {
 	var out struct {
 		Error struct {
 			Status  string `json:"status"`
 			Details []struct {
-				ErrorCode string `json:"errorCode"`
+				ErrorCode       string `json:"errorCode"`
+				FieldViolations []struct {
+					Field string `json:"field"`
+				} `json:"fieldViolations"`
 			} `json:"details"`
 		} `json:"error"`
 	}
@@ -439,6 +498,13 @@ func isUnregistered(body []byte) bool {
 	for _, d := range out.Error.Details {
 		if strings.EqualFold(d.ErrorCode, "UNREGISTERED") {
 			return true
+		}
+		if strings.EqualFold(out.Error.Status, "INVALID_ARGUMENT") {
+			for _, v := range d.FieldViolations {
+				if strings.HasSuffix(strings.ToLower(v.Field), "token") {
+					return true
+				}
+			}
 		}
 	}
 	return false

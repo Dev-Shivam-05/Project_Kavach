@@ -81,13 +81,32 @@ func (f *fakeStore) legs(ch Channel) []store.Delivery {
 type fakeBus struct {
 	mu       sync.Mutex
 	subjects []string
+	payloads [][]byte
 }
 
-func (b *fakeBus) Publish(subject string, _ []byte) error {
+func (b *fakeBus) Publish(subject string, data []byte) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.subjects = append(b.subjects, subject)
+	b.payloads = append(b.payloads, append([]byte{}, data...))
 	return nil
+}
+
+// frames decodes every frame published to one subject, in order.
+func (b *fakeBus) frames(subject string) []Frame {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []Frame
+	for i, s := range b.subjects {
+		if s != subject {
+			continue
+		}
+		var f Frame
+		if err := json.Unmarshal(b.payloads[i], &f); err == nil {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 type recordingSender struct {
@@ -178,9 +197,11 @@ func TestFanoutStillPublishesTheSealedFrameAndSettlesTheWSLegImmediately(t *test
 	if len(bus.subjects) != 1 || bus.subjects[0] != StreamSubject(famID) {
 		t.Fatalf("published to %v, want one frame on %q", bus.subjects, StreamSubject(famID))
 	}
+	// "sent", not "delivered": the frame is on the bus, but whether a socket for
+	// this device exists is the gateway's knowledge, not fan-out's (D-015).
 	ws := st.legs(ChannelWS)
-	if len(ws) != 1 || ws[0].State != "delivered" || ws[0].LatencyMs != 0 {
-		t.Fatalf("ws leg = %+v, want one delivered row at 0 ms", ws)
+	if len(ws) != 1 || ws[0].State != "sent" || ws[0].LatencyMs != 0 || ws[0].DeliveredAt != 0 {
+		t.Fatalf("ws leg = %+v, want one sent row at 0 ms with no DeliveredAt", ws)
 	}
 }
 
@@ -520,8 +541,8 @@ func TestAFailingPushDoesNotStopTheSocketLeg(t *testing.T) {
 	n.Close()
 
 	ws := st.legs(ChannelWS)
-	if len(ws) != 1 || ws[0].State != "delivered" {
-		t.Fatalf("ws leg = %+v, want it delivered regardless of the push outcome", ws)
+	if len(ws) != 1 || ws[0].State != "sent" {
+		t.Fatalf("ws leg = %+v, want it sent regardless of the push outcome", ws)
 	}
 }
 
@@ -639,8 +660,12 @@ type fcmStub struct {
 	mu         sync.Mutex
 	message    map[string]any
 	tokenCalls int
+	sendCalls  int
 	sendStatus int
 	sendBody   string
+	// onSend, when set, decides each call's answer in turn (1-based), so a test
+	// can script "503 then 200" — the transient-then-fine shape a retry exists for.
+	onSend func(call int) (status int, body string, header http.Header)
 }
 
 func newFCMStub(t *testing.T) *fcmStub {
@@ -671,8 +696,18 @@ func newFCMStub(t *testing.T) *fcmStub {
 		body, _ := io.ReadAll(r.Body)
 		s.mu.Lock()
 		_ = json.Unmarshal(body, &s.message)
+		s.sendCalls++
 		status, resp := s.sendStatus, s.sendBody
+		var extra http.Header
+		if s.onSend != nil {
+			status, resp, extra = s.onSend(s.sendCalls)
+		}
 		s.mu.Unlock()
+		for k, vs := range extra {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, resp)

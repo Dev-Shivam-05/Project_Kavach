@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	sm "github.com/kavach/backend/internal/incident"
 	"github.com/kavach/backend/internal/store"
 )
 
@@ -100,6 +101,10 @@ var classAKeys = map[string]bool{
 	"sealed": true, "sealedPayload": true, "lat": true, "lon": true,
 	"accuracyM": true, "medical": true, "blackBoxRef": true, "note": true,
 	"phoneE164": true, "corridorPoints": true,
+	// The duress bit is Class A on every channel that leaves the crypto group
+	// (D-007, F-01): a neighbour's phone, or a coerced subject's own, must not be
+	// able to read "this was a duress alarm" off the wire.
+	"duress": true,
 }
 
 // ── Channels ─────────────────────────────────────────────────────────────────
@@ -329,6 +334,16 @@ type Notifier struct {
 	now    func() time.Time
 	newID  func() string
 
+	// lifetime is the context every delivery leg runs under, and it outlives any
+	// caller's. Legs are started from HTTP handlers whose request context is
+	// cancelled the moment the response is written — long before a 400 ms FCM
+	// round trip completes — so a leg that selected on the caller's ctx recorded
+	// KV-SHUTDOWN for every CLAIM/RELEASE/REESCALATE broadcast and never reached
+	// the one phone with no socket (§2.6.4). Close cancels it, which is what
+	// KV-SHUTDOWN was always meant to describe.
+	lifetime context.Context
+	stop     context.CancelFunc
+
 	wg   sync.WaitGroup
 	rndM sync.Mutex
 	rnd  *rand.Rand
@@ -352,16 +367,23 @@ func New(d Deps) (*Notifier, error) {
 	if d.Budget == nil {
 		d.Budget = NewMemoryBudget(DefaultSMSCeiling, d.Now)
 	}
+	lifetime, stop := context.WithCancel(context.Background())
 	return &Notifier{
 		st: d.Store, bus: d.Bus, log: d.Log, budget: d.Budget, drills: d.Drills,
 		push: d.Push, now: d.Now, newID: d.NewID,
-		rnd: rand.New(rand.NewPCG(uint64(d.Now().UnixNano()), 0x5eed)),
+		rnd:      rand.New(rand.NewPCG(uint64(d.Now().UnixNano()), 0x5eed)),
+		lifetime: lifetime, stop: stop,
 	}, nil
 }
 
-// Close waits for in-flight delivery legs so a shutdown does not lose delivery
-// receipts that a responder's after-action report will ask for.
-func (n *Notifier) Close() { n.wg.Wait() }
+// Close ends every in-flight delivery leg and waits for each to record what
+// became of it, so a shutdown does not lose the delivery rows a responder's
+// after-action report will ask for. A leg cut short here is written as
+// KV-SHUTDOWN — the truth — rather than as a delivery nobody can vouch for.
+func (n *Notifier) Close() {
+	n.stop()
+	n.wg.Wait()
+}
 
 // ── Fan-out ──────────────────────────────────────────────────────────────────
 
@@ -469,12 +491,7 @@ func (n *Notifier) Fanout(ctx context.Context, inc store.Incident, step Step) (R
 		// Neighbours never get SMS or voice: those channels would carry a
 		// human-readable location into a phone outside the family's crypto
 		// group. Their feed is metadata + a 112 button, nothing more (F-20).
-		// Kind must be carried across: a neighbour whose phone reads a claim as a
-		// fresh alert is a neighbour woken to be told that nothing is needed.
-		suppressed := n.dispatch(ctx, inc, note, dev, Step{
-			Tier: step.Tier, Label: step.Label, Repeat: step.Repeat, Kind: step.Kind,
-			Channels: intersect(step.Channels, []Channel{ChannelWS, ChannelFCM, ChannelAPNs}),
-		}, true)
+		suppressed := n.dispatch(ctx, inc, note, dev, neighbourStep(step), true)
 		res.Suppressed = append(res.Suppressed, suppressed...)
 	}
 
@@ -493,28 +510,68 @@ func (n *Notifier) Fanout(ctx context.Context, inc store.Incident, step Step) (R
 	return res, nil
 }
 
+// neighbourStep is the Step a neighbour's device is dispatched with: a COPY of
+// the family's, with only Channels narrowed. It used to be rebuilt field by
+// field, and Kind was silently dropped on this leg once — a neighbour woken on
+// the alarm stream to be told nothing was needed — with every main-path test
+// green. A copy cannot forget a field; TestEveryStepFieldReachesTheNeighbourLeg
+// holds the line for whatever field comes next.
+func neighbourStep(step Step) Step {
+	r := step
+	r.Channels = intersect(step.Channels, []Channel{ChannelWS, ChannelFCM, ChannelAPNs})
+	return r
+}
+
 func (n *Notifier) publishReduced(inc store.Incident, step Step, subjectName string, at int64) error {
 	// Class B/C only: incident state, trigger class, coarse cell, short name,
 	// and the fact that a 112 button should be shown. Nothing here can be
 	// decrypted into a precise location because none of it is Class A.
-	data := map[string]any{
+	frame, err := ReducedFrame("incident.notified", PriorityCritical, inc, at, map[string]any{
 		"tier":       step.Tier,
-		"state":      string(inc.State),
 		"trigger":    inc.Trigger,
 		"coarseCell": inc.CoarseH3R7,
 		"subject":    subjectName,
 		"show112":    true,
-	}
-	if err := assertClassBC(data); err != nil {
+	})
+	if err != nil {
 		// Fail closed. A reduced frame that somehow acquired a Class A field is
 		// not degraded — it is a privacy breach, and dropping it is correct.
 		return err
 	}
-	frame := Frame{
-		V: FrameVersion, Type: "incident.notified", Priority: PriorityCritical,
-		FamilyID: inc.FamilyID, IncidentID: inc.ID, At: at, Reduced: true, Data: data,
-	}
 	return n.bus.Publish(ReducedSubject(inc.FamilyID), frame.Encode())
+}
+
+// ReducedState is the incident state as the neighbour feed may see it.
+// ACTIVE_L1_SILENT exists for exactly one event, PIN_DURESS, so the state NAME
+// is the duress bit; a tier-2 neighbour is outside the family's crypto group by
+// design (F-20) and is told the ladder moved, never why. D-007 keeps the bit out
+// of push payloads for the same reason: a plaintext channel is a side channel.
+func ReducedState(s sm.State) string {
+	if s == sm.StateActiveL1Silent {
+		return string(sm.StateActiveL1)
+	}
+	return string(s)
+}
+
+// ReducedFrame builds the one shape a frame on ReducedSubject may take. It is
+// the single place the F-20 boundary is enforced for BOTH producers — this
+// package's fan-out and the escalation engine's state-change frames — so a
+// field cannot reach a neighbour by being added on the side that forgot to
+// check. `state` is always set here, from ReducedState, and never taken from
+// the caller's data; a Class A key in data fails closed.
+func ReducedFrame(kind string, prio Priority, inc store.Incident, at int64, data map[string]any) (Frame, error) {
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["state"] = ReducedState(inc.State)
+	data["isDrill"] = inc.IsDrill
+	if err := assertClassBC(data); err != nil {
+		return Frame{}, err
+	}
+	return Frame{
+		V: FrameVersion, Type: kind, Priority: prio,
+		FamilyID: inc.FamilyID, IncidentID: inc.ID, At: at, Reduced: true, Data: data,
+	}, nil
 }
 
 func assertClassBC(data map[string]any) error {
@@ -579,11 +636,14 @@ func (n *Notifier) dispatch(ctx context.Context, inc store.Incident, note store.
 }
 
 // startLeg models one channel's wire time and records the receipt when it
-// lands. The WS leg is settled immediately because the frame really has been
-// published to the bus by the time we get here.
+// lands. The WS leg is recorded as SENT, not delivered: the frame really has
+// been published to the bus by the time we get here, but nothing here knows
+// whether realtime-gw holds a socket for this device, and D-015 forbids a row
+// that claims more than was attempted. "delivered" for WS is the gateway's to
+// say, per device, when it actually writes the frame to a socket.
 func (n *Notifier) startLeg(ctx context.Context, inc store.Incident, note store.Notification, dev store.Device, ch Channel, p channelProfile, kind Kind, reduced bool) {
 	if ch == ChannelWS {
-		n.recordDelivery(inc, note, dev, ch, "delivered", 0, "", reduced)
+		n.recordDelivery(inc, note, dev, ch, "sent", 0, "", reduced)
 		return
 	}
 	// ★ W10 — the FCM leg is no longer modelled. ★ Its latency is now measured
@@ -602,9 +662,11 @@ func (n *Notifier) startLeg(ctx context.Context, inc store.Incident, note store.
 		t := time.NewTimer(delay)
 		defer t.Stop()
 		select {
-		case <-ctx.Done():
+		case <-n.lifetime.Done():
 			// Shutdown mid-flight: record the truth rather than a delivery we
-			// cannot vouch for.
+			// cannot vouch for. The NOTIFIER's lifetime, never the caller's ctx —
+			// an HTTP handler's context ends with its response, and a leg that
+			// died with it never reached a closed phone.
 			n.recordDelivery(inc, note, dev, ch, "unknown", delay.Milliseconds(), "KV-SHUTDOWN", reduced)
 			return
 		case <-t.C:
@@ -680,11 +742,21 @@ func (n *Notifier) sendPush(ctx context.Context, inc store.Incident, note store.
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
-		err := n.push.Send(ctx, token, payload)
+		// The send runs under the notifier's lifetime, not the caller's ctx: for
+		// a CLAIM the caller is an HTTP handler that has already returned.
+		err := n.push.Send(n.lifetime, token, payload)
 		latency := n.now().Sub(started).Milliseconds()
 
 		if err != nil {
 			code := "KV-PUSHFAIL"
+			if errors.Is(err, context.Canceled) && n.lifetime.Err() != nil {
+				// Cut short by Close, not refused by FCM: the same truth the
+				// modelled legs record for the same reason. Only when the error
+				// IS the cancellation — an answer FCM gave before Close ran is
+				// FCM's answer, whatever the lifetime says by the time we look.
+				n.recordDelivery(inc, note, dev, ChannelFCM, "unknown", latency, "KV-SHUTDOWN", reduced)
+				return
+			}
 			if errors.Is(err, ErrPushUnregistered) {
 				// T-218. The handset is gone: uninstalled, wiped, or the token
 				// rolled. This is the one push failure that will not fix itself,

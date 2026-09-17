@@ -118,6 +118,11 @@ var defaultCancelWindowS = map[string]int{
 type Store interface {
 	Incident(id string) (store.Incident, bool)
 	PutIncident(store.Incident) error
+	// UpdateIncident mutates the CURRENT row under the store's lock and persists
+	// only when mutate returns nil. Every write-back in this engine that follows
+	// slow work (a fan-out, an HTTP round trip, an fsync) goes through it, so a
+	// transition that landed in between is refused rather than erased.
+	UpdateIncident(id string, mutate func(*store.Incident) error) (store.Incident, error)
 	AppendEvent(store.Event) error
 	Events(incidentID string) []store.Event
 	Timers() []store.Timer
@@ -548,8 +553,11 @@ func (e *Engine) execute(ctx context.Context, t store.Timer) error {
 		if err != nil {
 			return err
 		}
-		next.OwnerMemberID = ""
-		if err := e.st.PutIncident(next); err != nil {
+		next, err = e.st.UpdateIncident(next.ID, func(row *store.Incident) error {
+			row.OwnerMemberID = ""
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 		e.armL3(next, e.now())
@@ -589,11 +597,21 @@ func (e *Engine) notifyStep(ctx context.Context, inc store.Incident, step notify
 		return err
 	}
 	// t3 — first notified. Recorded once, on the first rung that actually
-	// reached somebody.
+	// reached somebody — and recorded on the CURRENT row, touching only that
+	// field. A fan-out is the widest window in this engine (dozens of fsynced
+	// delivery rows), and writing the snapshot back would erase a CLAIM that
+	// landed while the pushes were going out.
 	if inc.FirstNotifiedAt == 0 && res.FirstNotifiedAt > 0 {
-		inc.FirstNotifiedAt = res.FirstNotifiedAt
-		if err := e.st.PutIncident(inc); err != nil {
+		cur, err := e.st.UpdateIncident(inc.ID, func(row *store.Incident) error {
+			if row.FirstNotifiedAt == 0 {
+				row.FirstNotifiedAt = res.FirstNotifiedAt
+			}
+			return nil
+		})
+		if err != nil {
 			e.log.Error("first_notified_persist_failed", "incident", inc.ID, "err", err)
+		} else {
+			inc = cur
 		}
 	}
 	return e.appendInfo(inc, "NOTIFY_"+step.Label, map[string]any{
@@ -773,11 +791,15 @@ func (e *Engine) Claim(ctx context.Context, incidentID, memberID string) (store.
 	if err != nil {
 		return inc, err
 	}
-	next.OwnerMemberID = memberID
-	if next.FirstAckAt == 0 {
-		next.FirstAckAt = e.now().UnixMilli() // t4
-	}
-	if err := e.st.PutIncident(next); err != nil {
+	t4 := e.now().UnixMilli()
+	next, err = e.st.UpdateIncident(next.ID, func(row *store.Incident) error {
+		row.OwnerMemberID = memberID
+		if row.FirstAckAt == 0 {
+			row.FirstAckAt = t4 // t4
+		}
+		return nil
+	})
+	if err != nil {
 		return next, err
 	}
 
@@ -819,8 +841,11 @@ func (e *Engine) Release(ctx context.Context, incidentID, memberID string) (stor
 	if err != nil {
 		return inc, err
 	}
-	next.OwnerMemberID = ""
-	if err := e.st.PutIncident(next); err != nil {
+	next, err = e.st.UpdateIncident(next.ID, func(row *store.Incident) error {
+		row.OwnerMemberID = ""
+		return nil
+	})
+	if err != nil {
 		return next, err
 	}
 	e.cancelTimers(next.ID, ActionAutoQuiesce)
@@ -863,8 +888,12 @@ func (e *Engine) Resolve(ctx context.Context, incidentID, memberID string) (stor
 	if err != nil {
 		return inc, err
 	}
-	next.ResolvedAt = e.now().UnixMilli()
-	if err := e.st.PutIncident(next); err != nil {
+	resolvedAt := e.now().UnixMilli()
+	next, err = e.st.UpdateIncident(next.ID, func(row *store.Incident) error {
+		row.ResolvedAt = resolvedAt
+		return nil
+	})
+	if err != nil {
 		return next, err
 	}
 	e.cancelTimers(next.ID, "")
@@ -906,8 +935,11 @@ func (e *Engine) Cancel(ctx context.Context, incidentID string, duress bool) (st
 		return inc, err
 	}
 	if duress {
-		next.Duress = true
-		if err := e.st.PutIncident(next); err != nil {
+		next, err = e.st.UpdateIncident(next.ID, func(row *store.Incident) error {
+			row.Duress = true
+			return nil
+		})
+		if err != nil {
 			return next, err
 		}
 		e.armLadder(next, e.now())
@@ -953,10 +985,17 @@ func (e *Engine) Ack(ctx context.Context, incidentID, memberID string) (store.In
 		return store.Incident{}, ErrIncidentNotFound
 	}
 	if inc.FirstAckAt == 0 {
-		inc.FirstAckAt = e.now().UnixMilli()
-		if err := e.st.PutIncident(inc); err != nil {
+		t4 := e.now().UnixMilli()
+		cur, err := e.st.UpdateIncident(inc.ID, func(row *store.Incident) error {
+			if row.FirstAckAt == 0 {
+				row.FirstAckAt = t4
+			}
+			return nil
+		})
+		if err != nil {
 			return inc, err
 		}
+		inc = cur
 	}
 	if err := e.appendInfo(inc, "ACK", map[string]any{"memberId": memberID}); err != nil {
 		return inc, err
@@ -1001,6 +1040,13 @@ func (e *Engine) applyEvent(ctx context.Context, inc store.Incident, ev incident
 	if !ok {
 		return inc, fmt.Errorf("%w: %s on %s", ErrInvalidTransition, ev, inc.State)
 	}
+	// The caller's snapshot may be seconds old: an escalation worker reads the
+	// row, then waits on fsyncs and fan-outs before it gets here, and T+90 s is
+	// exactly when a responder's CLAIM lands. Re-check before appending so a
+	// transition that has already lost its race does not even reach the log.
+	if cur, found := e.st.Incident(inc.ID); found && moved(inc, cur) {
+		return cur, fmt.Errorf("%w: %s on %s, but the row is now %s", ErrInvalidTransition, ev, inc.State, cur.State)
+	}
 
 	if detail == nil {
 		detail = map[string]any{}
@@ -1027,13 +1073,29 @@ func (e *Engine) applyEvent(ctx context.Context, inc store.Incident, ev incident
 		return inc, fmt.Errorf("append event: %w", err)
 	}
 
-	inc.State = next
-	if incident.IsTerminal(next) && inc.ResolvedAt == 0 {
-		inc.ResolvedAt = now.UnixMilli()
+	// The projection is compare-and-swapped on (state, owner) against the
+	// snapshot the event was decided from. If another transition landed between
+	// the check above and this write, this one is refused and its side effects
+	// (ladder, fan-out, frames) never run. The row appended a moment ago stays
+	// in the log on purpose: the log is folded in HLC order and NextState
+	// ignores an event that does not apply from the folded state, so a refused
+	// transition folds to a no-op rather than to a state the engine never held.
+	snapshot := inc
+	resolvedAt := now.UnixMilli()
+	cur, err := e.st.UpdateIncident(inc.ID, func(row *store.Incident) error {
+		if moved(snapshot, *row) {
+			return fmt.Errorf("%w: %s on %s, but the row is now %s", ErrInvalidTransition, ev, snapshot.State, row.State)
+		}
+		row.State = next
+		if incident.IsTerminal(next) && row.ResolvedAt == 0 {
+			row.ResolvedAt = resolvedAt
+		}
+		return nil
+	})
+	if err != nil {
+		return cur, fmt.Errorf("project state: %w", err)
 	}
-	if err := e.st.PutIncident(inc); err != nil {
-		return inc, fmt.Errorf("project state: %w", err)
-	}
+	inc = cur
 
 	// Entering L1 from the cancel window starts the ladder.
 	if isL1(next) && (ev == incident.EventCancelWindowExpired) {
@@ -1050,6 +1112,14 @@ func (e *Engine) applyEvent(ctx context.Context, inc store.Incident, ev incident
 	e.log.Info("transition", "incident", inc.ID, "event", ev,
 		"from", detail["from"], "to", next, "policyVersion", inc.PolicyVersion)
 	return inc, nil
+}
+
+// moved reports whether the row a transition was decided from has since been
+// transitioned or claimed by somebody else. State and owner are the two fields
+// every transition in this package is conditioned on; the rest of the row
+// (clocks, flags, cell) is written field-by-field through UpdateIncident.
+func moved(snapshot, current store.Incident) bool {
+	return current.State != snapshot.State || current.OwnerMemberID != snapshot.OwnerMemberID
 }
 
 func (e *Engine) appendInfo(inc store.Incident, kind string, detail map[string]any) error {
@@ -1082,14 +1152,15 @@ func (e *Engine) publishIncident(inc store.Incident, kind string, prio notify.Pr
 	if err := e.bus.Publish(notify.StreamSubject(inc.FamilyID), f.Encode()); err != nil {
 		e.log.Error("state_publish_failed", "incident", inc.ID, "type", kind, "err", err)
 	}
-	// Neighbours see the state machine move, never the sealed detail (F-20).
-	rf := notify.Frame{
-		V: notify.FrameVersion, Type: kind, Priority: prio,
-		FamilyID: inc.FamilyID, IncidentID: inc.ID, At: f.At, Reduced: true,
-		Data: map[string]any{
-			"state": string(inc.State), "trigger": inc.Trigger,
-			"coarseCell": inc.CoarseH3R7, "isDrill": inc.IsDrill,
-		},
+	// Neighbours see the state machine move, never the sealed detail (F-20) —
+	// and never the duress bit, which is why the state goes through
+	// notify.ReducedFrame: ACTIVE_L1_SILENT is spelt ACTIVE_L1 on that feed.
+	rf, err := notify.ReducedFrame(kind, prio, inc, f.At, map[string]any{
+		"trigger": inc.Trigger, "coarseCell": inc.CoarseH3R7,
+	})
+	if err != nil {
+		e.log.Error("reduced_state_frame_refused", "incident", inc.ID, "err", err)
+		return
 	}
 	if err := e.bus.Publish(notify.ReducedSubject(inc.FamilyID), rf.Encode()); err != nil {
 		e.log.Warn("reduced_state_publish_failed", "incident", inc.ID, "err", err)
@@ -1145,3 +1216,31 @@ func (h *hlcClock) next(now time.Time) string {
 	copy(b[8:], h.node[:])
 	return hex.EncodeToString(b[:])
 }
+
+// observe is the receive half of the hybrid logical clock: seeing a stamp
+// from a device advances this clock to it, so the next server-stamped row
+// sorts AFTER the device's, whatever the two wall clocks say. Without it a
+// phone three minutes fast produces an open that every server transition —
+// CANCEL_WINDOW_EXPIRED, L1, CLAIM — sorts before in the timeline, which is
+// the reordering P-052 exists to prevent. The mobile has had this half since
+// core/ids.ts observeHlc; this is its mirror. Malformed input is ignored: a
+// stamp we cannot read cannot be allowed to move the clock.
+func (h *hlcClock) observe(remote string) {
+	b, err := hex.DecodeString(remote)
+	if err != nil || len(b) < 8 {
+		return
+	}
+	phys := int64(b[0])<<40 | int64(b[1])<<32 | int64(b[2])<<24 |
+		int64(b[3])<<16 | int64(b[4])<<8 | int64(b[5])
+	logical := uint16(b[6])<<8 | uint16(b[7])
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if phys > h.physical || (phys == h.physical && logical > h.logical) {
+		h.physical, h.logical = phys, logical
+	}
+}
+
+// ObserveHLC feeds a device-originated stamp into the engine's clock. The bus
+// projector that ingests an envelope calls it with the envelope's HLC before
+// the engine stamps anything of its own for that incident.
+func (e *Engine) ObserveHLC(remote string) { e.hlc.observe(remote) }

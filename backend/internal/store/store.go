@@ -734,6 +734,38 @@ func (s *Store) Incident(id string) (Incident, bool) {
 	return *i, true
 }
 
+// UpdateIncident is the read-modify-write primitive: mutate runs on the CURRENT
+// row under the store lock and the result is persisted only if it returns nil.
+// It exists because PutIncident is a blind `*row = i`: a caller that read the
+// row, did slow work (a fan-out, an HTTP round trip) and then wrote its copy
+// back would erase whatever landed in between — the responder's CLAIM under an
+// escalation worker's NO_ACK is the case that loses an owner. The engine's
+// compare-and-swap is written as a mutate that checks the row and refuses.
+// The returned Incident is the row as persisted (or as found, on refusal).
+func (s *Store) UpdateIncident(id string, mutate func(*Incident) error) (Incident, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.incidentByID[id]
+	if !ok {
+		return Incident{}, ErrNotFound
+	}
+	next := *row
+	if err := mutate(&next); err != nil {
+		return *row, err
+	}
+	if row.Inc8 != "" {
+		delete(s.incidentInc8, row.FamilyID+"|"+row.Inc8)
+	}
+	*row = next
+	if row.Inc8 != "" {
+		s.incidentInc8[row.FamilyID+"|"+row.Inc8] = row
+	}
+	if err := s.persist(tIncident); err != nil {
+		return *row, err
+	}
+	return *row, nil
+}
+
 // IncidentByInc8 is the F-09 reconciliation index: the same emergency arriving
 // by SMS and by HTTP must land on one incident, not two.
 func (s *Store) IncidentByInc8(familyID, inc8 string) (Incident, bool) {
@@ -817,7 +849,20 @@ func (s *Store) AppendEvent(e Event) error {
 	s.t.IncidentEvents = append(s.t.IncidentEvents, &row)
 	s.eventsByInc[row.IncidentID] = append(s.eventsByInc[row.IncidentID], &row)
 	s.eventDedupe[key] = struct{}{}
-	return s.persist(tIncidentEvent)
+	if err := s.persist(tIncidentEvent); err != nil {
+		// Roll the in-memory row back so the caller's retry is a real retry.
+		// Leaving the dedupe key in place would make every redelivery answer
+		// "duplicate" for a row that exists only in this process's memory: the
+		// bus cursor advances, and the accountability record (I-4) is lost the
+		// moment the process dies without a graceful Flush.
+		s.t.IncidentEvents = s.t.IncidentEvents[:len(s.t.IncidentEvents)-1]
+		byInc := s.eventsByInc[row.IncidentID]
+		s.eventsByInc[row.IncidentID] = byInc[:len(byInc)-1]
+		delete(s.eventDedupe, key)
+		s.nextEventID--
+		return err
+	}
+	return nil
 }
 
 func (s *Store) HasEvent(incidentID, hlc string) bool {
@@ -1029,15 +1074,62 @@ func (s *Store) RevokeGrant(id string) error {
 }
 
 func (s *Store) AppendAccess(a Access) error {
+	_, err := s.AppendAccessID(a)
+	return err
+}
+
+// AppendAccessID is AppendAccess returning the id the store assigned to the
+// row. The consent module hands that id back to the caller (Decision.AccessLogID)
+// so a session can be tied to the exact read it was logged as; scanning the
+// family's log for the highest id afterwards names somebody else's row under
+// two concurrent checks.
+func (s *Store) AppendAccessID(a Access) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireFamily(a.FamilyID); err != nil {
-		return err
+		return 0, err
 	}
 	s.nextAccessID++
 	row := a
 	row.ID = s.nextAccessID
 	s.t.AccessLogRows = append(s.t.AccessLogRows, &row)
+	if err := s.persist(tAccessLog); err != nil {
+		// Same rule as AppendEvent: the row must not outlive a failed persist in
+		// memory only, or the retry that would have saved it is skipped.
+		s.t.AccessLogRows = s.t.AccessLogRows[:len(s.t.AccessLogRows)-1]
+		s.nextAccessID--
+		return 0, err
+	}
+	return row.ID, nil
+}
+
+// MarkAccessSurfaced flips surfaced_to_subject on the named rows. The access
+// log is append-only for its ACCOUNTABILITY fields — who, whom, what, when —
+// and this flag is not one of them: the migration models it as the row's live
+// state (access_log_unsurfaced_idx WHERE NOT surfaced_to_subject), and a
+// consumer of the column that only ever saw false would conclude the subject
+// was never told. Ids that are not in the family, or already surfaced, are
+// skipped, so a redelivery is harmless.
+func (s *Store) MarkAccessSurfaced(familyID string, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	want := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for _, a := range s.t.AccessLogRows {
+		if a.FamilyID == familyID && want[a.ID] && !a.SurfacedToSubject {
+			a.SurfacedToSubject = true
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
 	return s.persist(tAccessLog)
 }
 

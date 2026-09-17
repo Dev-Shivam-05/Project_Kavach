@@ -3,39 +3,116 @@ package consent
 import (
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/kavach/backend/internal/store"
 )
 
 // fakeStore is the smallest thing satisfying the Store interface — no files,
-// no real backing store, just enough to observe what Grant() writes.
+// no real backing store, just enough to observe what the service writes. It is
+// deliberately CONTROLLABLE: appendErr makes the access log unwritable so the
+// fail-closed branch in Check is reachable, and members decides who is in the
+// family so Grant's membership check has something to refuse.
 type fakeStore struct {
-	grants []store.Grant
+	mu        sync.Mutex
+	members   map[string][]store.Member // familyID → members
+	grants    []store.Grant
+	access    []store.Access
+	nextID    int64
+	appendErr error
+	revoked   map[string]int64
 }
 
-func (f *fakeStore) Members(string) []store.Member { return nil }
-func (f *fakeStore) Families() []store.Family      { return nil }
+func newFakeStore() *fakeStore {
+	return &fakeStore{members: map[string][]store.Member{}, revoked: map[string]int64{}}
+}
+
+func (f *fakeStore) Members(familyID string) []store.Member { return f.members[familyID] }
+func (f *fakeStore) Families() []store.Family {
+	var out []store.Family
+	for id := range f.members {
+		out = append(out, store.Family{ID: id})
+	}
+	return out
+}
 func (f *fakeStore) Grants(familyID string) []store.Grant {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := make([]store.Grant, 0, len(f.grants))
 	for _, g := range f.grants {
 		if g.FamilyID == familyID {
+			if at, ok := f.revoked[g.ID]; ok {
+				g.RevokedAt = at
+			}
 			out = append(out, g)
 		}
 	}
 	return out
 }
 func (f *fakeStore) PutGrant(g store.Grant) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.grants = append(f.grants, g)
 	return nil
 }
-func (f *fakeStore) RevokeGrant(string) error        { return nil }
-func (f *fakeStore) AccessLog(string) []store.Access { return nil }
-func (f *fakeStore) AppendAccess(store.Access) error { return nil }
+func (f *fakeStore) RevokeGrant(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.revoked[id]; !ok {
+		f.revoked[id] = 1
+	}
+	return nil
+}
+func (f *fakeStore) AccessLog(familyID string) []store.Access {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.Access
+	for _, a := range f.access {
+		if a.FamilyID == familyID {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+func (f *fakeStore) AppendAccessID(a store.Access) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.appendErr != nil {
+		return 0, f.appendErr
+	}
+	f.nextID++
+	a.ID = f.nextID
+	f.access = append(f.access, a)
+	return a.ID, nil
+}
+func (f *fakeStore) MarkAccessSurfaced(familyID string, ids []int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := map[int64]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	for i := range f.access {
+		if f.access[i].FamilyID == familyID && want[f.access[i].ID] {
+			f.access[i].SurfacedToSubject = true
+		}
+	}
+	return nil
+}
+
+// seedFamily puts the two members every Grant test needs into fam-1.
+func seedFamily(fs *fakeStore) {
+	fs.members["fam-1"] = []store.Member{
+		{ID: "member-a", FamilyID: "fam-1", Role: "adult"},
+		{ID: "member-b", FamilyID: "fam-1", Role: "adult"},
+	}
+}
 
 func newTestService(t *testing.T) (*Service, *fakeStore) {
 	t.Helper()
-	fs := &fakeStore{}
+	fs := newFakeStore()
+	seedFamily(fs)
 	svc, err := New(Deps{
 		Store:   fs,
 		Publish: func(string, []byte) error { return nil },

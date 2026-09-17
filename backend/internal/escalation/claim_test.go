@@ -61,6 +61,23 @@ func (f *fakeStore) PutIncident(inc store.Incident) error {
 	return nil
 }
 
+// UpdateIncident mirrors store.UpdateIncident: mutate on the current row under
+// the lock, persist only on nil. The engine's compare-and-swap rides on it.
+func (f *fakeStore) UpdateIncident(id string, mutate func(*store.Incident) error) (store.Incident, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.incidents[id]
+	if !ok {
+		return store.Incident{}, store.ErrNotFound
+	}
+	next := row
+	if err := mutate(&next); err != nil {
+		return row, err
+	}
+	f.incidents[id] = next
+	return next, nil
+}
+
 func (f *fakeStore) AppendEvent(e store.Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
