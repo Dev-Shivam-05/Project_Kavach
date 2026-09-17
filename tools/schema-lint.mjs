@@ -41,8 +41,36 @@ const SUBSTRING_TERMS = ['latitude', 'longitude', 'address', 'precise'];
  * escalation_timer and latency_ms and `lon` rejects colon — and a lint that
  * rejects escalation_timer is a lint somebody switches off. Word matching still
  * catches lat, user_lat, userLat, loc_lat and locLat.
+ *
+ * `lng` is the other common spelling of longitude (Google's APIs, Leaflet, most
+ * JS map libraries) and `gps` names a fix by its source; a column called
+ * `lng REAL` or `gps_lat` is precise location as surely as `lon` is, and until
+ * 6 Sep both passed this lint clean. The Go log deny-list (`internal/logx`)
+ * carries the same word list for I-6 — keep the two in step.
  */
-const WORD_TERMS = ['lat', 'lon'];
+const WORD_TERMS = ['lat', 'lon', 'lng', 'gps'];
+
+/**
+ * A lint whose term list is decorative reports "clean" — which is worse than no
+ * lint. These spellings pin the list before any file is scanned: the first set
+ * MUST be caught (with the term that catches them), the second MUST NOT be, or
+ * the run stops before it can vouch for anything.
+ */
+const MUST_HIT = {
+  lat: 'lat',
+  user_lat: 'lat',
+  userLat: 'lat',
+  loc_lon: 'lon',
+  locLon: 'lon',
+  lng: 'lng',
+  userLng: 'lng',
+  loc_lng: 'lng',
+  gps_fix: 'gps',
+  subjectLatitude: 'latitude',
+  home_address: 'address',
+  precise_cell: 'precise',
+};
+const MUST_PASS = ['escalation_timer', 'latency_ms', 'colon', 'coarse_h3_r7', 'longevity', 'plng_x'];
 
 /**
  * The Class-A′ allowlist (§2.4.6). Every entry is a name that looks like precise
@@ -179,6 +207,23 @@ function goStructFields(src) {
     }
   }
   return out;
+}
+
+// ── self-check: the term list is not decorative ───────────────────────────────
+{
+  const broken = [];
+  for (const [name, term] of Object.entries(MUST_HIT)) {
+    if (hit(name) !== term) broken.push(`'${name}' should match '${term}', got ${JSON.stringify(hit(name))}`);
+  }
+  for (const name of MUST_PASS) {
+    if (hit(name) !== null) broken.push(`'${name}' is legitimate and must not match, got '${hit(name)}'`);
+  }
+  if (broken.length) {
+    console.error('\nschema-lint FAILED its own self-check — the term list no longer means what it says\n');
+    for (const b of broken) console.error(`  ${b}`);
+    console.error('');
+    process.exit(1);
+  }
 }
 
 // ── run ───────────────────────────────────────────────────────────────────────

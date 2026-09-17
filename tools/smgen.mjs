@@ -7,7 +7,7 @@
  * Emits   mobile/src/t0/stateMachine.generated.ts
  *         backend/internal/incident/machine_gen.go
  *         backend/internal/incident/machine_gen_test.go   (conformance fixtures)
- *         mobile/src/t0/__tests__/stateMachine.fixtures.json
+ *         mobile/src/t0/__generated__/fixtures.json          (conformance fixtures)
  *
  * PRD §7.5: "The machine is implemented twice ... Both are generated from ONE
  * shared table of transitions checked into the repo as YAML, with a code
@@ -120,7 +120,12 @@ function emitTS() {
   }
   L.push(`];`);
   L.push(``);
-  L.push(`/** Guards the runtime must supply. A missing guard evaluates to TRUE (fail open, ADR-018). */`);
+  L.push(`/**`);
+  L.push(` * Guards the runtime must supply. A guard that is absent evaluates FALSE — the`);
+  L.push(` * guarded transition does not fire — EXCEPT that a transition with no guard`);
+  L.push(` * always applies. Identical to the Go \`Guards\` semantics; ADR-018's fail-open`);
+  L.push(` * is a property of the INGEST path, not of the machine.`);
+  L.push(` */`);
   L.push(`export type GuardSet = Partial<Record<string, boolean>>;`);
   L.push(``);
   L.push(`/**`);

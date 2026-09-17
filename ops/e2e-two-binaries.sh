@@ -5,9 +5,10 @@
 #   bash ops/e2e-two-binaries.sh /tmp/kavach-e2e
 #
 # This is ops/docker-compose.yml with the containers taken away: sos-ingest and
-# control-plane as two separate OS processes, both pointed at ONE
-# KAVACH_BUS_DIR, and one real SOS posted to sos-ingest's actual HTTP front
-# door. It exists because every other piece of evidence for D-027 is a Go test,
+# control-plane as two separate OS processes, both pointed at ONE bus directory
+# (sos-ingest owns it as <KAVACH_SOS_DATA>/bus; control-plane is handed the same
+# path as KAVACH_BUS_DIR), and one real SOS posted to sos-ingest's actual HTTP
+# front door. It exists because every other piece of evidence for D-027 is a Go test,
 # and a Go test cannot answer "do the two BINARIES talk".
 #
 # What a good run looks like (~40 s):

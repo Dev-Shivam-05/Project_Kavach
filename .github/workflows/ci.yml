@@ -1,10 +1,11 @@
-# The eight day-one gates (§3.2). Each is a separate named step, so a red build
-# says which invariant broke without anyone opening a log.
+# The eight day-one gates (§3.2), plus protolint (9), the env-var doc check (10)
+# and — as a separate job — the Kotlin compile that no dev machine here can run.
+# Each is a separate named step, so a red build says which invariant broke
+# without anyone opening a log.
 #
 # Every gate step carries `if: ${{ !cancelled() }}` deliberately: a gate failing
-# must not hide the state of the other seven. These are properties, not a
-# pipeline — knowing that three of them are red is worth more than knowing the
-# first one is.
+# must not hide the state of the others. These are properties, not a pipeline —
+# knowing that three of them are red is worth more than knowing the first one is.
 name: CI
 
 on:
@@ -67,18 +68,19 @@ jobs:
         working-directory: backend
         run: go vet ./...
 
-      - name: 'Gate 1b — staticcheck (SKIPPED, and said so, if it cannot be installed)'
+      - name: 'Gate 1b — staticcheck (FAILS the build if it cannot be installed)'
         if: ${{ !cancelled() }}
         working-directory: backend
         # @latest rather than a pin: staticcheck releases track Go releases, and a
         # pin here is a pin to a version that may not parse the language version
-        # we compile with. If the install fails the step reports a skip — it does
-        # not report a pass, and it does not disappear.
+        # we compile with. Until 6 Sep an install failure was a warning and
+        # `exit 0`, so a green build did not prove staticcheck ran (RISK S2.5).
+        # staticcheck is one of only three static-analysis surfaces this repo
+        # has; a day the module proxy is down is a red build, not a quiet skip.
         run: |
           if ! go install honnef.co/go/tools/cmd/staticcheck@latest; then
-            echo "::warning title=Gate 1b staticcheck SKIPPED::staticcheck could not be installed, so it did NOT run. go vet (Gate 1a) still ran. Treat this gate as unverified, not as passed."
-            echo "GATE 1b: staticcheck SKIPPED — go install failed. NOT a pass."
-            exit 0
+            echo "::error title=Gate 1b staticcheck NOT RUN::staticcheck could not be installed, so it did NOT run. A green Gate 1b must mean staticcheck ran — this is a failed gate, not a skipped one. Re-run the job; if the install keeps failing, pin a version that parses Go $(go env GOVERSION)."
+            exit 1
           fi
           "$(go env GOPATH)/bin/staticcheck" ./...
 
@@ -135,3 +137,76 @@ jobs:
       - name: 'Gate 9 — proto contract is additive-only (I-13, §8.4)'
         if: ${{ !cancelled() }}
         run: node tools/protolint.mjs
+
+      # ── Gate 10 ──────────────────────────────────────────────────────────────
+      # ops/README.md §5 is "the reference an operator is told to trust". It had
+      # drifted from the binaries four variables deep by 6 Sep (RISK-adjacent,
+      # ops-13). This keeps every KAVACH_* a Go binary reads on that table.
+      - name: 'Gate 10 — every KAVACH_* the binaries read is in ops/README.md §5'
+        if: ${{ !cancelled() }}
+        run: node tools/envlint.mjs
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ★ THE FIRST RUN OF A GATE THE DEV MACHINE CANNOT EXECUTE ★
+  #
+  # `mobile/modules/kavach-t0/android/` is the entire Tier-0 survival plane —
+  # foreground service, Direct Boot receivers, KeyVault, silent multi-SIM SMS —
+  # and until this job it was checked by NOTHING that compiles: the dev machine
+  # has no Android SDK (D-021), `native-bridge.test.ts` compares names by regex,
+  # and the nine gates above are Go, TypeScript and Node. A Kotlin file with a
+  # syntax error could sit on `main` with every gate green.
+  #
+  # ubuntu-latest has a JDK and an Android SDK, so this job generates the android
+  # project with `expo prebuild` and compiles the app's Kotlin — which links the
+  # local module from source (`canBePublished false` in its build.gradle), so a
+  # broken KavachT0Module.kt fails here. It is a SEPARATE job on purpose: the
+  # nine day-one gates must keep reporting independently of a toolchain that has
+  # never run against this repository before. If this job's first run is red for
+  # toolchain reasons, fix the job — do not mark it continue-on-error, that is
+  # the "gate that never runs" this workflow exists to end.
+  #
+  # Compile only, no APK: `compileReleaseKotlin` needs neither the JS bundle nor
+  # the NDK, which keeps this to the question it can answer (does the Kotlin
+  # compile) rather than the one EAS answers (does the build ship).
+  # ───────────────────────────────────────────────────────────────────────────
+  kotlin:
+    name: 'Gate K — Tier-0 Kotlin compiles (UNVERIFIED LOCALLY — no Android SDK on the dev machine; this job is the first place it runs)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Generate the android project (expo prebuild — the same step EAS runs)
+        working-directory: mobile
+        env:
+          CI: '1'
+          EXPO_NO_TELEMETRY: '1'
+        # --no-install: node_modules are already there and there is no pod step
+        # on Android. `mobile/android/` is gitignored, so this is always a fresh
+        # generation from app.json + the config plugins.
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Compile the Kotlin (app + modules/kavach-t0, linked from source)
+        working-directory: mobile/android
+        run: ./gradlew :app:compileReleaseKotlin --no-daemon --console=plain

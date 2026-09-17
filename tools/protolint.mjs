@@ -357,8 +357,19 @@ if (UPDATE) {
     console.log(`  ✔ ${path.relative(ROOT, LOCK)} updated`);
   }
 } else if (additions.length) {
-  console.log('  additive changes (allowed) — run --update to record them:');
-  for (const a of additions) console.log(`    + ${a}`);
+  // An addition is allowed on the wire and is still a FAILURE here. The lock is
+  // the only memory this tool has: a field the lock never learned can be
+  // renumbered or deleted in the next commit and nothing will notice — which is
+  // "reused number", the worst of the four failures in the header. Recording the
+  // addition is a deliberate act (`--update`, committed with the proto), and a
+  // check that quietly forgives the missing act is not a gate.
+  console.error('✖ proto/incident.proto has additions the lock does not know about:\n' + additions.map((a) => '  + ' + a).join('\n'));
+  console.error(
+    '\nAdditive changes are allowed, but they must be RECORDED or the next change to\n' +
+      'them is invisible. Run `node tools/protolint.mjs --update` and commit\n' +
+      'proto/.incident.lock.json alongside the proto.',
+  );
+  process.exit(1);
 }
 
 console.log(

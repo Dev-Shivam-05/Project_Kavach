@@ -6,7 +6,11 @@
   "type": "module",
   "scripts": {
     "gen": "node tools/smgen.mjs",
-    "gen:check": "node tools/smgen.mjs --check"
+    "gen:check": "node tools/smgen.mjs --check",
+    "lint:schema": "node tools/schema-lint.mjs",
+    "lint:proto": "node tools/protolint.mjs",
+    "lint:env": "node tools/envlint.mjs",
+    "lint": "npm run lint:schema && npm run lint:proto && npm run lint:env"
   },
   "devDependencies": {
     "js-yaml": "^4.1.0"

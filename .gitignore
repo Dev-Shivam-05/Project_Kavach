@@ -34,6 +34,16 @@ data/
 # built APKs — never commit binaries (RISK 11)
 *.apk
 
+# ── Compiled Go binaries ──────────────────────────────────────────────────────
+# `go build` inside backend/ drops a .exe at the package root on Windows, and the
+# GOTMPDIR workaround in CLAUDE.md (`go test -c -o .gotmp/…`, `GOTMPDIR=…/.gotmp`)
+# leaves test binaries and their fixture directories under backend/.gotmp/.
+# Both were tracked once — backend/canary.exe (10 MB, stale since 26 Jul) and two
+# *.test.exe plus WAL fixtures (RISK 11) — riding every clone and every EAS
+# upload. run-backend.ps1 builds into bin/, which is already ignored above.
+*.exe
+.gotmp/
+
 # ── Firebase / FCM ────────────────────────────────────────────────────────────
 # ★ The SERVICE ACCOUNT KEY is a real secret and must never be committed. ★ It
 # authorises sending a push to every device in every family this project owns.

@@ -37,16 +37,22 @@ minutes. Afterwards the layer cache makes it seconds.
 ### Without Docker
 
 ```powershell
-pwsh ops/run-backend.ps1 -Build   # build the four binaries into ./bin
+pwsh ops/run-backend.ps1          # build into ./bin and start all four
+pwsh ops/run-backend.ps1 -Build   # build only
 pwsh ops/run-backend.ps1 -Stop    # stop whatever is running
 ```
 
-> **Known gap in `run-backend.ps1`.** Its start path passes `-addr` and `-data`
-> to all four binaries, but `realtime-gw` and `canary` define neither `-data`
-> (they take `-bus`) and `canary` defines no `-addr` (it takes `-metrics`).
-> Both exit immediately with `flag provided but not defined`. Until the script
-> is fixed, use `-Build` and start them by hand — the env vars below are the
-> same ones the compose file sets, so the two paths stay in agreement:
+The script keeps everything under `./data` (`-DataDir` moves it) and starts the
+four processes with the flags each one actually defines — `sos-ingest` first,
+because if the safety path is not up nothing else matters. Two seconds after
+launch it re-checks that all four are still alive, and if one is gone it exits
+non-zero naming the `.log.err` to read instead of printing "running". (Until
+6 Sep it passed `-addr`/`-data` to all four; `realtime-gw` and `canary` define
+neither and died on the spot with the failure only in their log — RISK 13.)
+
+These are the exact arguments it runs, for when you need one binary by hand.
+They agree with the environment the compose file sets, so the two paths never
+disagree about the layout:
 
 ```powershell
 $env:KAVACH_BUS_DIR = "$PWD\data\bus"
@@ -102,10 +108,11 @@ curl http://localhost:8080/internal/active-incidents  # F-02 deploy gate
 
 `bus/` is the file-backed stand-in for NATS JetStream and is the **only** thing
 `sos-ingest` shares with anything downstream: it publishes, the other three
-project. All four services are pointed at that one directory explicitly
-(`KAVACH_BUS_DIR`) rather than by defaulting, because the defaults in the four
-`main.go` files are relative to each process's working directory and silently
-disagree.
+project. `sos-ingest` owns the directory — it is `<KAVACH_SOS_DATA>/bus`, and
+that binary reads no `KAVACH_BUS_DIR` at all. The other three are pointed at
+that exact directory explicitly (`KAVACH_BUS_DIR`, or `-bus`) rather than by
+defaulting, because their defaults are relative to each process's working
+directory and silently disagree.
 
 **Why a directory of cursor files instead of one JSON map** (D-027): the map was
 read-modify-written by every process, and two that read before either renamed
@@ -121,8 +128,9 @@ To watch the seam work, without Docker:
 bash ops/e2e-two-binaries.sh /tmp/kavach-e2e
 ```
 
-It runs `sos-ingest` and `control-plane` as two processes on one `KAVACH_BUS_DIR`
-and posts a real SOS; the control plane should log `ingest_incident_projected`
+It runs `sos-ingest` and `control-plane` as two processes on one bus directory
+(`<KAVACH_SOS_DATA>/bus`, handed to the control plane as `KAVACH_BUS_DIR`) and
+posts a real SOS; the control plane should log `ingest_incident_projected`
 and then climb `PENDING → ACTIVE_L1`, ending in `fanout … devices=1`.
 
 Since 21 Aug (W10-j) it seeds nothing by hand. The family, two members and two
@@ -211,7 +219,6 @@ You want something like `192.168.1.42` or `10.0.0.7` — never `127.0.0.1`, neve
   "apiBase":   "http://192.168.1.42:8081",   // sos-ingest, primary
   "apiDirect": "http://192.168.1.42:8081",   // sos-ingest, CDN bypass (F-05)
   "wsBase":    "ws://192.168.1.42:8082",     // realtime-gw
-  "demoMode":  "false",                       // ← stop faking it, use the network
   "eas": {}
 }
 ```
@@ -223,14 +230,28 @@ hot reload will not pick it up:
 cd mobile && npx expo start -c
 ```
 
+### Or set it at build time (release builds, EAS)
+
+`app.json` is the same in every build profile, so a release APK would ship the
+emulator's hosts. `mobile/src/core/config.ts` reads `EXPO_PUBLIC_*` first and
+falls back to `extra`; they are inlined at bundle time, so a build profile can
+point a real build at a real host without editing `app.json`:
+
+| Env (build time) | Sets |
+|---|---|
+| `EXPO_PUBLIC_KAVACH_API` | `apiBase` — sos-ingest, primary |
+| `EXPO_PUBLIC_KAVACH_API_DIRECT` | `apiDirect` — sos-ingest, CDN bypass |
+| `EXPO_PUBLIC_KAVACH_CONTROL` | `controlBase` — the control plane |
+| `EXPO_PUBLIC_KAVACH_WS` | `wsBase` — realtime-gw |
+
 ### Three things that will bite you
 
-1. **`demoMode` defaults to `"true"`, and that is not a mock.** With it on, the
-   app runs the whole L0 floor locally: incidents open, the state machine runs,
-   the alarm sounds, the escalation ladder advances on real timers and simulated
-   responders claim. Nothing here has to be running. Set it to `"false"` only
-   when you specifically want to exercise the network path — and expect the app
-   to keep working when you then kill the backend, because that is the point.
+1. **There is no demo mode, and no backend means no fan-out — not a fake one.**
+   `demoMode` and its simulated responders were deleted on 22 Aug (RISK 1): the
+   app never fabricates a claim. With the backend down an SOS is still real on
+   the device — the state machine, the alarm, the SMS leg and the black box all
+   run locally — and the network legs report their failure honestly. Expect the
+   app to keep working when you kill the backend, because that is the point.
 
 2. **`apiBase` and `apiDirect` are meant to be two different origins.** F-05:
    the client fires **both concurrently** on the critical path so that a CDN
@@ -239,17 +260,17 @@ cd mobile && npx expo start -c
    Pointing both at one LAN address is correct for local testing and wrong for
    production.
 
-3. **`controlBase` is currently derived from `apiBase`** — see
-   `mobile/src/core/config.ts`:
+3. **`controlBase` falls back to `apiBase` when neither `EXPO_PUBLIC_KAVACH_CONTROL`
+   nor its own value is set** — `mobile/src/core/config.ts`:
 
    ```ts
-   controlBase: extra.apiBase ?? 'http://10.0.2.2:8080',
+   controlBase: env('EXPO_PUBLIC_KAVACH_CONTROL') ?? extra.apiBase ?? 'http://10.0.2.2:8080',
    ```
 
-   So setting `apiBase` also moves the control-plane base to port **8081**,
-   where nothing answers `/v1/...`. For LAN testing of control-plane endpoints,
-   put one reverse proxy in front of both services on a single origin and set
-   `apiBase` to that. The demo path is unaffected.
+   So setting only `apiBase` in `app.json` moves the control-plane base to port
+   **8081**, where nothing answers `/v1/...`. For LAN testing of control-plane
+   endpoints set `EXPO_PUBLIC_KAVACH_CONTROL=http://<lan-ip>:8080` at build
+   time, or put one reverse proxy in front of both services on a single origin.
 
 ### Building an installable APK
 
@@ -268,34 +289,56 @@ directly.
 ## 5. Configuration reference
 
 Every value below is read from the environment by the Go binaries; the compose
-file sets the ones that need to differ from their defaults.
+file sets the ones that need to differ from their defaults. **This table is
+checked, not trusted:** `node tools/envlint.mjs` (CI Gate 10, `npm run lint`)
+fails if a `KAVACH_*` literal in `backend/` has no row here, if a row names a
+variable nothing reads, or if the compose file sets one the code ignores.
+"Service" is which binary reads it — through `internal/logx` or
+`internal/notify` where it says so.
 
 | Variable | Service | Default here | Notes |
 |---|---|---|---|
 | `KAVACH_SOS_ADDR` | sos-ingest | `:8081` | |
-| `KAVACH_SOS_DATA` | sos-ingest | `/var/lib/kavach` | owns `sos.wal`, `bus/`, `store/` |
+| `KAVACH_SOS_DATA` | sos-ingest | `/var/lib/kavach` | owns `sos.wal`, `bus/`, `store/`. **sos-ingest reads no `KAVACH_BUS_DIR`** — its bus is `<KAVACH_SOS_DATA>/bus`, and the three below are pointed at that exact path. |
 | `KAVACH_SMS_GATEWAY_SECRET` | sos-ingest | *(unset)* | HMAC on inbound SMS webhooks (F-09). Unsigned callbacks are rejected once set. |
-| `KAVACH_CP_ADDR` | control-plane | `:8080` | binary's own default is `:8081` — always set it |
-| `KAVACH_DATA_DIR` | control-plane | `/var/lib/kavach/control-plane` | |
+| `KAVACH_CP_ADDR` | control-plane | `:8080` | set it explicitly; do not rely on the binary's own default |
+| `KAVACH_DATA_DIR` | control-plane | `/var/lib/kavach/control-plane` | the control plane's **own** store — never sos-ingest's directory (D-028) |
 | `KAVACH_DRAIN` | control-plane | `3s` | readiness drain before the listener closes |
 | `KAVACH_ESCALATION_WORKERS` | control-plane | `3` | F-13: no leader, N competing workers |
+| `KAVACH_SMS_CEILING` | control-plane | `2000` (`notify.DefaultSMSCeiling`) | SMS units per family per month before fan-out stops sending and pages once (§2.8.3 `notify_budget`). `0` or unset → the default. |
+| `KAVACH_DEPLOY_OVERRIDE` | control-plane | *(unset)* | F-02. A non-empty reason makes `GET /internal/active-incidents` report `active: []` with `overridden: true` while a real incident would have blocked the deploy; logged at WARN, published to `ops.deploy_override` (P1) and the audit stream. The request header `X-Kavach-Deploy-Override` does the same per call. |
+| `KAVACH_FCM_CREDENTIALS` | control-plane (`internal/notify`) | *(unset)* | **Path inside the container** to a Google service-account JSON key with the FCM API enabled (F-21, W10-a). Unset → every push is recorded `KV-NOPUSHCFG`; SMS is the last leg to a human. With compose, do not set this directly — export `KAVACH_FCM_CREDENTIALS_FILE=<host path>` and the recipe mounts it as a secret and points this at it. |
 | `KAVACH_RT_ADDR` | realtime-gw | `:8082` | |
 | `KAVACH_RT_ALLOW_NO_TICKET` | realtime-gw | `0` | `1` accepts unauthenticated sockets. Debugging aid, never a deployment (F-16). |
-| `KAVACH_CANARY_METRICS_ADDR` | canary | `:9090` | binary's own default is `:9101` |
+| `KAVACH_RT_DEV_FAMILY` | realtime-gw | *(unset)* | only with `KAVACH_RT_ALLOW_NO_TICKET=1`: the family id a ticket-less socket is treated as belonging to (device and member are stamped `dev`). |
+| `KAVACH_CANARY_METRICS_ADDR` | canary | `:9090` | set it explicitly; do not rely on the binary's own default |
 | `KAVACH_CANARY_INTERVAL` | canary | `15m` | |
-| `KAVACH_API_BASE` | canary | `http://control-plane:8080` | |
+| `KAVACH_CANARY_DEVICE_ID` | canary | *(unset)* | the device that plays the responder in the synthetic incident. Unset → the family's first enrolled device. |
+| `KAVACH_API_BASE` | canary | `http://control-plane:8080` | the **control plane**, not sos-ingest — the canary enrols and claims through `/v1/…` |
 | `KAVACH_PAGE_URL` | canary | *(unset)* | P0 webhook — ntfy topic, Telegram bot, PagerDuty events URL. Unset means failures are logged and never page anyone: correct for a laptop, wrong for production. |
-| `KAVACH_BUS_DIR` | all four | `/var/lib/kavach/bus` | the seam |
+| `KAVACH_BUS_DIR` | control-plane, realtime-gw, canary | `/var/lib/kavach/bus` | the seam. Must equal `<KAVACH_SOS_DATA>/bus` — sos-ingest does not read this variable. |
 | `KAVACH_API_TOKEN` | control-plane, canary | *(unset)* | empty disables bearer auth. Compose feeds the same host value to both so they cannot drift apart. |
-| `KAVACH_DEV` | all four | `1` | `0` switches to the JSON production formatter |
+| `KAVACH_DEV` | realtime-gw, canary | `1` | `1` = developer logging: a PII deny-list hit (I-6) **panics**. `0` = JSON production formatter: the hit is redacted and counted. Compose sets one value for all four containers. |
+| `KAVACH_ENV` | sos-ingest, control-plane (`internal/logx`) | *(unset)* | `production` = the redact-and-count formatter; anything else is development and panics on a deny-list hit. ★ **Two names for the one switch.** `logx.Dev()` reads this, the other two binaries read `KAVACH_DEV`, and the compose file sets only `KAVACH_DEV` — so today `KAVACH_DEV=0` alone leaves sos-ingest and control-plane in panic-on-PII mode. Being unified (audit ops-6); until it is, a production deployment must set **both** `KAVACH_DEV=0` and `KAVACH_ENV=production`. |
 
 Overrides go in the environment, not in the compose file:
 
 ```bash
 KAVACH_API_TOKEN=$(openssl rand -hex 32) \
 KAVACH_PAGE_URL=https://ntfy.sh/kavach-pages-a8f3 \
+KAVACH_FCM_CREDENTIALS_FILE=/etc/kavach/fcm-credentials.json \
+KAVACH_DEV=0 \
   docker compose -f ops/docker-compose.yml up -d
 ```
+
+The FCM key is the one value that cannot travel as an environment variable —
+it is a file, and a real secret (`.gitignore` refuses `fcm-credentials*.json`).
+`KAVACH_FCM_CREDENTIALS_FILE` names it on the **host**; the compose recipe
+mounts it read-only at `/run/secrets/fcm-credentials` in the control plane and
+sets `KAVACH_FCM_CREDENTIALS` to that path. Leave the variable unset and the
+secret is `/dev/null` with the env var empty, so the binary takes its
+not-configured branch and never reads the placeholder. The file has to be
+readable by uid `10001`, the container's user.
 
 The builder image is pinned to `golang:1.26-alpine` to match `backend/go.mod`
 (`go 1.26`). Bump both together or neither.
@@ -311,4 +354,5 @@ The builder image is pinned to `golang:1.26-alpine` to match `backend/go.mod`
 | Control-plane 401 on everything | `KAVACH_API_TOKEN` is set on the server but the client is not sending it. |
 | WebSocket closes with 1008 | F-16: connect tickets are single-use and live 60 s. Mint a fresh one via `POST /v1/rt/ticket`. |
 | A deploy is frozen | F-02: `GET /internal/active-incidents`. Canary and drill incidents auto-quiesce to `DORMANT`; a real one blocking a deploy is the gate doing its job. |
-| Data looks stale after a restart | The bus is replayed from `stream.wal` at boot. If two processes were writing to two *different* bus directories, they each replayed their own — check `KAVACH_BUS_DIR` on all four. |
+| Data looks stale after a restart | The bus is replayed from `stream.wal` at boot. If two processes were writing to two *different* bus directories, they each replayed their own — check `KAVACH_BUS_DIR` on control-plane, realtime-gw and canary, and `KAVACH_SOS_DATA` on sos-ingest (its bus is `<KAVACH_SOS_DATA>/bus`). |
+| Every push logs `KV-NOPUSHCFG` | `KAVACH_FCM_CREDENTIALS` is unset, or points at a path the container cannot read. With compose, export `KAVACH_FCM_CREDENTIALS_FILE=<host path to the key>` before `up` (§5). |

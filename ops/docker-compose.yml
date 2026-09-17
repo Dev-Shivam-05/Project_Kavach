@@ -75,8 +75,10 @@ x-common: &common
     #     between containers is therefore a poll, not a push, and 250 ms is a
     #     floor under the t3 clock (ADR-007).
     #   - Seq is the record's position in the FILE. That is what lets one
-    #     container's cursor mean anything to another, and it is why cursors.json
-    #     is merged rather than overwritten.
+    #     container's cursor mean anything to another. Each durable consumer
+    #     keeps its OWN cursor file under bus/cursors/ (one file per durable,
+    #     nobody else writes it — so there is nothing to merge); a cursors.json
+    #     left by a build older than 20 Aug is still read at boot.
     #
     # Proven by two OS processes, not by argument: internal/bus's
     # TestTwoRealProcessesOnOneBusDirectory and internal/wal's
@@ -86,8 +88,12 @@ x-common: &common
     # D-027, and RISK item 18 — nothing creates a family, and both incident
     # projectors drop an incident whose family row is missing.
     KAVACH_BUS_DIR: /var/lib/kavach/bus
-    # Structured dev logging. Set to 0 for the JSON production formatter.
-    KAVACH_DEV: "1"
+    # 1 = developer logging: a PII deny-list hit (I-6) PANICS so the bug is found
+    # in a test. 0 = the JSON production formatter: the same hit is REDACTED and
+    # counted, because crashing the SOS binary over a log line trades a privacy
+    # bug for a safety bug (internal/logx). This is the only switch; it has to
+    # reach all four binaries, and a "production" compose is `KAVACH_DEV=0`.
+    KAVACH_DEV: "${KAVACH_DEV:-1}"
     # Empty token disables bearer auth on the control plane (see auth() in
     # cmd/control-plane/main.go). Export KAVACH_API_TOKEN before `up` to turn it
     # on; the canary picks up the SAME value so the two cannot drift apart.
@@ -136,7 +142,8 @@ services:
       # sos-ingest owns <data>/sos.wal, <data>/bus and <data>/store. Its bus is
       # THE bus: the other services below are pointed at this exact directory.
       KAVACH_SOS_DATA: /var/lib/kavach
-      KAVACH_DEV: "1"
+      # Same switch, same value as the three below (see the &common-env comment).
+      KAVACH_DEV: "${KAVACH_DEV:-1}"
       # HMAC secret the SMS aggregator signs inbound webhooks with (F-09/§2.10.2).
       # Unset in dev; the handler rejects unsigned callbacks once it is set.
       KAVACH_SMS_GATEWAY_SECRET: "${KAVACH_SMS_GATEWAY_SECRET:-}"
@@ -169,6 +176,21 @@ services:
       # the proxy moves traffic to the other colour first. Keep this shorter than
       # the orchestrator's stop_grace_period below.
       KAVACH_DRAIN: "3s"
+      # ★ Push (F-21, W10-a). internal/notify/fcm.go reads this as a PATH INSIDE
+      # THE CONTAINER to a Google service-account JSON key with the FCM API
+      # enabled; unset means every push is recorded KV-NOPUSHCFG and the SMS leg
+      # is the last leg to a human. The key is a real secret (.gitignore) and
+      # cannot be pasted into an env var, so it rides in as a compose secret:
+      #
+      #   KAVACH_FCM_CREDENTIALS_FILE=/path/to/key.json docker compose ... up -d
+      #
+      # `${VAR:+…}` leaves the variable EMPTY when no host file is named, so the
+      # binary takes its not-configured branch instead of reading the empty
+      # /dev/null placeholder below. The file must be readable by uid 10001,
+      # the container user.
+      KAVACH_FCM_CREDENTIALS: "${KAVACH_FCM_CREDENTIALS_FILE:+/run/secrets/fcm-credentials}"
+    secrets:
+      - fcm-credentials
     stop_grace_period: 15s
     ports:
       - "8080:8080"
@@ -250,3 +272,11 @@ volumes:
   # deliberately with `docker compose down -v`.
   kavach-store:
     name: kavach-store
+
+secrets:
+  # The FCM service-account key, mounted at /run/secrets/fcm-credentials in the
+  # control plane. /dev/null when no host file is named: compose needs a source
+  # that exists, and the env var above stays empty in that case so the empty
+  # file is never read. See the control-plane block.
+  fcm-credentials:
+    file: "${KAVACH_FCM_CREDENTIALS_FILE:-/dev/null}"
