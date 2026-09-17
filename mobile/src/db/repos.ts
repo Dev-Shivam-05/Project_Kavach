@@ -630,7 +630,11 @@ export const deviceRepo = {
          signing_pubkey = excluded.signing_pubkey,
          is_device_owner = excluded.is_device_owner,
          imei = excluded.imei,
-         last_heartbeat_at = MAX(COALESCE(device.last_heartbeat_at, 0), COALESCE(excluded.last_heartbeat_at, 0)),
+         -- Newest wins; NULL means "never", and two NULLs must stay NULL. The
+         -- old COALESCE(…, 0) form turned never-seen into 1970 on conflict.
+         -- SQLite's multi-argument MAX is NULL when any argument is, so the
+         -- COALESCE picks whichever side is known and nothing invents a zero.
+         last_heartbeat_at = COALESCE(MAX(device.last_heartbeat_at, excluded.last_heartbeat_at), device.last_heartbeat_at, excluded.last_heartbeat_at),
          battery_pct = excluded.battery_pct,
          battery_temp_c = excluded.battery_temp_c,
          battery_health = excluded.battery_health,
@@ -1530,7 +1534,10 @@ export const presenceRepo = {
       `INSERT INTO presence (${PRESENCE_COLUMNS})
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(member_id) DO UPDATE SET
-         last_seen_at = MAX(COALESCE(presence.last_seen_at, 0), COALESCE(excluded.last_seen_at, 0)),
+         -- Same rule as device.last_heartbeat_at: never-seen stays NULL, so the
+         -- glance view says "never" rather than "56 years ago" after setPaused()
+         -- has inserted a row with no last_seen_at.
+         last_seen_at = COALESCE(MAX(presence.last_seen_at, excluded.last_seen_at), presence.last_seen_at, excluded.last_seen_at),
          battery_pct = excluded.battery_pct,
          agent_healthy = excluded.agent_healthy,
          degradation_level = excluded.degradation_level,

@@ -42,7 +42,6 @@ import { useRouter } from 'expo-router';
 
 import { CONFIG } from '../../src/core/config';
 import {
-  DEGRADATION_LABELS,
   DegradationLevel,
   type Device,
   type HaSafetyEvent,
@@ -51,7 +50,7 @@ import {
   type Member,
   type UUID,
 } from '../../src/core/types';
-import { relativeTime, t } from '../../src/i18n';
+import { degradationLabel, relativeTime, t } from '../../src/i18n';
 import { useKavach } from '../../src/state/store';
 import { isActive } from '../../src/t0/stateMachine.generated';
 import {
@@ -187,6 +186,10 @@ export default function HomeScreen(): React.ReactElement {
 
   const [ringOpen, setRingOpen] = useState(false);
   const [journeyOpen, setJourneyOpen] = useState(false);
+  /** "I'm safe" in flight — the button is disabled for exactly this long. */
+  const [checkingIn, setCheckingIn] = useState(false);
+  /** When this phone last checked in from THIS screen; the confirmation beside the button. */
+  const [checkedInAt, setCheckedInAt] = useState<number | null>(null);
 
   // bootstrap() is idempotent by construction (see store.bootstrap) — calling it
   // here means this tab shows real data even if it is the first surface mounted.
@@ -284,9 +287,29 @@ export default function HomeScreen(): React.ReactElement {
 
   // ── actions ─────────────────────────────────────────────────────────────────
 
+  /**
+   * One check-in per press, and one press at a time. Every call writes a
+   * presence row, an outbox item and a network POST (store.checkIn), and the
+   * only visible effect used to be a row far down in "Recent check-ins" — so
+   * people tapped again, and again, and queued N of everything. The guard makes
+   * the second tap a no-op; the pill beside the button is the confirmation the
+   * screen owed them the first time.
+   */
   const handleCheckIn = useCallback(() => {
-    void checkIn();
-  }, [checkIn]);
+    if (checkingIn) return;
+    setCheckingIn(true);
+    void (async () => {
+      try {
+        await checkIn();
+        setCheckedInAt(Date.now());
+      } catch {
+        // store.checkIn swallows its own failures; this only keeps a throw
+        // from reaching the render tree (hard rule: nothing throws into the UI).
+      } finally {
+        setCheckingIn(false);
+      }
+    })();
+  }, [checkIn, checkingIn]);
 
   /**
    * ★ THE CONFIRMATION MAY NOT CLAIM THE PHONE IS RINGING ★
@@ -475,7 +498,7 @@ export default function HomeScreen(): React.ReactElement {
 
         {/* ── degradation strip: which rung of §4.4 we are actually on ──────── */}
         <View style={styles.strip}>
-          <Pill label={DEGRADATION_LABELS[degradation]} tone={degradationTone(degradation)} />
+          <Pill label={degradationLabel(degradation)} tone={degradationTone(degradation)} />
           {outboxDepth > 0 ? (
             <Pill label={`${outboxDepth} waiting to sync`} tone="neutral" glyph="↑" />
           ) : null}
@@ -488,10 +511,19 @@ export default function HomeScreen(): React.ReactElement {
           const line = acked
             ? t('panic.responding', { name: nameOf(incident.ownerMemberId as UUID) })
             : t('panic.nobodyResponded');
+          // Same rule as the root incident bar (_layout GlobalBars): our own
+          // emergency belongs on the panic screen, which carries the cancel
+          // control; a relative's belongs on the responder timeline, which is
+          // where "I AM RESPONDING" (t4, the only life-saving clock), on-scene
+          // and resolve live. The panic screen has none of those.
+          const mine = me !== null && incident.subjectMemberId === me.id;
           return (
             <PressableScale
               key={incident.id}
-              onPress={() => router.push('/panic')}
+              onPress={() => {
+                if (mine) router.push('/panic');
+                else router.push(`/incident/${incident.id}`);
+              }}
               // NO_MOTION on this one card only. The haptic and the opacity step
               // stay, the movement does not: while an emergency is live, a card
               // that shifts under the thumb is indistinguishable from a card
@@ -499,7 +531,7 @@ export default function HomeScreen(): React.ReactElement {
               motion={NO_MOTION}
               accessibilityRole="button"
               accessibilityLabel={`${t('home.activeIncident')}. ${subject}. ${line}`}
-              accessibilityHint="Opens the emergency screen"
+              accessibilityHint={mine ? t('tab.sosHint') : t('home.opensTimeline')}
             >
               <Card tone="danger">
                 <View style={styles.badgeRow}>
@@ -570,6 +602,7 @@ export default function HomeScreen(): React.ReactElement {
               label={t('home.checkIn')}
               icon="✓"
               variant="ghost"
+              disabled={checkingIn}
               onPress={handleCheckIn}
               accessibilityLabel={`${t('home.checkIn')}. Tells the family you are fine and resets your journey clock.`}
               style={styles.action}
@@ -599,15 +632,24 @@ export default function HomeScreen(): React.ReactElement {
               style={styles.action}
             />
           </View>
+          {/* The confirmation, next to the button that earned it. `relativeTime`
+              re-renders with the screen's minute clock, so "now" honestly ages
+              into "3m ago" rather than claiming a check-in that is getting old. */}
+          {checkedInAt === null ? null : (
+            <Pill label={t('home.checkedIn', { ago: relativeTime(checkedInAt) })} tone="ok" />
+          )}
         </Section>
 
         {/* ── the family ────────────────────────────────────────────────────── */}
         <Section title="Family" right={`${members.length}`}>
           {members.length === 0 ? (
+            // The way in is ON the screen that says to do it: the only other
+            // path to /enrol is a row nine items deep in Settings.
             <EmptyState
               glyph="○"
-              title="No family members yet"
-              body="Nobody has been enrolled on this device. Enrol someone to start looking after each other."
+              title={t('home.noMembersTitle')}
+              body={t('home.noMembersBody')}
+              action={{ label: t('home.addPhone'), onPress: () => router.push('/enrol') }}
             />
           ) : (
             members.map((member) => {

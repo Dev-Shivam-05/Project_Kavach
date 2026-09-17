@@ -24,6 +24,8 @@ const STUBS = new Set([
   'expo-router',
   'expo-task-manager',
   'expo-location',
+  'expo-network',
+  'expo-cellular',
 ]);
 
 const STUB_SOURCE = {
@@ -85,9 +87,31 @@ const STUB_SOURCE = {
     export function setNotificationHandler() {}
     export async function setNotificationChannelAsync(id) { __state.channels.push(id); }
     export async function setNotificationCategoryAsync() {}
-    export async function getPermissionsAsync() { return { granted: true, canAskAgain: true }; }
-    export async function requestPermissionsAsync() { return { granted: true }; }
-    export async function scheduleNotificationAsync(req) { __state.presented.push(req); }
+    /**
+     * Permission outcomes are controllable too. initNotifications() is the one
+     * function that decides whether a family phone can ring at all, and its
+     * honest-failure branches (denied, cannot-ask-again, iOS provisional) were
+     * unreachable while this stub always granted. __setPermissions drives what
+     * getPermissionsAsync() reports; __setRequestResult drives the answer to the
+     * prompt; __requestCount says whether the prompt was shown at all.
+     */
+    export function __setPermissions(p) { __state.permissions = p; }
+    export function __setRequestResult(r) { __state.requestResult = r; }
+    export function __requestCount() { return __state.requests; }
+    export function __resetPermissions() {
+      __state.permissions = { granted: true, canAskAgain: true };
+      __state.requestResult = { granted: true };
+      __state.requests = 0;
+    }
+    __resetPermissions();
+    export async function getPermissionsAsync() { return __state.permissions; }
+    export async function requestPermissionsAsync() {
+      __state.requests++;
+      if (__state.requestResult instanceof Error) throw __state.requestResult;
+      return __state.requestResult;
+    }
+    /** The real API resolves to the notification's identifier string. */
+    export async function scheduleNotificationAsync(req) { __state.presented.push(req); return req?.identifier ?? String(__state.presented.length); }
     export async function dismissNotificationAsync(id) { __state.dismissed.push(id); }
     export async function cancelScheduledNotificationAsync() {}
     export async function getLastNotificationResponseAsync() { return null; }
@@ -143,6 +167,31 @@ const STUB_SOURCE = {
       throw new Error('expo-location stub: no fix configured for this test');
     }
   `,
+  /**
+   * `net/connectivity.ts` (and through it `net/outboxDrain.ts`) reads the link
+   * state from these two. Without stubs Node resolves the real packages, which
+   * import `expo` itself and fail under type stripping — so the whole T1 outbox
+   * plane was unimportable. __setNetworkState drives what the next read reports;
+   * the default is "connected over wifi", the least interesting state.
+   */
+  'expo-network': `
+    export const NetworkStateType = { NONE: 'NONE', UNKNOWN: 'UNKNOWN', CELLULAR: 'CELLULAR', WIFI: 'WIFI', BLUETOOTH: 'BLUETOOTH', ETHERNET: 'ETHERNET', WIMAX: 'WIMAX', VPN: 'VPN', OTHER: 'OTHER' };
+    export const __state = { network: { type: 'WIFI', isConnected: true, isInternetReachable: true }, airplane: false, listeners: [] };
+    export function __setNetworkState(s) { __state.network = s; }
+    export function __setAirplaneMode(on) { __state.airplane = on; }
+    export function __emitNetworkState(s) { __state.network = s; for (const l of __state.listeners) l(s); }
+    export async function getNetworkStateAsync() { return __state.network; }
+    export async function isAirplaneModeEnabledAsync() { return __state.airplane; }
+    export function addNetworkStateListener(listener) {
+      __state.listeners.push(listener);
+      return { remove() { __state.listeners = __state.listeners.filter((l) => l !== listener); } };
+    }
+  `,
+  'expo-cellular': `
+    export const __state = { mcc: null };
+    export function __setMobileCountryCode(mcc) { __state.mcc = mcc; }
+    export async function getMobileCountryCodeAsync() { return __state.mcc; }
+  `,
 };
 
 import { existsSync } from 'node:fs';
@@ -150,12 +199,22 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 /**
+ * Extensions Node (or Metro) resolves by itself. Only these mean "the specifier
+ * already names a file"; any other dot in the last segment is part of the NAME.
+ * `'../t0/stateMachine.generated'` has `path.extname() === '.generated'`, and
+ * treating that as an extension left `db/repos.ts` — and everything that imports
+ * it: `net/ws.ts`, `net/outboxDrain.ts`, `state/store.ts` — unimportable from any
+ * test with `ERR_MODULE_NOT_FOUND` (CLAUDE.md convention 7, now closed).
+ */
+const REAL_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.json']);
+
+/**
  * The app source uses bundler-style extensionless relative imports (`./foo`),
  * which Metro resolves but Node ESM does not. Re-add the extension here so the
  * same source runs unmodified under both.
  */
 function resolveExtensionless(specifier, parentURL) {
-  if (!specifier.startsWith('.') || path.extname(specifier)) return null;
+  if (!specifier.startsWith('.') || REAL_EXTENSIONS.has(path.extname(specifier))) return null;
   const base = path.resolve(path.dirname(fileURLToPath(parentURL)), specifier);
   for (const cand of [`${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), path.join(base, 'index.tsx')]) {
     if (existsSync(cand)) return pathToFileURL(cand).href;

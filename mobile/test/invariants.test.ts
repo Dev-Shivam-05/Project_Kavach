@@ -23,7 +23,20 @@ import {
   timeoutsFor,
 } from '../src/t0/stateMachine.generated.ts';
 import fixtures from '../src/t0/__generated__/fixtures.json' with { type: 'json' };
-import { encodeSms, decodeSms, isPureAscii, toAsciiShortName, SMS_MAX } from '../src/t0/smsPayload.ts';
+import { encodeSms, decodeSms, isPureAscii, toAsciiShortName, SMS_MAX, TRIGGER_CODE } from '../src/t0/smsPayload.ts';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * ★ The trigger list is DERIVED, never copied. `TRIGGER_CODE` is the SMS
+ * encoder's own table — typed `Record<TriggerType, string>`, so a trigger added
+ * to the type must be added there or `tsc` fails — and the proto `Trigger` enum
+ * is the wire contract. Two hand-copied twelve-entry lists sat in this file
+ * until 6 Sep; a thirteenth trigger with a long code would have escaped the
+ * 160-char / GSM-7 check below without a single assertion noticing (P-033).
+ */
+const TRIGGERS = Object.keys(TRIGGER_CODE) as Array<keyof typeof TRIGGER_CODE>;
 import {
   buildSignedEnvelope,
   canonicalise,
@@ -206,10 +219,26 @@ test('I-2 · a Devanagari or Gujarati name cannot leak into the payload', () => 
   }
 });
 
+test('I-2 · the trigger list is derived from TRIGGER_CODE and matches the proto Trigger enum', () => {
+  const proto = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../proto/incident.proto'),
+    'utf8',
+  );
+  const block = /enum Trigger \{([^}]*)\}/.exec(proto);
+  assert.ok(block, 'proto/incident.proto has no `enum Trigger`');
+  const wire = [...block[1].matchAll(/^\s*([A-Z_]+)\s*=\s*\d+\s*;/gm)]
+    .map((m) => m[1])
+    .filter((name) => name !== 'TRIGGER_UNSPECIFIED');
+  assert.ok(TRIGGERS.length >= 12, `only ${TRIGGERS.length} triggers derived — TRIGGER_CODE shrank?`);
+  assert.deepEqual(
+    [...TRIGGERS].sort(),
+    [...wire].sort(),
+    'the SMS encoder and the wire contract disagree about which triggers exist',
+  );
+});
+
 test('I-2 · holds for every trigger type and extreme coordinates', () => {
-  const triggers = ['MANUAL', 'CRASH', 'FALL', 'NO_MOTION', 'DEADMAN', 'GEOFENCE',
-    'SENSOR_HOME', 'DEVICE_SILENCED', 'BLE_FOB', 'VOICE_PHRASE', 'RELAY', 'DRILL'] as const;
-  for (const trigger of triggers) {
+  for (const trigger of TRIGGERS) {
     for (const [lat, lon] of [[-89.999999, -179.999999], [89.999999, 179.999999], [0, 0]]) {
       const out = encodeSms({
         ...smsBase, trigger, lat, lon, asciiShortName: 'ABCDEFGH',
@@ -466,9 +495,7 @@ test('the ladder is monotonically increasing in time and reaches tier 3', () => 
 });
 
 test('every trigger type has a policy — no scenario falls through undefined', () => {
-  const triggers = ['MANUAL', 'CRASH', 'FALL', 'NO_MOTION', 'DEADMAN', 'GEOFENCE',
-    'SENSOR_HOME', 'DEVICE_SILENCED', 'BLE_FOB', 'VOICE_PHRASE', 'RELAY', 'DRILL'] as const;
-  for (const t of triggers) {
+  for (const t of TRIGGERS) {
     assert.ok(DEFAULT_POLICY.scenarios[t], `${t} has no policy`);
     assert.ok(DEFAULT_POLICY.scenarios[t].l2AfterS > 0);
   }

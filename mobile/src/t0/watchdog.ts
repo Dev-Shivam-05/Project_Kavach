@@ -121,10 +121,56 @@ let lastHeartbeatAt: number | null = null;
 let lastHeartbeatOk: boolean | null = null;
 let tickCount = 0;
 let deaths: ServiceDeathEvent[] = [];
+/**
+ * ★ The boot tick runs BEFORE the sinks exist. ★ `registerWatchdog()` is called
+ * from `initT0` during the store's `t0` stage; `setWatchdogSink` and
+ * `setHeartbeatSender` are installed in the later `subscriptions` stage. So the
+ * one tick that detects a death — the boot tick, the moment the process comes
+ * back — always ran with `deathSink === null`, wrote the death to disk, and
+ * told nobody. Deaths detected with no sink wait here and are replayed the
+ * moment a sink is installed; the heartbeat the boot tick owed is sent the
+ * moment a sender is.
+ */
+let unreportedDeaths: ServiceDeathEvent[] = [];
+let heartbeatOwed = false;
+
+function deliverDeath(event: ServiceDeathEvent): void {
+  if (!deathSink) {
+    unreportedDeaths.push(event);
+    return;
+  }
+  try {
+    deathSink(event);
+  } catch {
+    // The event is persisted regardless; the sink can pick it up later.
+  }
+}
+
+async function sendHeartbeat(): Promise<void> {
+  const sender = heartbeatSender;
+  if (!sender) {
+    heartbeatOwed = true;
+    return;
+  }
+  heartbeatOwed = false;
+  try {
+    await sender();
+    lastHeartbeatOk = true;
+  } catch {
+    // FR-034: a heartbeat that cannot be sent is exactly what the server's
+    // gap analysis is for. Failing here changes nothing locally.
+    lastHeartbeatOk = false;
+  }
+  lastHeartbeatAt = Date.now();
+}
 
 /** Where SERVICE_DEATH events go — normally the incident event log (FR-006). */
 export function setWatchdogSink(sink: ((e: ServiceDeathEvent) => void) | null): void {
   deathSink = sink;
+  if (!sink) return;
+  const backlog = unreportedDeaths;
+  unreportedDeaths = [];
+  for (const event of backlog) deliverDeath(event);
 }
 
 /**
@@ -134,6 +180,7 @@ export function setWatchdogSink(sink: ((e: ServiceDeathEvent) => void) | null): 
  */
 export function setHeartbeatSender(sender: (() => void | Promise<void>) | null): void {
   heartbeatSender = sender;
+  if (sender && heartbeatOwed) void sendHeartbeat();
 }
 
 /**
@@ -152,11 +199,7 @@ async function tick(source: TickSource): Promise<void> {
       const event: ServiceDeathEvent = { at: now, gapMs: gap, expectedMs: expected, source };
       deaths = [event, ...state.deaths].slice(0, DEATH_LOG_LIMIT);
       state.deaths = deaths;
-      try {
-        deathSink?.(event);
-      } catch {
-        // The event is persisted regardless; the sink can pick it up later.
-      }
+      deliverDeath(event);
     } else {
       deaths = state.deaths;
     }
@@ -172,17 +215,7 @@ async function tick(source: TickSource): Promise<void> {
   lastTickAt = now;
   tickCount++;
 
-  if (heartbeatSender) {
-    try {
-      await heartbeatSender();
-      lastHeartbeatOk = true;
-    } catch {
-      // FR-034: a heartbeat that cannot be sent is exactly what the server's
-      // gap analysis is for. Failing here changes nothing locally.
-      lastHeartbeatOk = false;
-    }
-    lastHeartbeatAt = Date.now();
-  }
+  await sendHeartbeat();
 }
 
 // ★ Module scope, before any registration. TaskManager requires the task to be
@@ -285,6 +318,26 @@ export interface WatchdogStatus {
   /** FR-034: silent longer than this and the family gets told. */
   silentAlertMs: number;
   agentSilent: boolean;
+}
+
+/** Test seam: forget every runtime value so a case starts from a cold process. */
+export function __resetWatchdogForTest(): void {
+  if (foregroundTimer !== null) {
+    clearInterval(foregroundTimer);
+    foregroundTimer = null;
+  }
+  deathSink = null;
+  heartbeatSender = null;
+  backgroundRegistered = false;
+  persistent = true;
+  lastGap = null;
+  lastTickAt = null;
+  lastHeartbeatAt = null;
+  lastHeartbeatOk = null;
+  tickCount = 0;
+  deaths = [];
+  unreportedDeaths = [];
+  heartbeatOwed = false;
 }
 
 export function watchdogStatus(): WatchdogStatus {

@@ -32,9 +32,14 @@
  *  · `src/state/store.ts` `loadKeyMaterial()` — after it has the software
  *    DeviceKeypair: `setSoftwareKeys(kp)`, `setHardwareKeyBackend(keyVault)`
  *    from `src/t0/native.ts`, then `await prepareKeys()`.
- *  · `src/t0/envelope.ts` `buildSignedEnvelope()` — sign through
- *    `signWithEmergencyKey()` and carry the returned `alg` next to the
- *    signature so ingest knows which verifier to reach for.
+ *  · `src/t0/envelope.ts` `buildSignedEnvelope()` — ★ NOT YET. ★ It still signs
+ *    synchronously with the software Ed25519 key (`signEmergency`), because the
+ *    hot path is synchronous end to end and `signWithEmergencyKey()` is async.
+ *    Until that migration lands, the hardware key — however well the keystore
+ *    reports it — signs NOTHING. `KeyStatus.signsEnvelope` says so per key, and
+ *    `envelopeSigningPublicKey()` returns the key the server must actually
+ *    verify SOS envelopes with. Registering `emergencySigningPublicKey()` (the
+ *    hardware-first answer) would make every real SOS fail verification.
  *  · `app/diagnostics.tsx` — render `keyBackingStatus()` alongside the other
  *    P-031 checks. `t0SigningAvailablePredawn` already probes the same alias.
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -105,7 +110,22 @@ export interface KeyStatus {
   measured: boolean;
   /** Plain-language reason this key has this backing. Safe to show verbatim. */
   reason: string;
+  /**
+   * True for the key `t0/envelope.ts` actually signs SOS envelopes with today.
+   * `backing` says where a key LIVES; this says whether it is USED. A TEE key
+   * with `signsEnvelope: false` is the honest reading of the current wiring —
+   * rendering it as "held in the TEE" alone is the lie P-031 forbids.
+   */
+  signsEnvelope: boolean;
 }
+
+/**
+ * ★ WHICH KEY SIGNS THE ENVELOPE TODAY ★ — the software Ed25519 key, always.
+ * Flip this only in the same change that makes `buildSignedEnvelope` sign via
+ * `signWithEmergencyKey()` and registers the matching public key; until then
+ * every status and public-key answer below is derived from it.
+ */
+const ENVELOPE_SIGNER: 'software' | 'hardware' = 'software';
 
 export interface SignatureResult {
   signature: Uint8Array;
@@ -139,6 +159,7 @@ function pending(role: KeyRole): KeyStatus {
     unlockedDeviceRequired: false,
     measured: true,
     reason: 'keys have not been prepared yet',
+    signsEnvelope: role === 'emergency' && ENVELOPE_SIGNER === 'software',
   };
 }
 
@@ -174,6 +195,7 @@ function softwareStatus(role: KeyRole, why: string): KeyStatus {
     unlockedDeviceRequired: false,
     measured: true,
     reason: `${why} — ${JS_HEAP_WARNING}`,
+    signsEnvelope: role === 'emergency' && ENVELOPE_SIGNER === 'software',
   };
 }
 
@@ -221,6 +243,7 @@ async function resolve(role: KeyRole): Promise<KeyStatus> {
   }
 
   const backing = backingOf(info);
+  const signsEnvelope = role === 'emergency' && ENVELOPE_SIGNER === 'hardware';
   return {
     role,
     backing,
@@ -230,7 +253,11 @@ async function resolve(role: KeyRole): Promise<KeyStatus> {
     userAuthRequired: info.userAuthRequired,
     unlockedDeviceRequired: info.unlockedDeviceRequired,
     measured: info.unlockedDeviceRequiredMeasured,
-    reason: hardwareReason(backing),
+    reason:
+      role === 'emergency' && !signsEnvelope
+        ? `${hardwareReason(backing)}; NOT yet used to sign the SOS envelope, which the software Ed25519 key still signs`
+        : hardwareReason(backing),
+    signsEnvelope,
   };
 }
 
@@ -296,9 +323,27 @@ export async function signWithEmergencyKey(payload: Uint8Array): Promise<Signatu
 }
 
 /**
- * The public half to register with the server, and the algorithm it verifies
- * under. Ed25519 is 32 raw bytes; P-256 is X.509 SubjectPublicKeyInfo DER —
- * different lengths and different parsers, which is why `alg` travels with it.
+ * The public half of the key `t0/envelope.ts` signs SOS envelopes with — the
+ * one to register under `POST /v1/devices` so the server can verify a real SOS.
+ * Synchronous, because the answer is a property of the wiring, not of the
+ * keystore: while `ENVELOPE_SIGNER` is 'software' this is the Ed25519 key and
+ * nothing else, whatever `prepareKeys()` found. Null when there is no software
+ * keypair at all (then nothing can sign and no envelope is built).
+ */
+export function envelopeSigningPublicKey(): PublicKeyRef | null {
+  const kp = software;
+  if (!kp) return null;
+  return { key: kp.emergencyPublic, alg: 'ed25519', backing: 'js_heap' };
+}
+
+/**
+ * The public half of the key the FACADE would sign with — hardware first — and
+ * the algorithm it verifies under. Ed25519 is 32 raw bytes; P-256 is X.509
+ * SubjectPublicKeyInfo DER — different lengths and different parsers, which is
+ * why `alg` travels with it.
+ *
+ * ★ This is not the envelope's key until the migration in the header lands. ★
+ * Register `envelopeSigningPublicKey()` with the server, not this.
  */
 export async function emergencySigningPublicKey(): Promise<PublicKeyRef | null> {
   const current = status.emergency;

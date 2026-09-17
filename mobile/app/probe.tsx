@@ -104,6 +104,8 @@ export default function ProbeScreen() {
 
   const answer = useCallback(
     (ok: boolean) => {
+      // Already on the way out: a second press must not navigate again.
+      if (dismissed.current) return;
       if (t0State === 'PROBE') {
         // ★ Our own machine. T0 is holding the 45 s timer and no incident id, so
         //   the store's probeRespond has nothing to key on — going straight to
@@ -114,8 +116,15 @@ export default function ProbeScreen() {
         // Somebody else's probe: the store owns the fold and the durable log.
         void respond(remoteProbe.id, ok);
       } else {
-        // The window closed while the phone was being picked up. Nothing to
-        // answer; leaving is the only honest thing left to do.
+        // No question left to answer. Two very different reasons land here:
+        //   · the machine is ACTIVE — the first "I need help" already took PROBE
+        //     to PENDING and the root layout has REPLACED this screen with the
+        //     panic screen. A second hammer on the largest button must not
+        //     `back()` — that pops the panic screen out from under the person
+        //     who just asked for help. The presenter owns the swap; do nothing.
+        //   · the window closed while the phone was being picked up. Nothing to
+        //     answer; leaving is the only honest thing left to do.
+        if (isActive(t0State)) return;
         dismiss();
         return;
       }

@@ -319,9 +319,16 @@ export function startAlarm(options: StartAlarmOptions = {}): void {
 
   if (!silent) {
     void (async () => {
+      // ★ Re-check after every await. ★ A stopAlarm() that lands mid-start —
+      //   PROBE cue then USER_FINE, RESOLVING during a ladder step, a cancel PIN
+      //   while the cold siren is still being synthesised on a ₹6,000 phone —
+      //   used to be followed by play() and a maxed STREAM_ALARM with nothing
+      //   left holding a stop or a restore handle.
       try {
         await applyAudioMode();
+        if (!alarmActive) return;
         if (!sirenPlayer) await warmSiren();
+        if (!alarmActive) return;
         if (sirenPlayer) {
           sirenPlayer.loop = true;
           sirenPlayer.volume = 1;
@@ -335,7 +342,15 @@ export function startAlarm(options: StartAlarmOptions = {}): void {
         // Only capture the restore point once. A second call while the alarm is
         // already sounding would capture the ALREADY-MAXED volume and we would
         // hand the user back 100% instead of what they had (P-021 courtesy).
-        if (!restoreVolume) restoreVolume = await native.maxAlarmVolume();
+        if (restoreVolume) return;
+        const restore = await native.maxAlarmVolume();
+        if (!alarmActive) {
+          // Stopped while the volume was being raised: put it back at once.
+          void restore().catch(() => {});
+        } else if (!restoreVolume) {
+          restoreVolume = restore;
+        }
+        // Else a concurrent start captured first; that one holds the original.
       } catch {
         restoreVolume = null;
       }

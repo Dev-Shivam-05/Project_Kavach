@@ -56,7 +56,12 @@ import {
   type TransportKind,
   type UUID,
 } from '../src/core/types';
-import { isActive, isTerminal, type IncidentState } from '../src/t0/stateMachine.generated';
+import {
+  isActive,
+  isTerminal,
+  nextState,
+  type IncidentState,
+} from '../src/t0/stateMachine.generated';
 import { effectiveCancelWindowS } from '../src/core/policy';
 import { currentPolicy, lastKnownFix, useKavach } from '../src/state/store';
 import { playCue, type CueKind } from '../src/t0/alarm';
@@ -84,6 +89,13 @@ const HOLD_MS = 700;
  *  outrun it. Any length is accepted — families do not all choose four digits. */
 const PIN_MAX = 12;
 
+/**
+ * Spoken to a screen-reader user when a PIN is refused — the one outcome
+ * allowed to differ. English until `i18n` carries a key for it: the sibling
+ * strings on this screen have hi/gu tables and this one should too.
+ */
+const PIN_REJECTED_ANNOUNCEMENT = 'PIN not accepted.';
+
 /** Explicit rather than a template literal, so a renamed state is a compile
  *  error here instead of an English fallback string at 2 a.m. */
 const STATE_KEY: Record<IncidentState, StringKey> = {
@@ -94,7 +106,12 @@ const STATE_KEY: Record<IncidentState, StringKey> = {
   PENDING: 'state.PENDING',
   FALSE_ALARM: 'state.FALSE_ALARM',
   ACTIVE_L1: 'state.ACTIVE_L1',
-  ACTIVE_L1_SILENT: 'state.ACTIVE_L1_SILENT',
+  // ★ F-01 / I-7. `t0State` is THIS phone's machine, so ACTIVE_L1_SILENT here
+  //   means the duress PIN was typed on this phone. Every pixel of this screen
+  //   must then match the false-alarm path — including the header label, which
+  //   after a genuine cancel reads t('state.FALSE_ALARM') until the next
+  //   trigger. 'state.ACTIVE_L1_SILENT' ("Family alerted") is for OTHER phones.
+  ACTIVE_L1_SILENT: 'state.FALSE_ALARM',
   ACTIVE_L2: 'state.ACTIVE_L2',
   ACTIVE_L3: 'state.ACTIVE_L3',
   OWNED: 'state.OWNED',
@@ -559,16 +576,48 @@ export default function PanicScreen(): React.ReactElement {
    *  previous incident — otherwise opening this screen after any past emergency
    *  would flash a confirmation and dismiss itself. */
   const [closedWhileOpen, setClosedWhileOpen] = useState(false);
+  /**
+   * "Mark resolved" is armed by one press and fired by a second, on the states
+   * where the machine's event is SELF_CLEAR_PIN. The event's name says a PIN
+   * should gate it; T0 exposes no side-effect-free PIN check yet (`verifyPin`
+   * also stops the alarm and drives the cancel transition), so until it does
+   * the deliberate second press is what stands between an unlocked phone and a
+   * one-tap close of the family's alarm.
+   */
+  const [resolveArmed, setResolveArmed] = useState(false);
   const [screenReader, setScreenReader] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [totalMs, setTotalMs] = useState(0);
 
   const lastStateRef = useRef<IncidentState>(t0State);
 
-  const incident: Incident | null = useMemo(
-    () => activeIncident ?? incidents.find((i) => !isTerminal(i.state)) ?? null,
-    [activeIncident, incidents],
-  );
+  /**
+   * ★ F-01 / I-7 — THE SUBJECT'S OWN PHONE RENDERS A DURESS AS A FALSE ALARM ★
+   *
+   * `t0State === 'ACTIVE_L1_SILENT'` can only mean the duress PIN was typed on
+   * THIS phone (it is T0's own machine). From that moment this screen — which
+   * the coercer may be holding — must be byte-identical to the screen after a
+   * genuine cancel: the idle layout, the false-alarm header label, cached
+   * coordinates, no delivery list, no "NOBODY HAS RESPONDED YET". So the
+   * incident is treated as absent here, exactly as it is after FALSE_ALARM.
+   */
+  const ownSilent = t0State === 'ACTIVE_L1_SILENT';
+
+  /**
+   * ★ THIS PERSON's incident, never a relative's. ★
+   * `activeIncident` and `incidents` both hold every non-terminal incident the
+   * phone knows about, including ones folded here from other members. The
+   * BigCoordinates below are read aloud to a 112 operator as THIS person's
+   * position, and "Mark resolved" closes whatever is shown — neither may ever
+   * be somebody else's. Decided by identity (`subjectMemberId === me.id`), not
+   * by device state.
+   */
+  const incident: Incident | null = useMemo(() => {
+    if (ownSilent || me === null) return null;
+    const own = (i: Incident): boolean => i.subjectMemberId === me.id;
+    if (activeIncident !== null && own(activeIncident)) return activeIncident;
+    return incidents.find((i) => own(i) && !isTerminal(i.state)) ?? null;
+  }, [activeIncident, incidents, me, ownSilent]);
 
   /**
    * ★ Subscribed to ONE incident's rows, not to the whole `incidentEvents` map. ★
@@ -641,7 +690,10 @@ export default function PanicScreen(): React.ReactElement {
     const previous = lastStateRef.current;
     lastStateRef.current = t0State;
     if (previous === t0State) return;
-    if (isTerminal(t0State)) setClosedWhileOpen(true);
+    // ★ Only the two closes a person chose. DORMANT is the six-hour auto-quiesce
+    //   with nobody having responded, and "✓ I am safe" would be the opposite of
+    //   what happened; the idle layout's header says "Closed automatically".
+    if (t0State === 'FALSE_ALARM' || t0State === 'RESOLVED') setClosedWhileOpen(true);
     // ★ Silence here while the confirmation is on screen. FALSE_ALARM emits no
     //   cue and ACTIVE_L1_SILENT emits one, so letting this effect speak during a
     //   cancel would announce, out loud, which PIN was typed (P-011). The single
@@ -687,15 +739,33 @@ export default function PanicScreen(): React.ReactElement {
     playCue('state');
   }, []);
 
-  /** The only outcome that is allowed to look different. */
+  /**
+   * The only outcome that is allowed to look different — and to SOUND
+   * different. The prompt's words never change (P-018 keeps the amber and the
+   * glyph for that), so a screen reader hears nothing from the live region; the
+   * announcement below is what tells a blind user the PIN was refused while the
+   * window is still open.
+   */
   const rejectCancelUi = useCallback(() => {
     setEntry('');
     setWrong(true);
     setPinSubmitted(false);
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    try {
+      AccessibilityInfo.announceForAccessibility(`${PIN_REJECTED_ANNOUNCEMENT} ${t('panic.enterPin')}`);
+    } catch {
+      /* an unannounceable rejection still shows the amber prompt */
+    }
   }, []);
 
   const submitPin = useCallback(() => {
+    // ★ Nothing typed is not a PIN. With an unreadable keystore both stored PINs
+    //   are '' and pad('') matches pad('') — so an empty submit would "succeed",
+    //   and as DURESS. Refused here, before the lock, as a plain wrong entry.
+    if (entry.length === 0) {
+      rejectCancelUi();
+      return;
+    }
     // ★ Lock first, verify second — point 5 above.
     setPinSubmitted(true);
     const candidate = entry;
@@ -751,10 +821,39 @@ export default function PanicScreen(): React.ReactElement {
     setEntry((p) => p.slice(0, -1));
   }, []);
 
+  /**
+   * ★ Gated on the generated machine, exactly as incident/[id].tsx gates it. ★
+   * From OWNED (someone is on their way) and ACTIVE_L1_SILENT there is no
+   * transition a subject can drive, and the store's `resolveIncident` would
+   * still POST /resolve — recorded server-side as the SUBJECT going on scene.
+   * A button that does nothing locally and something remote is the worst kind
+   * of no-op, so it is not rendered at all in those states.
+   */
+  const canTwoParty = nextState(t0State, 'TWO_PARTY_CONFIRM') !== null;
+  const canSelfClear = nextState(t0State, 'SELF_CLEAR_PIN') !== null;
+
   const closeIncident = useCallback(() => {
     if (!incident) return;
+    if (canTwoParty) {
+      // Two-party confirm: a responder is on scene, and this press is the
+      // subject's half of the pair. One press, as designed.
+      void resolveIncident(incident.id);
+      return;
+    }
+    if (!canSelfClear) return;
+    if (!resolveArmed) {
+      setResolveArmed(true);
+      return;
+    }
+    setResolveArmed(false);
     void resolveIncident(incident.id);
-  }, [incident, resolveIncident]);
+  }, [canSelfClear, canTwoParty, incident, resolveArmed, resolveIncident]);
+
+  // A state change disarms it: the press that armed it was about a different
+  // situation, and a stale second press must not close a newly-claimed incident.
+  useEffect(() => {
+    setResolveArmed(false);
+  }, [t0State]);
 
   const openMedical = useCallback(() => {
     router.push('/medical-card');
@@ -813,8 +912,17 @@ export default function PanicScreen(): React.ReactElement {
           </View>
 
           {/* Colour, glyph AND word: a failed PIN reads the same to someone who
-              cannot distinguish the amber (P-018). The words never change. */}
-          <View style={styles.promptRow}>
+              cannot distinguish the amber (P-018). The words never change — the
+              accessibility label does, so a screen reader landing here after a
+              refusal hears which state the prompt is in. */}
+          <View
+            style={styles.promptRow}
+            accessible
+            accessibilityRole="text"
+            accessibilityLabel={
+              wrong ? `${PIN_REJECTED_ANNOUNCEMENT} ${t('panic.enterPin')}` : t('panic.enterPin')
+            }
+          >
             {wrong ? (
               <Feather name="alert-triangle" size={font.small + 1} color={colors.warnText} />
             ) : (
@@ -851,7 +959,9 @@ export default function PanicScreen(): React.ReactElement {
     );
   }
 
-  if (isActive(t0State)) {
+  // ★ `!ownSilent`: ACTIVE_L1_SILENT on this phone falls through to the idle
+  //   layout below, which is what the false-alarm path shows (F-01 / I-7).
+  if (isActive(t0State) && !ownSilent) {
     const owner = incident?.ownerMemberId
       ? members.find((m) => m.id === incident.ownerMemberId)
       : undefined;
@@ -926,17 +1036,47 @@ export default function PanicScreen(): React.ReactElement {
         </ScrollView>
 
         <View style={[styles.footer, { paddingBottom: padBottom }]}>
-          {/* Ending it is a person's decision, and it must cost one press —
-              two-party confirm where the machine allows it, self-clear where it
-              does not (the store picks). */}
-          <Button
-            label={t('panic.resolve')}
-            onPress={closeIncident}
-            variant="ghost"
-            size="md"
-            accessibilityLabel={t('panic.resolve')}
-            style={styles.secondary}
-          />
+          {/* Ending it is a person's decision. Two-party confirm where the
+              machine allows it (one press — a responder is already on scene);
+              self-clear where it allows that instead (armed by one press,
+              fired by a second — see `resolveArmed`); nothing at all where the
+              machine allows neither, because a button with no transition
+              behind it is a no-op wearing a label (ADR-018, hard rule 1). */}
+          {canTwoParty || canSelfClear ? (
+            resolveArmed ? (
+              <View style={styles.resolveRow}>
+                <Button
+                  label={`${t('common.yes')} — ${t('panic.resolve')}`}
+                  onPress={closeIncident}
+                  variant="danger"
+                  size="md"
+                  accessibilityLabel={`${t('common.yes')}. ${t('panic.resolve')}. Closes the alarm for the whole family.`}
+                  style={styles.grow}
+                />
+                <Button
+                  label={t('common.no')}
+                  onPress={() => setResolveArmed(false)}
+                  variant="ghost"
+                  size="md"
+                  accessibilityLabel={`${t('common.no')}. Keep the alarm open.`}
+                  style={styles.grow}
+                />
+              </View>
+            ) : (
+              <Button
+                label={t('panic.resolve')}
+                onPress={closeIncident}
+                variant="ghost"
+                size="md"
+                accessibilityLabel={
+                  canTwoParty
+                    ? t('panic.resolve')
+                    : `${t('panic.resolve')}. Asks once more before closing.`
+                }
+                style={styles.secondary}
+              />
+            )
+          ) : null}
           {/* ADR-019: hands off to the dialler so the OS still classifies this as
               an emergency call and AML fires. Never wrapped, never auto-dialled. */}
           <Call112Button />
@@ -945,8 +1085,10 @@ export default function PanicScreen(): React.ReactElement {
     );
   }
 
-  // IDLE / WATCH / SUSPECT / PROBE — nothing is live, so the screen is what it is
-  // named for: the way to raise an alarm, over coordinates a stranger can read.
+  // IDLE / WATCH / SUSPECT / PROBE, the three terminal states, and — on this
+  // phone only — ACTIVE_L1_SILENT: nothing is (visibly) live, so the screen is
+  // what it is named for: the way to raise an alarm, over coordinates a
+  // stranger can read.
   return (
     <View style={[styles.screen, { paddingTop: padTop }]}>
       <DegradationHeader level={degradation} stateLabel={t(STATE_KEY[t0State])} />
@@ -1237,6 +1379,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   secondary: { alignSelf: 'stretch' },
+  resolveRow: { flexDirection: 'row', gap: space.sm },
+  grow: { flex: 1 },
   hold: {
     minHeight: PANIC_BUTTON_HEIGHT,
     width: '100%',

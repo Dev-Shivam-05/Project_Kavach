@@ -22,9 +22,10 @@
  * The two buttons press through PressableScale with `motion={NO_MOTION}`, which
  * is the §6.4-compliant half of it: a static edge and a haptic, no travel.
  */
-import React, { useCallback, useState } from 'react';
-import { Linking, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useCallback, useState } from 'react';
+import { Linking, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
+import { t } from '../../i18n';
 import { NO_MOTION } from '../motion';
 import {
   colors,
@@ -44,6 +45,7 @@ export interface BigCoordinatesProps {
   accuracyM?: number;
   /** Receives the plain `lat, lon` string. Omit to hide the copy control entirely. */
   onCopy?: (text: string) => void;
+  style?: StyleProp<ViewStyle>;
 }
 
 /**
@@ -74,7 +76,7 @@ export function groupCoord(v: number): string {
   return `${parts[0]}.${frac.slice(0, 3)} ${frac.slice(3)}`;
 }
 
-export function BigCoordinates({ lat, lon, accuracyM, onCopy }: BigCoordinatesProps): React.ReactElement {
+function BigCoordinatesImpl({ lat, lon, accuracyM, onCopy, style }: BigCoordinatesProps): React.ReactElement {
   const [note, setNote] = useState<string | null>(null);
 
   const plain = `${formatCoord(lat)}, ${formatCoord(lon)}`;
@@ -86,7 +88,7 @@ export function BigCoordinates({ lat, lon, accuracyM, onCopy }: BigCoordinatesPr
     const geo = `geo:${formatCoord(lat)},${formatCoord(lon)}?q=${formatCoord(lat)},${formatCoord(lon)}`;
     Linking.openURL(geo).catch(() => {
       Linking.openURL(`maps:0,0?q=${formatCoord(lat)},${formatCoord(lon)}`).catch(() => {
-        setNote('No maps app on this phone. Read the numbers aloud.');
+        setNote(t('coords.noMapsApp'));
       });
     });
   }, [lat, lon]);
@@ -94,19 +96,21 @@ export function BigCoordinates({ lat, lon, accuracyM, onCopy }: BigCoordinatesPr
   const copy = useCallback(() => {
     if (!onCopy) return;
     onCopy(plain);
-    setNote('Coordinates copied.');
+    setNote(t('coords.copied'));
   }, [onCopy, plain]);
 
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, style]}>
       <View style={styles.block}>
+        {/* LAT / LON stay Latin and untranslated, like the digits under them
+            (P-059): they are read to a 112 operator, not to the subject. */}
         <Text style={styles.label} allowFontScaling={false}>
           LAT
         </Text>
         <Text
           style={styles.coord}
           allowFontScaling={false}
-          accessibilityLabel={`Latitude ${groupCoord(lat)}`}
+          accessibilityLabel={t('coords.latitude', { value: groupCoord(lat) })}
           selectable
           numberOfLines={1}
           adjustsFontSizeToFit
@@ -123,7 +127,7 @@ export function BigCoordinates({ lat, lon, accuracyM, onCopy }: BigCoordinatesPr
         <Text
           style={styles.coord}
           allowFontScaling={false}
-          accessibilityLabel={`Longitude ${groupCoord(lon)}`}
+          accessibilityLabel={t('coords.longitude', { value: groupCoord(lon) })}
           selectable
           numberOfLines={1}
           adjustsFontSizeToFit
@@ -135,7 +139,7 @@ export function BigCoordinates({ lat, lon, accuracyM, onCopy }: BigCoordinatesPr
 
       {accuracyM === undefined ? null : (
         <Text style={styles.accuracy} allowFontScaling={false}>
-          {`Accurate to about ${Math.max(1, Math.round(accuracyM))} m`}
+          {t('coords.accuracy', { m: Math.max(1, Math.round(accuracyM)) })}
         </Text>
       )}
 
@@ -148,26 +152,26 @@ export function BigCoordinates({ lat, lon, accuracyM, onCopy }: BigCoordinatesPr
         <PressableScale
           onPress={openMaps}
           accessibilityRole="button"
-          accessibilityLabel="Open these coordinates in a maps app"
+          accessibilityLabel={t('coords.openInMapsHint')}
           motion={NO_MOTION}
           highlightColor={colors.focus}
           highlightRadius={radius.md}
           style={styles.action}
         >
-          <Text style={styles.actionText}>Open in maps</Text>
+          <Text style={styles.actionText}>{t('coords.openInMaps')}</Text>
         </PressableScale>
 
         {onCopy === undefined ? null : (
           <PressableScale
             onPress={copy}
             accessibilityRole="button"
-            accessibilityLabel="Copy coordinates as text"
+            accessibilityLabel={t('coords.copyHint')}
             motion={NO_MOTION}
             highlightColor={colors.focus}
             highlightRadius={radius.md}
             style={styles.action}
           >
-            <Text style={styles.actionText}>Copy</Text>
+            <Text style={styles.actionText}>{t('coords.copy')}</Text>
           </PressableScale>
         )}
       </View>
@@ -249,4 +253,5 @@ const styles = StyleSheet.create({
   },
 });
 
+export const BigCoordinates = memo(BigCoordinatesImpl);
 export default BigCoordinates;

@@ -12,28 +12,34 @@
  *
  * Outline, no fill, on transparent — alarm red (`colors.danger`, filled)
  * stays reserved for an actually active incident, never a resting nav
- * element (A3, §6.4).
+ * element (A3, §6.4). `alert-triangle` is THIS button's glyph (A3) and the
+ * warn chip's; the Incidents tab deliberately uses a different one, so the
+ * most consequential tap in the app is not shape-identical to "browse
+ * history" (P-018).
  */
 import { Feather } from '@expo/vector-icons';
-import { StyleSheet } from 'react-native';
+import { memo } from 'react';
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { router } from 'expo-router';
 
 import { t } from '../../i18n';
-import { colors } from '../theme';
+import { colors, space } from '../theme';
 import { PressableScale } from './PressableScale';
 
 const SIZE = 44;
 const ICON_SIZE = 20;
 
-export function SosHeaderButton() {
+function SosHeaderButtonImpl({ style }: { style?: StyleProp<ViewStyle> }) {
   return (
     <PressableScale
       onPress={() => router.push('/panic')}
       accessibilityRole="button"
       accessibilityLabel={t('tab.sos')}
       accessibilityHint={t('tab.sosHint')}
-      hitSlop={4}
-      style={styles.button}
+      // 44 dp visual + 4 dp per side = the 48 dp floor, and no more: this sits
+      // beside a title, and a wide slop would let it swallow a press on the text.
+      hitSlop={space.xs}
+      style={[styles.button, style]}
     >
       <Feather name="alert-triangle" size={ICON_SIZE} color={colors.dangerText} />
     </PressableScale>
@@ -52,4 +58,5 @@ const styles = StyleSheet.create({
   },
 });
 
+export const SosHeaderButton = memo(SosHeaderButtonImpl);
 export default SosHeaderButton;

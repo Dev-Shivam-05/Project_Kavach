@@ -56,7 +56,8 @@ function EmptyStateImpl({ glyph, icon, title, body, action, style }: EmptyStateP
           importantForAccessibility="no"
           style={styles.icon}
         />
-      ) : (
+      ) : glyph === undefined || glyph.length === 0 ? null : (
+        // Neither given: render no mark at all rather than a 40 px empty line box.
         <Text
           // The glyph repeats what the title says; announcing it doubles the
           // utterance for no added information.

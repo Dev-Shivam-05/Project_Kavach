@@ -30,12 +30,12 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
-import { DEGRADATION_LABELS, DegradationLevel } from '../src/core/types';
-import { t } from '../src/i18n';
+import { DegradationLevel } from '../src/core/types';
+import { degradationDetail, degradationLabel, t } from '../src/i18n';
 import { countUnacked, lastKnownFix, useKavach } from '../src/state/store';
 import { webrtcWatchMedia } from '../src/state/watchMedia';
 import { setWatchMedia } from '../src/state/watchSession';
-import { WatchIndicator } from '../src/ui/WatchIndicator';
+import { useWatchedLive, WatchIndicator } from '../src/ui/WatchIndicator';
 import { isActive } from '../src/t0/stateMachine.generated';
 import { BigCoordinates, Button, Call112Button } from '../src/ui/components';
 import { MIN_TOUCH_TARGET, colors, font, space, stateColor, weight } from '../src/ui/theme';
@@ -69,12 +69,15 @@ export default function RootLayout() {
       {/* Dark theme only (hard rule 3): the status bar glyphs must be light. */}
       <StatusBar style="light" />
 
-      <GlobalBars />
       {/*
        * ★ Above the navigator, on purpose (D2). The indicator is not a screen's
        * business — no route may be on top of it, and no route may forget it.
+       * FIRST in flow, above GlobalBars: whichever strip is on top has to pay
+       * the status-bar inset, and the indicator pays it itself — see its
+       * header. GlobalBars skips its own inset while the indicator is live.
        */}
       <WatchIndicator />
+      <GlobalBars />
       <T0Presenter />
 
       {/*
@@ -160,21 +163,21 @@ export default function RootLayout() {
            * its whole frame. Each of these screens applies its own top inset;
            * that is the condition for dropping the native bar, not a detail.
            */}
-          <Stack.Screen name="incident/[id]" options={{ title: 'Incident' }} />
+          <Stack.Screen name="incident/[id]" options={{ title: t('screen.incident') }} />
           <Stack.Screen
             name="medical-card"
             options={{ presentation: 'fullScreenModal', title: t('medical.title') }}
           />
           <Stack.Screen name="diagnostics" options={{ title: t('diag.title') }} />
-          <Stack.Screen name="vault" options={{ title: 'Documents' }} />
-          <Stack.Screen name="screen-time" options={{ title: 'Screen time' }} />
+          <Stack.Screen name="vault" options={{ title: t('screen.documents') }} />
+          <Stack.Screen name="screen-time" options={{ title: t('screen.screenTime') }} />
 
           {/* NOTE: journeys and drills still draw two headers. They render their own
               but apply NO top inset, so removing the native bar here would push
               their titles under the status bar. The line to delete is this one —
               once each screen adds `insets.top` it joins the block above. */}
-          <Stack.Screen name="journeys" options={{ headerShown: true, title: 'Journeys' }} />
-          <Stack.Screen name="drills" options={{ headerShown: true, title: 'Drills' }} />
+          <Stack.Screen name="journeys" options={{ headerShown: true, title: t('screen.journeys') }} />
+          <Stack.Screen name="drills" options={{ headerShown: true, title: t('screen.drills') }} />
           {/* Consent left the tab bar in the Phase-6 nav (Spec B1 / 6.7). It is
               reached from Settings > Privacy now; a native header gives the way
               back a tab never needed. */}
@@ -324,6 +327,19 @@ function T0Presenter(): null {
       opened.current = null;
       return;
     }
+
+    // ★ THE ONBOARDING DRILL OWNS ITS OWN COUNTDOWN (PRD Appendix E.4) ★
+    // Step 6 fires a real DRILL through T0 and renders its own ring, PIN pad
+    // and runaway controls in place — that rehearsal is the point of the step.
+    // Pushing /panic over it the instant PENDING arrived covered the drill
+    // within a frame, the person cancelled on the panic screen instead, and
+    // `completeOnboarding` recorded a rehearsal they had just completed as
+    // skipped. So the panic screen is not presented over /onboarding.
+    // `opened` is deliberately NOT set here: if the drill is still live when
+    // onboarding finishes (`router.replace('/')`), the route change re-runs
+    // this effect and the panic screen is presented then. PROBE is not
+    // suppressed — a real fall during setup still has to ask its question.
+    if (target === '/panic' && pathname.startsWith('/onboarding')) return;
     if (opened.current === target) return;
 
     const from = opened.current;
@@ -351,8 +367,12 @@ function T0Presenter(): null {
 function GlobalBars() {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
+  // The WatchIndicator sits above this strip and applies the top inset itself
+  // while it is live; paying it twice would put a dead band between the two.
+  const watchedLive = useWatchedLive();
 
   const degradation = useKavach((s) => s.degradation);
+  useKavach((s) => s.locale);
   // activeIncident tracks OUR machine; the find() also catches a relative's
   // emergency that was folded onto this device from the network (store.applyEvent).
   const incident = useKavach((s) => s.activeIncident ?? s.incidents.find((i) => isActive(i.state)) ?? null);
@@ -371,12 +391,12 @@ function GlobalBars() {
   const headline = unacked > 0 ? t('panic.nobodyResponded') : stateLabel;
 
   return (
-    <View style={[styles.bars, { paddingTop: insets.top }]}>
+    <View style={[styles.bars, { paddingTop: watchedLive ? 0 : insets.top }]}>
       {showDegraded ? (
         <Pressable
           onPress={() => router.push('/diagnostics')}
           accessibilityRole="button"
-          accessibilityLabel={`${DEGRADATION_LABELS[degradation]}. ${degradedDetail(degradation)} ${t('diag.run')}`}
+          accessibilityLabel={`${degradationLabel(degradation)}. ${degradationDetail(degradation)} ${t('diag.run')}`}
           style={({ pressed }) => [styles.degradedBar, pressed ? styles.pressed : null]}
         >
           {/* warnText, not warn: the fill token measures 2.68:1 on warnSoft and was
@@ -386,10 +406,10 @@ function GlobalBars() {
           <Feather name="alert-triangle" size={font.h2} color={colors.warnText} />
           <View style={styles.barText}>
             <Text style={styles.barTitle} numberOfLines={1}>
-              {DEGRADATION_LABELS[degradation]}
+              {degradationLabel(degradation)}
             </Text>
             <Text style={styles.barSub} numberOfLines={2}>
-              {degradedDetail(degradation)}
+              {degradationDetail(degradation)}
             </Text>
           </View>
           <Text style={styles.chevron} allowFontScaling={false}>
@@ -429,24 +449,6 @@ function GlobalBars() {
       ) : null}
     </View>
   );
-}
-
-/**
- * What the rung actually costs the user, in a sentence.
- * DEGRADATION_LABELS names the rung; a name alone ("Peer only") tells a parent
- * nothing about whether their child's phone can still reach them.
- */
-function degradedDetail(level: DegradationLevel): string {
-  switch (level) {
-    case DegradationLevel.ZERO_INFRA:
-      return 'No network at all. The alarm still sounds on this phone.';
-    case DegradationLevel.PEER_ONLY:
-      return 'No network. Family devices nearby can still relay.';
-    case DegradationLevel.SMS_ONLY:
-      return 'Data is down. Emergencies will go out by SMS.';
-    default:
-      return 'Connection limited.';
-  }
 }
 
 const styles = StyleSheet.create({

@@ -44,10 +44,11 @@ import { memo } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { hitSlopFor } from '../motion';
-import { colors, font, radius, space, toneSurface, weight } from '../theme';
+import { colors, font, radius, space, toneSurface, weight, type Tone } from '../theme';
 import { PressableScale } from './PressableScale';
 
-export type PillTone = 'ok' | 'warn' | 'danger' | 'info' | 'neutral';
+/** theme.ts's union, whole: a Pill can carry every tone the theme defines. */
+export type PillTone = Tone;
 
 export interface PillProps {
   label: string;

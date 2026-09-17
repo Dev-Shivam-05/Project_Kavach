@@ -133,7 +133,13 @@ export default function MedicalCardScreen(): ReactElement {
       setSaving(true);
       setSaveFailed(false);
       try {
-        await saveMedical(next);
+        // The store's saveMedical is fail-soft today (the write is inside
+        // safe() and memory is updated regardless), so a rejection never came
+        // and this branch was unreachable. Once the store reports the write, a
+        // `false` return is the failure; a rejection is read the same way, so
+        // the branch is live under both signatures.
+        const result = (await saveMedical(next)) as unknown;
+        if (result === false) throw new Error('medical card was not stored');
         setEditing(false);
       } catch {
         // Stay in the editor with the typed values intact. Closing on a failed

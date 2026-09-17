@@ -86,6 +86,7 @@ interface TrackEvent {
 interface PeerEvents {
   addEventListener(type: 'icecandidate', fn: (e: IceCandidateEvent) => void): void;
   addEventListener(type: 'track', fn: (e: TrackEvent) => void): void;
+  addEventListener(type: 'connectionstatechange' | 'iceconnectionstatechange', fn: () => void): void;
 }
 
 interface Live {
@@ -133,12 +134,19 @@ export function remoteStreamUrl(): string | null {
 }
 
 /**
- * What the watched device captures. Audio in both cases: a camera view with no
- * sound is half a room. E1's session is audio-only in the other direction.
+ * What the watched device captures. ONE capability per session kind: a Camera
+ * session is video only, a Listen session is audio only. Spec F1 makes
+ * `camera` and `audio` separately revocable — "allow Listen and refuse Camera,
+ * or vice versa" — and the watched phone's grant check (`mayBeWatchedBy`)
+ * is evaluated for exactly one scope per invite. Opening the microphone under
+ * the camera grant would listen to a member who revoked `audio`, with only a
+ * `camera_view_started` row to show for it. "A camera view with no sound is
+ * half a room" is a product wish that needs a spec row before it can override
+ * the consent line D-029 says is not up for renegotiation.
  */
 async function capture(kind: WatchSession['kind'], facing: 'front' | 'back'): Promise<MediaStream> {
   return (await mediaDevices.getUserMedia({
-    audio: true,
+    audio: kind === 'audio',
     video:
       kind === 'audio'
         ? false
@@ -158,7 +166,11 @@ async function drainPending(l: Live): Promise<void> {
 }
 
 export const webrtcWatchMedia: WatchMedia = {
-  async start(session: WatchSession, emit: (signal: WatchSignal) => void): Promise<void> {
+  async start(
+    session: WatchSession,
+    emit: (signal: WatchSignal) => void,
+    onLost: () => void,
+  ): Promise<void> {
     await this.stop();
 
     const pc = new RTCPeerConnection({ iceServers: iceServers() });
@@ -186,19 +198,50 @@ export const webrtcWatchMedia: WatchMedia = {
       publishStream();
     });
 
+    // ★ The peer going away is the ordinary way a session ends without an `end`
+    //   frame: the viewer's phone locks, takes a call, or loses signal. Only
+    //   'failed' is acted on — 'disconnected' is transient and the ICE agent
+    //   itself decides when it has become failure — so no grace number is
+    //   invented here. Reported once; `stop()` is what the plane calls back.
+    let reported = false;
+    const onStateChange = (): void => {
+      if (reported || live !== l) return;
+      if (pc.connectionState === 'failed' || pc.iceConnectionState === 'failed') {
+        reported = true;
+        onLost();
+      }
+    };
+    events.addEventListener('connectionstatechange', onStateChange);
+    events.addEventListener('iceconnectionstatechange', onStateChange);
+
     if (session.role === 'watched') {
       // The watched device is the only one that captures. Tracks must be added
       // BEFORE the answer is created or the SDP describes no media at all.
-      const stream = await capture(session.kind, l.facing);
+      let stream: MediaStream;
+      try {
+        stream = await capture(session.kind, l.facing);
+      } catch (e) {
+        // A denied permission or a busy camera. Nothing was captured, so
+        // nothing may stay half-open: close the connection, forget it, and let
+        // the plane decline the invite (the rejection is the signal).
+        live = null;
+        try {
+          pc.close();
+        } catch {
+          /* never opened */
+        }
+        throw e;
+      }
       l.local = stream;
       for (const track of stream.getTracks()) pc.addTrack(track, stream);
       return; // the offer is already on its way; applySignal answers it
     }
 
-    // The viewer receives only. Declaring the directions explicitly is what
-    // makes "recvonly" true in the SDP rather than merely true in practice.
-    pc.addTransceiver('audio', { direction: 'recvonly' });
-    if (session.kind === 'camera') pc.addTransceiver('video', { direction: 'recvonly' });
+    // The viewer receives only, and only the ONE capability the session is for
+    // (see `capture`). Declaring the directions explicitly is what makes
+    // "recvonly" true in the SDP rather than merely true in practice.
+    if (session.kind === 'audio') pc.addTransceiver('audio', { direction: 'recvonly' });
+    else pc.addTransceiver('video', { direction: 'recvonly' });
 
     const offer = await pc.createOffer({});
     await pc.setLocalDescription(offer);

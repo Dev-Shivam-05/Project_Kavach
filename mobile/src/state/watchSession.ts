@@ -57,6 +57,19 @@ export const LISTEN_SESSION_MS = 5 * 60_000;
 /** E2: "a +5 min button extends it once tapped, repeatable with no cap." */
 export const LISTEN_EXTEND_MS = 5 * 60_000;
 
+/**
+ * How long an invite waits for the watched phone to answer before the viewer
+ * is told "no answer" and the 1↔1 lock is released. The Family Watch rows
+ * (spec D1–E4) name no number; the one written wait budget for "a peer phone
+ * answers over the family socket" is phase6b's C2 — the Refresh spinner "for
+ * up to 8s" — and an accept is the same class of round trip (a grant check and
+ * one frame back), so it borrows that budget rather than inventing one.
+ */
+export const INVITE_ANSWER_MS = 8_000;
+
+/** Why an ended session ended, when it was not a party's choice. */
+export type WatchEndCause = WatchRole | 'timeout' | 'lost';
+
 export interface WatchSession {
   id: string;
   kind: WatchKind;
@@ -71,9 +84,17 @@ export interface WatchSession {
   /** D3: which of the watched device's cameras the VIEWER has asked for. */
   facing: 'front' | 'back';
   phase: WatchPhase;
-  /** Null while live. 'timeout' is E2's auto-end at 0:00. */
-  endedBy: WatchRole | 'timeout' | null;
-  /** Set only when an invite was refused; the honest reason to show the viewer. */
+  /**
+   * Null while live. 'timeout' is E2's auto-end at 0:00 and the unanswered
+   * invite's deadline; 'lost' is the peer connection failing under a session
+   * neither party ended (the viewer's phone died, or the network did).
+   */
+  endedBy: WatchEndCause | null;
+  /**
+   * The honest reason to show the viewer when the session ended for a reason
+   * that was not a party's choice: an invite refused, unanswered or unsendable,
+   * or a live view this phone could not open. Null when someone pressed End.
+   */
   declinedReason: string | null;
 }
 
@@ -89,7 +110,7 @@ export type WatchSignal =
   | { t: 'ice'; candidate: string; sdpMid: string | null; sdpMLineIndex: number | null }
   | { t: 'flip'; facing: 'front' | 'back' }
   | { t: 'extend'; expiresAt: number }
-  | { t: 'end'; by: WatchRole | 'timeout' };
+  | { t: 'end'; by: WatchEndCause };
 
 /** The cleartext routing envelope, as it appears on `frame.payload`. */
 export interface WatchSignalPayload {
@@ -135,8 +156,19 @@ export interface WatchContext {
  * to fail; none of them may throw into this module, so every call site wraps.
  */
 export interface WatchMedia {
-  /** Open the local peer connection. `emit` publishes SDP/ICE back to the peer. */
-  start: (session: WatchSession, emit: (signal: WatchSignal) => void) => Promise<void>;
+  /**
+   * Open the local peer connection. `emit` publishes SDP/ICE back to the peer.
+   * On the WATCHED side this is where the camera/microphone is opened, and it
+   * must REJECT when that fails (permission denied, camera busy) — the session
+   * plane then declines the invite instead of announcing a view that carries
+   * nothing. `onLost` is called once if the peer connection later fails under
+   * a session nobody ended; the plane closes the session, row and indicator.
+   */
+  start: (
+    session: WatchSession,
+    emit: (signal: WatchSignal) => void,
+    onLost: () => void,
+  ) => Promise<void>;
   /**
    * Apply one inbound SDP or ICE signal. `emit` is handed in rather than held
    * by the transport, so answering an offer goes out through the same sealed
@@ -158,6 +190,10 @@ export interface WatchMedia {
 let media: WatchMedia | null = null;
 let session: WatchSession | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+/** The viewer's "did they answer?" deadline — armed on invite, cleared on any answer. */
+let inviteTimer: ReturnType<typeof setTimeout> | null = null;
+/** The deadline's length; only a test ever changes it (a real 8 s wait per test is not a test). */
+let inviteAnswerMs = INVITE_ANSWER_MS;
 const listeners = new Set<(s: WatchSession | null) => void>();
 
 /**
@@ -201,9 +237,15 @@ function clock(ctx: WatchContext): number {
 
 // ── signalling ────────────────────────────────────────────────────────────────
 
-function emit(ctx: WatchContext, sessionId: string, toMemberId: UUID, signal: WatchSignal): void {
+/**
+ * Seal and send one signal. Returns whether it left this phone NOW — a queued
+ * frame (socket down) is not an error for most signals, but an invite that is
+ * merely queued would open a session on the other phone whenever the socket
+ * came back, minutes later, for a viewer who has long since given up.
+ */
+function emit(ctx: WatchContext, sessionId: string, toMemberId: UUID, signal: WatchSignal): boolean {
   try {
-    ctx.send({
+    return ctx.send({
       type: 'watch.signal',
       priority: 'HIGH',
       payload: {
@@ -219,6 +261,7 @@ function emit(ctx: WatchContext, sessionId: string, toMemberId: UUID, signal: Wa
   } catch {
     // Sealing or sending failed. The session simply does not progress; there is
     // nothing honest to show beyond the state it is already in.
+    return false;
   }
 }
 
@@ -271,6 +314,13 @@ function clearExpiry(): void {
   }
 }
 
+function clearInviteTimer(): void {
+  if (inviteTimer !== null) {
+    clearTimeout(inviteTimer);
+    inviteTimer = null;
+  }
+}
+
 function armExpiry(ctx: WatchContext): void {
   clearExpiry();
   if (session === null || session.expiresAt === null) return;
@@ -294,7 +344,7 @@ export function startWatchSession(
 ): WatchSession | null {
   if (session !== null && session.phase !== 'ended') return null;
   const at = clock(ctx);
-  session = {
+  const fresh: WatchSession = {
     id: uuidv7(at),
     kind,
     role: 'viewer',
@@ -309,7 +359,43 @@ export function startWatchSession(
     endedBy: null,
     declinedReason: null,
   };
-  emit(ctx, session.id, peerMemberId, { t: 'invite', kind, at });
+  session = fresh;
+
+  // ★ An invite that did not leave this phone is not an invite. `net/ws.ts`
+  //   would flush it on reconnect — and the other phone would then light its
+  //   banner and write an access-log row for a viewer who gave up minutes ago.
+  //   Refused, with the reason, rather than queued; the session is handed back
+  //   already ended so the screen can say why and the 1↔1 lock is free.
+  if (!emit(ctx, fresh.id, peerMemberId, { t: 'invite', kind, at })) {
+    session = {
+      ...fresh,
+      phase: 'ended',
+      endedBy: 'viewer',
+      declinedReason: 'This phone is not connected right now, so their phone was not asked.',
+    };
+    publish();
+    return session;
+  }
+
+  // ★ Their phone may be off. Without a deadline the viewer sits on "asking…"
+  //   for ever and every later Camera/Listen tap is refused with "one at a
+  //   time". At the deadline the invite is withdrawn with an `end`, so an
+  //   accept that arrives late is closed on their side too, not just ignored.
+  clearInviteTimer();
+  inviteTimer = setTimeout(() => {
+    inviteTimer = null;
+    const s = session;
+    if (s === null || s.id !== fresh.id || s.phase !== 'inviting') return;
+    session = {
+      ...s,
+      phase: 'ended',
+      endedBy: 'timeout',
+      declinedReason: 'No answer from their phone.',
+    };
+    emit(ctx, s.id, s.peerMemberId, { t: 'end', by: 'timeout' });
+    publish();
+  }, inviteAnswerMs);
+
   publish();
   return session;
 }
@@ -322,13 +408,14 @@ export function startWatchSession(
  * their own E2 timer, so a timeout genuinely does fire twice.
  */
 export async function endWatchSession(
-  by: WatchRole | 'timeout',
+  by: WatchEndCause,
   ctx: WatchContext,
   notifyPeer = true,
 ): Promise<void> {
   const s = session;
   if (s === null || s.phase === 'ended') return;
   clearExpiry();
+  clearInviteTimer();
 
   const wasLive = s.phase === 'live';
   session = { ...s, phase: 'ended', endedBy: by };
@@ -412,18 +499,26 @@ export async function handleWatchSignal(payload: WatchSignalPayload, ctx: WatchC
   switch (signal.t) {
     case 'accept': {
       if (s.role !== 'viewer' || s.phase !== 'inviting') return;
+      clearInviteTimer();
       const live: WatchSession = { ...s, phase: 'live', expiresAt: signal.expiresAt };
       session = live;
       armExpiry(ctx);
       await writeAccessRow(ctx, live, 'started');
       publish();
-      await startMedia(ctx);
+      // The viewer's transport failing to open is this phone's problem, and the
+      // other phone must not keep its camera on for a view that cannot render:
+      // end it honestly, with the reason, which tells them and stops the capture.
+      if (!(await startMedia(ctx))) {
+        session = { ...live, declinedReason: 'This phone could not open the live view.' };
+        await endWatchSession('viewer', ctx);
+      }
       return;
     }
 
     case 'decline':
       if (s.role !== 'viewer') return;
       clearExpiry();
+      clearInviteTimer();
       session = { ...s, phase: 'ended', endedBy: 'watched', declinedReason: signal.reason };
       publish();
       return;
@@ -483,7 +578,26 @@ async function onInvite(
   signal: Extract<WatchSignal, { t: 'invite' }>,
   ctx: WatchContext,
 ): Promise<void> {
-  if (session !== null && session.phase !== 'ended') {
+  const current = session;
+  if (current !== null && current.phase !== 'ended') {
+    // ★ The SAME invite again is not a second session. realtime-gw replays the
+    //   family stream on reconnect, so a socket blip mid-session re-delivers
+    //   the invite that opened it; declining it would end the viewer's screen
+    //   ("They are already in another session.") while this phone kept
+    //   streaming to nobody. Re-send the accept — idempotent on their side —
+    //   and carry on.
+    if (
+      current.role === 'watched' &&
+      current.id === payload.sessionId &&
+      current.peerMemberId === payload.fromMemberId
+    ) {
+      emit(ctx, current.id, current.peerMemberId, {
+        t: 'accept',
+        at: current.startedAt,
+        expiresAt: current.expiresAt,
+      });
+      return;
+    }
     emit(ctx, payload.sessionId, payload.fromMemberId, {
       t: 'decline',
       reason: 'They are already in another session.',
@@ -512,29 +626,84 @@ async function onInvite(
     declinedReason: null,
   };
   session = live;
+  // The indicator reads `session`, so it is up from this publish — before the
+  // camera opens, and long before the viewer is told anything.
+  publish();
+
+  // ★ Open the camera/microphone BEFORE the row and the accept. A denied
+  //   runtime permission is the most common first-run state, and answering
+  //   "accept" first would light "X is viewing your camera" on a phone sending
+  //   nothing and write a `camera_view_started` row for access that never
+  //   happened — the fabrication D-034/D-036 refused. On failure the invite is
+  //   declined with the reason and no session, row or indicator remains.
+  if (!(await startMedia(ctx))) {
+    session = null;
+    publish();
+    emit(ctx, payload.sessionId, payload.fromMemberId, {
+      t: 'decline',
+      reason:
+        signal.kind === 'camera'
+          ? 'Their phone could not open its camera.'
+          : 'Their phone could not open its microphone.',
+    });
+    return;
+  }
+
   armExpiry(ctx);
   // Ordering is the promise, not an implementation detail: the row (and the
   // indicator that reads this session) exists before the accept goes out.
   await writeAccessRow(ctx, live, 'started');
   publish();
   emit(ctx, payload.sessionId, payload.fromMemberId, { t: 'accept', at, expiresAt });
-  await startMedia(ctx);
 }
 
-async function startMedia(ctx: WatchContext): Promise<void> {
+/**
+ * Start the transport for the current session. True when it opened (or when
+ * there is no transport in this build — the plane is allowed to run without
+ * one); false when the transport rejected, which the caller turns into an
+ * honest end or decline rather than a session that carries nothing.
+ */
+async function startMedia(ctx: WatchContext): Promise<boolean> {
   const s = session;
-  if (s === null || media === null) return;
+  if (s === null) return false;
+  if (media === null) return true;
   try {
-    await media.start(s, (signal) => emit(ctx, s.id, s.peerMemberId, signal));
+    await media.start(
+      s,
+      (signal) => emit(ctx, s.id, s.peerMemberId, signal),
+      () => onPeerLost(s.id, ctx),
+    );
+    return true;
   } catch {
-    /* 6-D-7b's problem; the session stays open and simply carries nothing */
+    return false;
   }
+}
+
+/**
+ * The peer connection failed under a session nobody ended: the viewer's phone
+ * died, took a call, or dropped off the network. Without this the watched
+ * phone's camera stays captured — LED on, banner up — for a viewer who is gone,
+ * indefinitely for a camera session (D4: no timer). The `end` still goes out:
+ * if the other phone is merely unreachable it will read it on reconnect.
+ */
+async function onPeerLost(sessionId: string, ctx: WatchContext): Promise<void> {
+  const s = session;
+  if (s === null || s.id !== sessionId || s.phase === 'ended') return;
+  session = { ...s, declinedReason: 'The connection to their phone was lost.' };
+  await endWatchSession('lost', ctx);
 }
 
 /** Tests only — module state is a singleton by design (`net/ws.ts` is the same). */
 export function __resetWatchSessionForTest(): void {
   clearExpiry();
+  clearInviteTimer();
   session = null;
   media = null;
+  inviteAnswerMs = INVITE_ANSWER_MS;
   listeners.clear();
+}
+
+/** Tests only — shortens the invite deadline so "no answer" can be reached in milliseconds. */
+export function __setInviteAnswerMsForTest(ms: number): void {
+  inviteAnswerMs = ms;
 }

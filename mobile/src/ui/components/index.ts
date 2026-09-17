@@ -34,6 +34,5 @@ export * from './FamilyIdentity';
 export * from './MemberRow';
 export * from './BigCoordinates';
 export * from './Call112Button';
-export * from './Sparkline';
 export * from './FamilyMapView';
 export * from './SosHeaderButton';

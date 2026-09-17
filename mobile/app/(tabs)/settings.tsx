@@ -883,13 +883,11 @@ const styles = StyleSheet.create({
   h3: { color: colors.text, fontSize: font.h3, fontWeight: weight.semibold },
   body: { color: colors.text, fontSize: font.body, fontWeight: weight.regular, lineHeight: leading.body },
   meta: { color: colors.textDim, fontSize: font.small, fontWeight: weight.regular, lineHeight: leading.small },
-  // ★ The *Text* tokens. `error` is every validation message on this screen and
-  //   `warnLine` is the demo-PIN warning — "Replace both before this phone
-  //   protects anyone", arguably the most safety-critical sentence in Settings.
-  //   As fills they measured 2.76:1 and 2.71:1 on bgCard — dark red and dark
-  //   brown on dark grey. As text tokens they are 7.95:1 and 7.85:1.
+  // ★ The *Text* token. `error` is every validation message on this screen. As
+  //   a fill it measured 2.76:1 on bgCard — dark red on dark grey; as the text
+  //   token it is 7.95:1. (The demo-PIN warning that used to sit beside it is
+  //   gone with the demo PINs themselves — nothing seeds 1234/9119 any more.)
   error: { color: colors.dangerText, fontSize: font.small, fontWeight: weight.semibold, lineHeight: leading.small },
-  warnLine: { color: colors.warnText, fontSize: font.small, fontWeight: weight.medium, lineHeight: leading.small },
   honest: { color: colors.text, fontSize: font.h3, fontWeight: weight.bold, lineHeight: leading.h3 },
   label: { color: colors.textDim, fontSize: font.small, fontWeight: weight.semibold, letterSpacing: 0.6 },
 

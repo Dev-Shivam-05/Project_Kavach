@@ -33,9 +33,12 @@ import {
   handleWatchSignal,
   setWatchMedia,
   startWatchSession,
+  subscribeWatchSession,
   __resetWatchSessionForTest,
+  __setInviteAnswerMsForTest,
   type WatchContext,
   type WatchKind,
+  type WatchSession,
   type WatchSignal,
   type WatchSignalPayload,
 } from '../src/state/watchSession';
@@ -425,4 +428,198 @@ test('the media transport is absent in this build, and the plane works without i
     await handleWatchSignal(h.inbound(PEER, ME, `sess-${kind}`, { t: 'invite', kind, at: 1 }), h.ctx);
     assert.equal(currentWatchSession()?.phase, 'live', `${kind} session did not open without media`);
   }
+});
+
+// ── the ways a session ends without anybody pressing End ──────────────────────
+//
+// Everything above assumes both phones are up and both people are present. The
+// tests below are the audit's netstate-7..11: the invite nobody answers, the
+// invite the gateway replays, the camera that will not open, the transport
+// that cannot, and the peer that simply vanishes. Each one used to leave a
+// session — and on the watched side a camera — open with nothing to close it.
+
+test('netstate-11: an unanswered invite ends itself with the reason, withdraws with an `end`, and frees the 1↔1 lock', async () => {
+  __setInviteAnswerMsForTest(25);
+  const h = harness();
+  const s = startWatchSession('camera', PEER, h.ctx);
+  assert.ok(s);
+  assert.equal(s.phase, 'inviting');
+
+  await new Promise((resolve) => setTimeout(resolve, 120));
+
+  const after = currentWatchSession();
+  assert.equal(after?.phase, 'ended');
+  assert.equal(after?.endedBy, 'timeout');
+  assert.equal(after?.declinedReason, 'No answer from their phone.');
+  assert.deepEqual(h.events, ['send:invite', 'send:end'], 'the withdrawal closes a late accept on THEIR side too');
+  assert.equal(h.rows.length, 0, 'nothing was accessed, so nothing is logged');
+
+  assert.ok(startWatchSession('audio', PEER, h.ctx), 'a second session must be startable after a dead invite');
+});
+
+test('netstate-11: an accept that arrives in time cancels the deadline — the session does not later "time out"', async () => {
+  __setInviteAnswerMsForTest(25);
+  const h = harness();
+  const s = startWatchSession('camera', PEER, h.ctx);
+  assert.ok(s);
+  await handleWatchSignal(h.inbound(PEER, ME, s.id, { t: 'accept', at: 1, expiresAt: null }), h.ctx);
+  assert.equal(currentWatchSession()?.phase, 'live');
+
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(currentWatchSession()?.phase, 'live', 'the deadline was for the answer, and the answer came');
+});
+
+test('netstate-11: an invite the socket could not send is refused with the reason, not queued for whenever it reconnects', () => {
+  const h = harness();
+  h.ctx.send = () => false; // net/ws.ts: false means "queued for later", which is the case being refused
+  const s = startWatchSession('camera', PEER, h.ctx);
+
+  assert.ok(s, 'the caller still gets a session object to show — the reason lives on it');
+  assert.equal(s.phase, 'ended');
+  assert.equal(s.declinedReason, 'This phone is not connected right now, so their phone was not asked.');
+  assert.equal(h.rows.length, 0);
+
+  h.ctx.send = () => true;
+  assert.equal(startWatchSession('camera', PEER, h.ctx)?.phase, 'inviting', 'the refused invite must not hold the 1↔1 lock');
+});
+
+test('netstate-7: the SAME invite re-delivered mid-session (gateway replay on reconnect) is re-accepted, never declined', async () => {
+  const h = harness();
+  await handleWatchSignal(h.inbound(PEER, ME, 'sess-cam', { t: 'invite', kind: 'camera', at: 1 }), h.ctx);
+  const before = currentWatchSession();
+  assert.equal(before?.phase, 'live');
+  h.events.length = 0;
+
+  await handleWatchSignal(h.inbound(PEER, ME, 'sess-cam', { t: 'invite', kind: 'camera', at: 1 }), h.ctx);
+
+  assert.deepEqual(h.events, ['send:accept'], 'a decline here would close the viewer while this camera kept streaming');
+  assert.deepEqual(sentSignal(h, h.sent.length - 1), { t: 'accept', at: before?.startedAt, expiresAt: null });
+  assert.equal(currentWatchSession(), before, 'the session is untouched — same object, same phase');
+  assert.equal(h.rows.length, 1, 'no second started row for the same session');
+});
+
+test('netstate-7: a DIFFERENT invite while one is live is still declined (the 1↔1 rule survives the replay fix)', async () => {
+  const h = harness();
+  await handleWatchSignal(h.inbound(PEER, ME, 'sess-1', { t: 'invite', kind: 'camera', at: 1 }), h.ctx);
+  h.events.length = 0;
+
+  // Same peer, new session id: a fresh request, not a replay.
+  await handleWatchSignal(h.inbound(PEER, ME, 'sess-2', { t: 'invite', kind: 'camera', at: 2 }), h.ctx);
+  assert.deepEqual(h.events, ['send:decline']);
+  assert.equal(currentWatchSession()?.id, 'sess-1');
+});
+
+test('netstate-8, watched side: a camera that will not open declines the invite — no session, no row, no indicator', async () => {
+  const h = harness();
+  const seen: (WatchSession | null)[] = [];
+  subscribeWatchSession((s) => seen.push(s));
+  setWatchMedia({
+    start: async () => {
+      throw new Error('NotAllowedError: camera permission denied');
+    },
+    applySignal: async () => {},
+    setFacing: async () => {},
+    stop: async () => {},
+  });
+
+  await handleWatchSignal(h.inbound(PEER, ME, 'sess-cam', { t: 'invite', kind: 'camera', at: 1 }), h.ctx);
+
+  assert.equal(currentWatchSession(), null, 'a session that captures nothing may not exist');
+  assert.deepEqual(h.events, ['send:decline'], 'no started row, no accept — the viewer is told why instead');
+  assert.deepEqual(sentSignal(h, 0), { t: 'decline', reason: 'Their phone could not open its camera.' });
+  assert.equal(h.rows.length, 0, 'a row for access that never happened is the fabrication D-034/D-036 refused');
+  assert.equal(seen[seen.length - 1], null, 'the indicator, which reads the session, ends on nothing');
+});
+
+test('netstate-8, watched side: the microphone failing says microphone, not camera', async () => {
+  const h = harness();
+  setWatchMedia({
+    start: async () => {
+      throw new Error('busy');
+    },
+    applySignal: async () => {},
+    setFacing: async () => {},
+    stop: async () => {},
+  });
+  await handleWatchSignal(h.inbound(PEER, ME, 'sess-mic', { t: 'invite', kind: 'audio', at: 1 }), h.ctx);
+  assert.deepEqual(sentSignal(h, 0), { t: 'decline', reason: 'Their phone could not open its microphone.' });
+});
+
+test('netstate-8, viewer side: a transport that cannot open after the accept ends the session for BOTH phones, with the reason', async () => {
+  const h = harness();
+  let stopped = 0;
+  setWatchMedia({
+    start: async () => {
+      throw new Error('createOffer failed');
+    },
+    applySignal: async () => {},
+    setFacing: async () => {},
+    stop: async () => {
+      stopped += 1;
+    },
+  });
+  const s = startWatchSession('camera', PEER, h.ctx);
+  assert.ok(s);
+  h.events.length = 0;
+
+  await handleWatchSignal(h.inbound(PEER, ME, s.id, { t: 'accept', at: 1, expiresAt: null }), h.ctx);
+
+  const after = currentWatchSession();
+  assert.equal(after?.phase, 'ended');
+  assert.equal(after?.declinedReason, 'This phone could not open the live view.');
+  // The started row is honest — their camera DID open for a moment — and the
+  // `end` is what turns it off over there; the ended row closes the pair.
+  assert.deepEqual(h.events, ['log:camera_view_started', 'send:end', 'log:camera_view_ended']);
+  assert.equal(stopped, 1);
+});
+
+test('netstate-9: the peer connection failing under a live session ends it — camera released, row written, peer told', async () => {
+  const h = harness();
+  let lost: (() => void) | null = null;
+  let stopped = 0;
+  setWatchMedia({
+    start: async (_session, _emit, onLost) => {
+      lost = onLost;
+    },
+    applySignal: async () => {},
+    setFacing: async () => {},
+    stop: async () => {
+      stopped += 1;
+    },
+  });
+
+  await handleWatchSignal(h.inbound(PEER, ME, 'sess-cam', { t: 'invite', kind: 'camera', at: 1 }), h.ctx);
+  assert.equal(currentWatchSession()?.phase, 'live');
+  assert.ok(lost, 'the transport must be handed the hook');
+  h.events.length = 0;
+
+  (lost as unknown as () => void)();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const after = currentWatchSession();
+  assert.equal(after?.phase, 'ended');
+  assert.equal(after?.endedBy, 'lost');
+  assert.equal(after?.declinedReason, 'The connection to their phone was lost.');
+  assert.equal(stopped, 1, 'stop() is the call that releases the camera — a LED that stays on is the single worst bug');
+  assert.deepEqual(h.events, ['send:end', 'log:camera_view_ended']);
+});
+
+test('netstate-9: a stale onLost from a transport that was already stopped changes nothing', async () => {
+  const h = harness();
+  let lost: (() => void) | null = null;
+  setWatchMedia({
+    start: async (_session, _emit, onLost) => {
+      lost = onLost;
+    },
+    applySignal: async () => {},
+    setFacing: async () => {},
+    stop: async () => {},
+  });
+  await handleWatchSignal(h.inbound(PEER, ME, 'sess-cam', { t: 'invite', kind: 'camera', at: 1 }), h.ctx);
+  await endWatchSession('watched', h.ctx);
+  const events = [...h.events];
+
+  (lost as unknown as () => void)();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(h.events, events, 'ending twice is still a no-op, whoever asks');
 });

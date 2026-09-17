@@ -16,12 +16,22 @@
  *
  * No Animated / Reanimated either: the ring is re-rendered from the prop, so what
  * is drawn is always what T0 believes, never an interpolation of it.
+ *
+ * ★ NOT A LIVE REGION ★
+ * The label changes every second. As a polite live region TalkBack re-read it
+ * every second, straight over "Enter PIN to cancel" and over the probe screen's
+ * two answers — the exact thing probe.tsx's own caption refuses to do for the
+ * same reason. So the ring announces itself ONCE, when it appears, and after
+ * that its label is there for whoever focuses it. The caller names the action
+ * through `accessibilityLabel`: on the probe screen the seconds are left to
+ * ANSWER, not to cancel, and the default wording would be wrong there.
  */
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { memo, useEffect } from 'react';
+import { AccessibilityInfo, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 
-import { colors, font, weight } from '../theme';
+import { t } from '../../i18n';
+import { colors, font, space, weight } from '../theme';
 
 export interface CountdownRingProps {
   /** Full length of the cancel window, ms. */
@@ -30,15 +40,24 @@ export interface CountdownRingProps {
   remainingMs: number;
   size?: number;
   colour?: string;
+  /**
+   * Spoken label, with the seconds already in it. Defaults to the cancel
+   * wording; pass one built from the same `remainingMs` when the action is
+   * something else (the probe screen's "left to answer").
+   */
+  accessibilityLabel?: string;
+  style?: StyleProp<ViewStyle>;
 }
 
 const DEFAULT_SIZE = 168;
 
-export function CountdownRing({
+function CountdownRingImpl({
   totalMs,
   remainingMs,
   size = DEFAULT_SIZE,
   colour = colors.danger,
+  accessibilityLabel,
+  style,
 }: CountdownRingProps): React.ReactElement {
   const stroke = Math.max(8, Math.round(size * 0.075));
   const r = (size - stroke) / 2;
@@ -54,14 +73,21 @@ export function CountdownRing({
   // holding the phone, who may not read the subject's script.
   const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
   const label = String(seconds);
+  const spoken = accessibilityLabel ?? t('countdown.secondsLeftToCancel', { n: seconds });
+
+  // Once, on mount — never per tick (see the header). The empty dependency
+  // list is the point: `spoken` is read when the ring first appears and
+  // deliberately not again.
+  useEffect(() => {
+    AccessibilityInfo.announceForAccessibility(spoken);
+  }, []);
 
   return (
     <View
-      style={[styles.wrap, { width: size, height: size }]}
+      style={[styles.wrap, { width: size, height: size }, style]}
       accessible
       accessibilityRole="timer"
-      accessibilityLabel={`${seconds} seconds left to cancel`}
-      accessibilityLiveRegion="polite"
+      accessibilityLabel={spoken}
     >
       <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         {/* Track. Always visible, so the ring reads as "depleting" and never as
@@ -129,8 +155,9 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     fontSize: font.h3,
     fontWeight: weight.semibold,
-    marginLeft: 2,
+    marginLeft: space.xxs,
   },
 });
 
+export const CountdownRing = memo(CountdownRingImpl);
 export default CountdownRing;

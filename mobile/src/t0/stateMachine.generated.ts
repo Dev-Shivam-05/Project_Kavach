@@ -110,7 +110,12 @@ export const TRANSITIONS: readonly Transition[] = [
   { from: 'ACTIVE_L2', to: 'ACTIVE_L3', on: 'REESCALATE' },
 ];
 
-/** Guards the runtime must supply. A missing guard evaluates to TRUE (fail open, ADR-018). */
+/**
+ * Guards the runtime must supply. A guard that is absent evaluates FALSE — the
+ * guarded transition does not fire — EXCEPT that a transition with no guard
+ * always applies. Identical to the Go `Guards` semantics; ADR-018's fail-open
+ * is a property of the INGEST path, not of the machine.
+ */
 export type GuardSet = Partial<Record<string, boolean>>;
 
 /**

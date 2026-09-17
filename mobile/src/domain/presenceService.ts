@@ -70,6 +70,17 @@ type Tier = 'idle' | 'watch' | 'active';
 let deps: PresenceDeps | null = null;
 let sub: Location.LocationSubscription | null = null;
 let tier: Tier | null = null;
+/**
+ * ★ applyTier races itself. ★ An SOS changes t0 state, risk and connectivity
+ * within milliseconds, so refreshPresenceTier() is called several times inside
+ * the window where `watchPositionAsync` is still resolving. Each call cleared
+ * `sub` and awaited its own subscription; the first to resolve stored it, the
+ * second overwrote it, and the first BestForNavigation / 3 s watcher lived on
+ * past the incident and past stopPresence() — the NFR-005 budget gone with no
+ * screen able to say why. The generation counter makes the newest call the
+ * only one allowed to keep what it created.
+ */
+let tierGeneration = 0;
 let fenceStates: Record<UUID, FenceState> = {};
 let started = false;
 let lastFixAt = 0;
@@ -160,26 +171,39 @@ async function onFix(l: Location.LocationObject): Promise<void> {
   }
 }
 
+function removeSubscription(s: Location.LocationSubscription | null): void {
+  try {
+    s?.remove();
+  } catch {
+    /* already gone */
+  }
+}
+
 /** Re-subscribe only when the tier actually changes — never per fix. */
 async function applyTier(next: Tier): Promise<void> {
   if (!deps || tier === next) return;
   tier = next;
-  try {
-    sub?.remove();
-  } catch {
-    /* already gone */
-  }
+  const generation = ++tierGeneration;
+  removeSubscription(sub);
   sub = null;
+  let created: Location.LocationSubscription | null = null;
   try {
-    sub = await Location.watchPositionAsync(optionsFor(next), (l) => {
+    created = await Location.watchPositionAsync(optionsFor(next), (l) => {
       void onFix(l);
     });
   } catch {
     // Permission refused, or location services off. That is a legitimate user
     // choice and is reported by the diagnostics screen (P-031) — it must not
     // throw here and take the rest of the app down with it.
-    sub = null;
+    created = null;
   }
+  if (generation !== tierGeneration) {
+    // Superseded (or stopped) while we were waiting: the newer call owns `sub`.
+    // What we created is a leak unless we remove it ourselves, right now.
+    removeSubscription(created);
+    return;
+  }
+  sub = created;
 }
 
 /**
@@ -264,11 +288,10 @@ export async function refreshPresenceTier(): Promise<void> {
 }
 
 export function stopPresence(): void {
-  try {
-    sub?.remove();
-  } catch {
-    /* already gone */
-  }
+  // Invalidate any applyTier still awaiting its subscription, so it removes
+  // what it created instead of resurrecting a watcher after the stop.
+  tierGeneration++;
+  removeSubscription(sub);
   sub = null;
   tier = null;
   started = false;
@@ -309,6 +332,7 @@ export function presenceStatus(): PresenceStatus {
 
 /** Test seam: reset module state between cases. */
 export function __resetPresenceForTest(): void {
+  tierGeneration++;
   deps = null;
   sub = null;
   tier = null;

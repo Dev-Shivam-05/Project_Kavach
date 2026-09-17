@@ -15,21 +15,23 @@
  * (P-008). The crest is the glance; the shield line says it in words.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { memo } from 'react';
+import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { t } from '../../i18n';
 import { colors, font, leading, radius, space, tracking, weight } from '../theme';
 import { crestFor } from '../crest';
 
-export function FamilyCrest({
+function FamilyCrestImpl({
   familyId,
   name,
   size = 44,
+  style,
 }: {
   familyId: string;
   name?: string;
   size?: number;
+  style?: StyleProp<ViewStyle>;
 }): React.ReactElement {
   const { bg, fg, monogram } = crestFor(familyId, name);
   return (
@@ -38,7 +40,7 @@ export function FamilyCrest({
       // be read aloud as if it were a letter pair.
       importantForAccessibility="no-hide-descendants"
       accessibilityElementsHidden
-      style={[styles.crest, { width: size, height: size, borderRadius: size / 3, backgroundColor: bg }]}
+      style={[styles.crest, { width: size, height: size, borderRadius: size / 3, backgroundColor: bg }, style]}
     >
       <Text allowFontScaling={false} style={[styles.monogram, { color: fg, fontSize: Math.round(size * 0.4) }]}>
         {monogram}
@@ -47,6 +49,8 @@ export function FamilyCrest({
   );
 }
 
+export const FamilyCrest = memo(FamilyCrestImpl);
+
 export interface FamilyIdentityProps {
   familyId: string;
   /** The family display name (Spec E1). Absent today; the crest falls back to a
@@ -54,19 +58,24 @@ export interface FamilyIdentityProps {
   name?: string;
   /** Home wants a single quiet row; Settings wants the full card. */
   compact?: boolean;
+  style?: StyleProp<ViewStyle>;
 }
 
 /**
  * The identity surface. Home renders it compact (a crest and one line); Settings
  * renders the full card above the profile, because "the family" precedes "me".
  */
-export function FamilyIdentity({ familyId, name, compact }: FamilyIdentityProps): React.ReactElement {
+function FamilyIdentityImpl({ familyId, name, compact, style }: FamilyIdentityProps): React.ReactElement {
   const shortId = (familyId || '').slice(0, 8) || 'unknown';
   const title = name?.trim() || t('family.privateSpace');
 
   if (compact) {
     return (
-      <View accessible accessibilityLabel={`${title}. ${t('family.privateShort')}`} style={styles.compactRow}>
+      <View
+        accessible
+        accessibilityLabel={`${title}. ${t('family.privateShort')}`}
+        style={[styles.compactRow, style]}
+      >
         <FamilyCrest familyId={familyId} name={name} size={34} />
         <View style={styles.compactText}>
           <Text numberOfLines={1} style={styles.compactTitle}>
@@ -84,7 +93,7 @@ export function FamilyIdentity({ familyId, name, compact }: FamilyIdentityProps)
     <View
       accessible
       accessibilityLabel={`${title}. ${t('family.private')}. ${t('family.idLabel')} ${shortId}`}
-      style={styles.card}
+      style={[styles.card, style]}
     >
       <FamilyCrest familyId={familyId} name={name} size={56} />
       <View style={styles.cardText}>
@@ -100,12 +109,13 @@ export function FamilyIdentity({ familyId, name, compact }: FamilyIdentityProps)
 
 const styles = StyleSheet.create({
   crest: { alignItems: 'center', justifyContent: 'center' },
-  monogram: { fontWeight: weight.heavy, includeFontPadding: false, letterSpacing: 0.4 },
+  // Two upper-case letters: `caps`, the one tracking every uppercase label uses.
+  monogram: { fontWeight: weight.heavy, includeFontPadding: false, letterSpacing: tracking.caps },
 
   compactRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   compactText: { flex: 1 },
   compactTitle: { color: colors.text, fontSize: font.small, fontWeight: weight.bold },
-  compactSub: { color: colors.textFaint, fontSize: font.tiny, marginTop: 1 },
+  compactSub: { color: colors.textFaint, fontSize: font.tiny, marginTop: space.xxs },
 
   card: {
     flexDirection: 'row',
@@ -123,7 +133,7 @@ const styles = StyleSheet.create({
     color: colors.accentText,
     fontSize: font.small,
     lineHeight: leading.small,
-    marginTop: 2,
+    marginTop: space.xxs,
   },
   cardId: {
     color: colors.textFaint,
@@ -133,4 +143,5 @@ const styles = StyleSheet.create({
   },
 });
 
+export const FamilyIdentity = memo(FamilyIdentityImpl);
 export default FamilyIdentity;

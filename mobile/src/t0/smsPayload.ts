@@ -19,7 +19,9 @@
  */
 import type { TriggerType } from '../core/types';
 import { inc8 as toInc8 } from '../core/ids';
-import { smsTag } from '../crypto';
+import { smsHmacKey, smsTag, timingSafeEqual } from '../crypto';
+
+const enc = new TextEncoder();
 
 export const SMS_MAX = 160;
 export const SMS_PROTOCOL = 'K1';
@@ -125,8 +127,11 @@ export function encodeSms(input: SmsPayloadInput): EncodedSms {
   const ts = base36(Math.floor(input.atMs / 1000));
 
   // Body without the tag, then tag over the body — the receiver recomputes it.
+  // ★ Under the DERIVED SMS key (crypto.smsHmacKey), never the group secret:
+  //   the server holds `family.sms_hmac_key` and must never hold the secret, so
+  //   a tag under the secret was one no server could ever verify.
   const body = [SMS_PROTOCOL, toInc8(input.incidentId), name, type, `${lat},${lon}`, acc, bat, ts].join('|');
-  const sig = smsTag(input.groupSecret, body);
+  const sig = smsTag(smsHmacKey(input.groupSecret), body);
   const machine = `${body}|${sig}`;
 
   // Human-readable tail — what a family member's stock SMS app actually shows.
@@ -164,8 +169,14 @@ export interface DecodedSms {
 }
 
 /**
- * Parse an inbound Kavach SMS. Used by the peer-receive path and by the
- * aggregator webhook simulator.
+ * Parse an inbound Kavach SMS.
+ *
+ * ★ NO CALLER IN THE APP (D-010). ★ The §4.4 L1 relay is send-only in this
+ * build: `t0/native.ts` exposes no SMS receiver and no BLE scan, so nothing ever
+ * hands this function an inbound message and `net/api.postIncidentRelay` is
+ * never reached. It is exercised by the invariant tests and by the aggregator
+ * webhook simulator only. The receive half is a phase of its own — a native
+ * receiver — not a wire-up; the user-facing copy does not promise a relay.
  *
  * ★ Fail open: an unverifiable payload still yields a decoded incident. ★
  */
@@ -182,7 +193,9 @@ export function decodeSms(text: string, groupSecret?: Uint8Array): DecodedSms | 
   let verified = false;
   if (groupSecret) {
     const body = [protocol, i8, name, type, coords, acc, bat, ts].join('|');
-    verified = smsTag(groupSecret, body) === sig;
+    // Constant-time, like every other tag compare in the codebase; `===` on
+    // strings short-circuits at the first differing character.
+    verified = timingSafeEqual(enc.encode(smsTag(smsHmacKey(groupSecret), body)), enc.encode(sig));
   }
 
   return {

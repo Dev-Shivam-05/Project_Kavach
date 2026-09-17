@@ -75,6 +75,56 @@ import { colors, font, radius, space, weight } from '../../src/ui/theme';
 const LOG_VISIBLE = 40;
 
 /**
+ * ★ F-01 — the rows that only a fan-out that CONTINUED writes.
+ *
+ * A cancelled-in-window incident and a duress incident share their first rows
+ * (INCIDENT_OPEN, the DISPATCHED at trigger, the sealed PIN marker — see
+ * t0/triggerRouter acceptCancel); after that only the duress one keeps going.
+ * On the subject's own phone those later rows are what would give the game
+ * away, so they are folded out of the presentation there. Delivery receipts
+ * are left in: both outcomes produce them, and their count is not a tell that
+ * survives a glance.
+ */
+const FAN_OUT_ONLY_EVENTS: ReadonlySet<string> = new Set([
+  'LADDER',
+  'NO_ACK',
+  'CLAIM',
+  'RELEASE',
+  'ON_SCENE',
+  'REESCALATE',
+  'PROGRESS_WATCHDOG',
+  'AUTO_QUIESCE',
+  'TWO_PARTY_CONFIRM',
+  'SELF_CLEAR_PIN',
+  'LOCATION_UPDATE',
+  'CANCEL_WINDOW_EXPIRED',
+]);
+
+/**
+ * What the SUBJECT's own phone shows for its own ACTIVE_L1_SILENT incident:
+ * the false alarm it has to be indistinguishable from (F-01 / I-7). State,
+ * ownership, the two notification clocks and the outcome are folded back to a
+ * cancelled-in-window incident; the close time is the PIN row's, because that
+ * is the moment the subject saw "✓ I am safe". Only the presentation changes —
+ * the stored row, the store and every other phone keep the real record.
+ */
+function falseAlarmPresentation(i: Incident, rows: IncidentEventRow[] | undefined): Incident {
+  const pinRow = rows?.find((r) => r.eventType === 'PIN_DURESS' || r.eventType === 'PIN_CORRECT');
+  return {
+    ...i,
+    state: 'FALSE_ALARM',
+    duress: false,
+    ownerMemberId: null,
+    firstNotifiedAt: null,
+    firstAckAt: null,
+    resolvedAt: i.resolvedAt ?? pinRow?.localCreatedAt ?? i.openedAt,
+    outcome: 'false_alarm',
+    outcomeNote: null,
+    autoQuiesceAt: null,
+  };
+}
+
+/**
  * ★ THE 1 Hz TICK, SUBSCRIBED WHERE IT IS READ ★
  *
  * This used to be one `setNow` on the screen, which repainted the decrypted
@@ -107,10 +157,40 @@ export default function IncidentScreen(): ReactElement {
 
   // Selectors return stored references, never freshly-built objects: zustand v5
   // compares with Object.is and a new array per render is an infinite loop.
-  const incident = useKavach((s) => s.incidents.find((i) => i.id === id) ?? null);
-  const events = useKavach((s) => s.incidentEvents[id]);
+  const stored = useKavach((s) => s.incidents.find((i) => i.id === id) ?? null);
+  const storedEvents = useKavach((s) => s.incidentEvents[id]);
   const members = useKavach((s) => s.members);
   const me = useKavach((s) => s.me);
+
+  /**
+   * ★★★ F-01 / I-7 — THE SUBJECT'S OWN PHONE NEVER SAYS "DURESS" ★★★
+   *
+   * "Own" is decided by identity — `subjectMemberId === me.id` — never by
+   * device state, because this screen is reachable from the incident bar and
+   * the Incidents tab long after T0 has moved on, and after a relaunch.
+   *
+   * The local row IS marked: the store persists `duress: true` and the state
+   * `ACTIVE_L1_SILENT` on the subject's device too (the record says what
+   * happened; the screen does not). So on the subject's own phone a silent
+   * incident is PRESENTED as the false alarm it must be indistinguishable
+   * from: state, ownership, clocks, outcome and the log rows a fan-out produces
+   * are all folded back to what a cancelled-in-window incident shows. Every
+   * other phone in the family sees the real record, strip included.
+   *
+   * `me === null` (store not booted) counts as "might be the subject": the
+   * strip is withheld until identity is known rather than shown by default.
+   */
+  const viewerIsSubject = stored !== null && (me === null || stored.subjectMemberId === me.id);
+  const presentAsFalseAlarm = viewerIsSubject && stored !== null && stored.state === 'ACTIVE_L1_SILENT';
+  const incident = useMemo(
+    () => (stored !== null && presentAsFalseAlarm ? falseAlarmPresentation(stored, storedEvents) : stored),
+    [stored, storedEvents, presentAsFalseAlarm],
+  );
+  const events = useMemo(
+    () => (presentAsFalseAlarm ? storedEvents?.filter((r) => !FAN_OUT_ONLY_EVENTS.has(r.eventType)) : storedEvents),
+    [storedEvents, presentAsFalseAlarm],
+  );
+  const showDuress = incident !== null && incident.duress && !viewerIsSubject;
   const degradation = useKavach((s) => s.degradation);
   // Bootstrap reads the incident table off disk asynchronously. Without this the
   // screen spends the first frames of a cold start telling a responder the
@@ -197,7 +277,12 @@ export default function IncidentScreen(): ReactElement {
   // in the store tries TWO_PARTY_CONFIRM first and falls back to SELF_CLEAR_PIN,
   // so the control is live if EITHER transition exists.
   const canClaim = nextState(incident.state, 'CLAIM') !== null;
-  const canRelease = nextState(incident.state, 'RELEASE') !== null;
+  // The machine allows RELEASE from OWNED for anybody; the control's own copy
+  // promises "you can only release an incident you have claimed", and a
+  // relative handing back somebody else's claim re-sirens six phones. The
+  // owner's silence is not stranded by this gate: PROGRESS_WATCHDOG drops an
+  // idle OWNED to ACTIVE_L2 on its own (generated machine, 300 s).
+  const canRelease = nextState(incident.state, 'RELEASE') !== null && iOwnIt;
   const canArrive = nextState(incident.state, 'ON_SCENE') !== null;
   const canResolve =
     nextState(incident.state, 'TWO_PARTY_CONFIRM') !== null ||
@@ -229,6 +314,7 @@ export default function IncidentScreen(): ReactElement {
           subject={subject}
           live={live}
           degradation={degradation}
+          showDuress={showDuress}
         />
 
         <FourClocksCard incident={incident} live={live} />
@@ -379,11 +465,14 @@ const IdentityCard = memo(function IdentityCard({
   subject,
   live,
   degradation,
+  showDuress,
 }: {
   incident: Incident;
   subject: Member | null;
   live: boolean;
   degradation: DegradationLevel;
+  /** Decided by the SCREEN from viewer identity — never from `incident.duress` alone. */
+  showDuress: boolean;
 }): ReactElement {
   return (
     <Card tone={isActive(incident.state) ? 'danger' : undefined}>
@@ -427,8 +516,10 @@ const IdentityCard = memo(function IdentityCard({
       </View>
 
       {/* ★ F-01: duress is NEVER surfaced on the subject's own device. It is shown
-          here because a responder walking into a coercion scene must know. */}
-      {incident.duress ? (
+          here because a responder walking into a coercion scene must know —
+          and `showDuress` is false whenever the viewer is (or might be) the
+          subject, so `incident.duress` alone never decides this. */}
+      {showDuress ? (
         <View style={styles.duressStrip}>
           <Text style={styles.duressText}>
             Duress PIN was used. Treat as coerced — do not announce this alert on arrival.
@@ -979,7 +1070,7 @@ const ActionBar = memo(function ActionBar({
           accessibilityLabel={
             canRelease
               ? `${t('panic.release')}. Hands the incident back so someone else goes.`
-              : `${t('panic.release')}. Not available — you can only release an incident you have claimed.`
+              : `${t('panic.release')}. Not available — only the person who claimed this incident can release it.`
           }
           style={styles.actionButton}
         />
@@ -1049,7 +1140,9 @@ const EVENT_LABELS: Record<string, string> = {
   CONFIDENCE: 'Confidence scored',
   MANUAL_TRIGGER: 'Panic button held',
   CANCEL_WINDOW_EXPIRED: 'Cancel window expired',
-  PIN_CORRECT: 'Cancelled with PIN',
+  // ★ Identical on purpose (F-01). "Cancelled with PIN" beside "PIN entered" was
+  //   a two-word tell in the subject's own log about which PIN was typed.
+  PIN_CORRECT: 'PIN entered',
   PIN_DURESS: 'PIN entered',
   PROBE_TIMEOUT: 'No answer to the probe',
   USER_FINE: 'Answered "I am fine"',

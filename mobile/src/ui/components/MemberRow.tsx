@@ -24,8 +24,8 @@
 import { memo, type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { DegradationLevel, DEGRADATION_LABELS, type Member, type MemberPresence } from '../../core/types';
-import { relativeTime, t } from '../../i18n';
+import { DegradationLevel, type Member, type MemberPresence } from '../../core/types';
+import { degradationLabel, relativeTime, t } from '../../i18n';
 import {
   colors,
   font,
@@ -36,6 +36,7 @@ import {
   toneSurface,
   tracking,
   weight,
+  type Tone as ThemeTone,
 } from '../theme';
 import { MemberAvatar } from './MemberAvatar';
 import { PressableScale } from './PressableScale';
@@ -44,11 +45,12 @@ export interface MemberRowProps {
   member: Member;
   presence?: MemberPresence;
   onPress?: (memberId: string) => void;
-  /** Trailing slot — a sparkline, a "find phone" button, a chevron. */
+  /** Trailing slot — a "find phone" button, a chevron. */
   right?: ReactNode;
 }
 
-type Tone = 'neutral' | 'ok' | 'warn' | 'info';
+/** Never `danger` on a status pill: P-066 — nothing about a person's row is an alarm. */
+type Tone = Exclude<ThemeTone, 'danger'>;
 
 interface Status {
   tone: Tone;
@@ -76,13 +78,13 @@ const TONES: Record<Tone, { bg: string; fg: string }> = {
 
 /** The single most important ordering decision in this file — see the header. */
 function statusFor(presence: MemberPresence | undefined): Status {
-  if (!presence) return { tone: 'neutral', label: 'No data' };
-  if (presence.monitoringPaused) return { tone: 'neutral', label: 'Monitoring paused' };
-  if (!presence.agentHealthy) return { tone: 'warn', label: 'Agent offline' };
+  if (!presence) return { tone: 'neutral', label: t('member.noData') };
+  if (presence.monitoringPaused) return { tone: 'neutral', label: t('map.paused') };
+  if (!presence.agentHealthy) return { tone: 'warn', label: t('member.agentOffline') };
   if (presence.degradationLevel < DegradationLevel.FULL) {
     return {
       tone: presence.degradationLevel <= DegradationLevel.SMS_ONLY ? 'warn' : 'info',
-      label: DEGRADATION_LABELS[presence.degradationLevel],
+      label: degradationLabel(presence.degradationLevel),
     };
   }
   return { tone: 'ok', label: t('state.IDLE') };
@@ -171,7 +173,7 @@ function MemberRowImpl({ member, presence, onPress, right }: MemberRowProps) {
       onPress={() => onPress(member.id)}
       accessibilityRole="button"
       accessibilityLabel={spoken}
-      accessibilityHint="Opens this person's details"
+      accessibilityHint={t('member.opensDetails')}
       // The same ring ListItem uses, for the same reason: the row is dense with
       // textDim meta, and an outline is the one press signal that changes no
       // pixel behind a glyph. `info` rather than the row's own status tone —

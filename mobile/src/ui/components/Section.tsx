@@ -49,7 +49,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: space.sm,
-    minHeight: 20,
+    // One title line, so an empty `right` slot never changes the header's height.
+    minHeight: leading.small,
   },
   title: {
     flexShrink: 1,

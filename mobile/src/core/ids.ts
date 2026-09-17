@@ -144,8 +144,12 @@ export function memberIdForDevice(deviceId: UUID): UUID {
  * duplicate incident when the same emergency arrives by SMS and by HTTP.
  */
 export function inc8(incidentId: string): string {
-  const hex = incidentId.replace(/-/g, '').slice(0, 16);
-  let v = BigInt('0x' + hex);
+  // Only hex survives. For a real UUID this is exactly "strip the dashes" —
+  // byte-identical to `envelope.Inc8` on the server — and for a malformed or
+  // empty id it yields a deterministic '00000000' instead of a SyntaxError from
+  // BigInt('0x'), which used to throw out of the trigger path (ADR-018).
+  const hex = incidentId.replace(/[^0-9a-fA-F]/g, '').slice(0, 16);
+  let v = hex.length > 0 ? BigInt('0x' + hex) : 0n;
   let out = '';
   while (out.length < 8) {
     out = '0123456789abcdefghijklmnopqrstuvwxyz'[Number(v % 36n)] + out;

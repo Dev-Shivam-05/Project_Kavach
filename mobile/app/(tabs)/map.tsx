@@ -199,8 +199,19 @@ export default function MapScreen(): React.ReactElement {
       // ★ Spec G (6-D-8) — `at` is the typed centre; null keeps the original
       // behaviour and reads the freshest fix at SAVE time, not at open time.
       const at = input.at ?? myFix;
-      if (!at || meId === null) return;
+      // The sheet has already cleared its form by the time this runs, so a
+      // silent return here left every field blank, the sheet open and no
+      // fence — twice in a row, with nothing to explain why. Every way out
+      // closes the sheet and says what happened.
       setFenceOpen(false);
+      if (meId === null) {
+        Alert.alert(t('map.fenceNotSavedTitle'), t('map.fenceNoProfile'), [{ text: t('common.done') }]);
+        return;
+      }
+      if (!at) {
+        Alert.alert(t('map.fenceNotSavedTitle'), t('map.fenceNoFix'), [{ text: t('common.done') }]);
+        return;
+      }
       void addGeofence({
         label: input.label,
         lat: at.lat,
@@ -388,11 +399,7 @@ export default function MapScreen(): React.ReactElement {
           </Card>
 
           {geofences.length === 0 ? (
-            <EmptyState
-              glyph="◌"
-              title="No fences yet"
-              body="Add one where you are standing. It stays on this phone."
-            />
+            <EmptyState glyph="◌" title={t('map.noFencesTitle')} body={t('map.noFencesBody')} />
           ) : (
             geofences.map((fence) => (
               <ListItem
@@ -425,23 +432,18 @@ export default function MapScreen(): React.ReactElement {
             ))
           )}
 
+          {/* ★ Spec G2 (6-D-8): never gated on a GPS fix. "Type a location" is
+              the mode that exists for a parent indoors with no fix who wants a
+              fence around the school — disabling this button on `myFix` hid
+              the feature behind the exact condition it was built to remove.
+              The sheet says, in place, what each mode still needs. */}
           <Button
-            label="Add a fence here"
+            label={t('map.addFence')}
             icon="+"
             variant="ghost"
-            disabled={myFix === null}
             onPress={() => setFenceOpen(true)}
-            accessibilityLabel={
-              myFix === null
-                ? 'Add a fence here. Unavailable until this phone has a position fix.'
-                : 'Add a geofence centred on your current position'
-            }
+            accessibilityLabel={t('map.addFenceHint')}
           />
-          {myFix === null ? (
-            <Text style={styles.hint}>
-              This phone has no position fix yet, so there is no centre to put a fence around.
-            </Text>
-          ) : null}
         </Section>
       </ScrollView>
 
@@ -449,6 +451,7 @@ export default function MapScreen(): React.ReactElement {
         visible={fenceOpen}
         centre={myFix}
         bottomInset={insets.bottom}
+        saveBlockedReason={meId === null ? t('map.fenceNoProfile') : null}
         onSave={handleAddFence}
         onClose={() => setFenceOpen(false)}
       />
@@ -576,6 +579,8 @@ interface FenceSheetProps {
   visible: boolean;
   centre: { lat: number; lon: number; accuracyM: number; at: number } | null;
   bottomInset: number;
+  /** Non-null when the parent could not save ANY fence right now (no profile); shown in place and Save is disabled. */
+  saveBlockedReason: string | null;
   onSave: (input: {
     label: string;
     radiusM: number;
@@ -587,7 +592,14 @@ interface FenceSheetProps {
   onClose: () => void;
 }
 
-function FenceSheet({ visible, centre, bottomInset, onSave, onClose }: FenceSheetProps): React.ReactElement {
+function FenceSheet({
+  visible,
+  centre,
+  bottomInset,
+  saveBlockedReason,
+  onSave,
+  onClose,
+}: FenceSheetProps): React.ReactElement {
   const [label, setLabel] = useState('');
   const [radiusM, setRadiusM] = useState<number>(150);
   const [onEnter, setOnEnter] = useState(true);
@@ -595,13 +607,20 @@ function FenceSheet({ visible, centre, bottomInset, onSave, onClose }: FenceShee
   /**
    * ★ Spec G (6-D-8) — where the fence goes.
    *
-   * 'here' is the behaviour that already existed and stays the default, because
-   * it is right most of the time and needs no typing. 'typed' is the gap being
-   * closed: a fence around a school could previously only be created by
-   * standing at the school.
+   * 'here' is the behaviour that already existed and stays the default WHEN
+   * THERE IS A FIX, because it is right most of the time and needs no typing.
+   * 'typed' is the gap being closed: a fence around a school could previously
+   * only be created by standing at the school — so with no fix at all, the
+   * sheet opens straight on it rather than on a mode that cannot save.
    */
   const [mode, setMode] = useState<'here' | 'typed'>('here');
   const [typed, setTyped] = useState('');
+
+  // Decided each time the sheet OPENS, not on every fix: a mode that flips under
+  // someone's thumb because GPS just arrived would move their fence.
+  useEffect(() => {
+    if (visible) setMode(centre === null ? 'typed' : 'here');
+  }, [visible]);
 
   const trimmed = label.trim();
   const typedPoint = useMemo(() => (typed.trim().length === 0 ? null : parseLatLon(typed)), [typed]);
@@ -670,7 +689,7 @@ function FenceSheet({ visible, centre, bottomInset, onSave, onClose }: FenceShee
           <View style={styles.chipRowWrap}>
             {(['here', 'typed'] as const).map((option) => {
               const selected = option === mode;
-              const optionLabel = option === 'here' ? 'Where I am now' : 'Type a location';
+              const optionLabel = option === 'here' ? t('map.modeHere') : t('map.modeTyped');
               return (
                 <PressableScale
                   key={option}
@@ -793,18 +812,22 @@ function FenceSheet({ visible, centre, bottomInset, onSave, onClose }: FenceShee
             </Text>
           )}
 
+          {saveBlockedReason === null ? null : <Text style={styles.hint}>{saveBlockedReason}</Text>}
+
           <Button
             label={t('common.save')}
             variant="primary"
             size="lg"
-            disabled={trimmed.length === 0 || target === null}
+            disabled={saveBlockedReason !== null || trimmed.length === 0 || target === null}
             onPress={save}
             accessibilityLabel={
-              trimmed.length === 0
-                ? 'Name the fence first'
-                : `Save the ${trimmed} fence, ${radiusM} metres across ${
-                    mode === 'here' ? 'your current position' : 'the location you typed'
-                  }`
+              saveBlockedReason !== null
+                ? saveBlockedReason
+                : trimmed.length === 0
+                  ? 'Name the fence first'
+                  : `Save the ${trimmed} fence, ${radiusM} metres across ${
+                      mode === 'here' ? 'your current position' : 'the location you typed'
+                    }`
             }
           />
           <Button label={t('common.cancel')} variant="quiet" onPress={close} />

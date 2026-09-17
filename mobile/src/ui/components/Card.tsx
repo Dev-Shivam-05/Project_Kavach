@@ -23,9 +23,10 @@ import { memo, type ReactNode } from 'react';
 import { Animated, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 
 import { NO_MOTION, useEntrance, type EntranceMotionPreset } from '../motion';
-import { colors, radius, shadow, space } from '../theme';
+import { colors, radius, shadow, space, type Tone } from '../theme';
 
-export type CardTone = 'danger' | 'warn' | 'ok' | 'info';
+/** One union, theme.ts's, minus `neutral` — an untinted card is `tone: undefined`, not a tone. */
+export type CardTone = Exclude<Tone, 'neutral'>;
 
 export interface CardProps {
   children: ReactNode;

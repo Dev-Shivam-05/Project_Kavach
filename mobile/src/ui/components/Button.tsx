@@ -41,6 +41,7 @@ import {
   leading,
   radius,
   space,
+  tracking,
   weight,
 } from '../theme';
 import { PressableScale } from './PressableScale';
@@ -156,7 +157,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
   },
   md: { minHeight: MIN_TOUCH_TARGET, paddingVertical: space.sm },
-  lg: { minHeight: 64, paddingVertical: space.md, alignSelf: 'stretch' },
+  // The touch floor plus one grid step — the same height MemberRow's container uses.
+  lg: { minHeight: MIN_TOUCH_TARGET + space.lg, paddingVertical: space.md, alignSelf: 'stretch' },
   panic: {
     // ★ Load-bearing: PRD §6.4 puts the primary action at ≥88 dp, full width.
     minHeight: PANIC_BUTTON_HEIGHT,
@@ -174,7 +176,8 @@ const styles = StyleSheet.create({
     fontSize: font.h2,
     lineHeight: leading.h2,
     fontWeight: weight.bold,
-    letterSpacing: 0.5,
+    // "SOS" is an all-caps label; `caps` is the one tracking they all share (theme.ts).
+    letterSpacing: tracking.caps,
   },
   icon: { textAlign: 'center' },
 });

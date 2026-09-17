@@ -75,8 +75,13 @@ export default function WatchSessionScreen(): React.ReactElement {
   // D4/E2: when the session ends — by either party, or by the clock — this
   // screen closes itself. The acceptance criterion is "closes both sides'
   // screens within 1s"; there is nothing to wait for, so it goes immediately.
+  //
+  // Only a session somebody ENDED closes itself. One that was refused, went
+  // unanswered, could not be sent or lost its connection carries a reason, and
+  // a reason shown for 900 ms is a reason nobody read — that one stays up until
+  // the viewer presses Back.
   useEffect(() => {
-    if (session === null || session.phase !== 'ended') return;
+    if (session === null || session.phase !== 'ended' || session.declinedReason !== null) return;
     const id = setTimeout(() => {
       if (router.canGoBack()) router.back();
       else router.replace('/watch');
@@ -84,10 +89,40 @@ export default function WatchSessionScreen(): React.ReactElement {
     return () => clearTimeout(id);
   }, [session]);
 
+  /**
+   * ★ LEAVING THIS SCREEN ENDS THE SESSION — by any route. ★
+   * Hardware back, the swipe gesture and anything else that unmounts this
+   * screen used to leave the session live: the watched phone kept streaming
+   * to nobody with its banner up, and every later Camera/Listen tap was
+   * refused with "one at a time" by a screen that no longer existed. The
+   * unmount cleanup is the one hook every exit passes through. Ending an
+   * already-ended session is a no-op inside `endWatchSession`, so the
+   * self-close above and this do not double up.
+   */
+  useEffect(
+    () => () => {
+      const s = currentWatchSession();
+      if (s === null || s.role !== 'viewer' || s.phase === 'ended') return;
+      const ctx = watchContextForUi();
+      if (ctx !== null) void endWatchSession('viewer', ctx);
+    },
+    [],
+  );
+
+  function goBack(): void {
+    if (router.canGoBack()) router.back();
+    else router.replace('/watch');
+  }
+
   function onEnd(): void {
+    const s = currentWatchSession();
+    if (s === null || s.phase === 'ended') {
+      goBack();
+      return;
+    }
     const ctx = watchContextForUi();
     if (ctx !== null) void endWatchSession('viewer', ctx);
-    else if (router.canGoBack()) router.back();
+    else goBack();
   }
 
   if (session === null) {
@@ -137,7 +172,9 @@ export default function WatchSessionScreen(): React.ReactElement {
                 : waiting
                   ? `Asking ${name}'s phone…`
                   : streamUrl === null
-                    ? 'Connected. Waiting for the first frame…'
+                    ? isCamera
+                      ? 'Connected. Waiting for the first frame…'
+                      : 'Connected. Waiting for sound…'
                     : `Listening. There is nothing to see — audio only.`}
             </Text>
             {waiting && !turnConfigured() ? (
@@ -189,10 +226,10 @@ export default function WatchSessionScreen(): React.ReactElement {
           <PressableScale
             onPress={onEnd}
             accessibilityRole="button"
-            accessibilityLabel="End this session"
+            accessibilityLabel={ended ? 'Back' : 'End this session'}
             style={styles.endButton}
           >
-            <Text style={styles.endText}>End</Text>
+            <Text style={styles.endText}>{ended ? 'Back' : 'End'}</Text>
           </PressableScale>
         </View>
 
@@ -224,6 +261,8 @@ function endedLine(session: WatchSession, name: string): string {
       return `${name} ended this.`;
     case 'timeout':
       return 'The five minutes ran out.';
+    case 'lost':
+      return 'The connection to their phone was lost.';
     case 'viewer':
       return 'You ended this.';
     default:
@@ -249,7 +288,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  video: { flex: 1, backgroundColor: '#000' },
+  video: { flex: 1, backgroundColor: colors.black },
   placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.md, padding: space.lg },
   placeholderText: {
     color: colors.textDim,
@@ -294,5 +333,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  endText: { color: '#FFFFFF', fontSize: font.body, fontWeight: weight.bold },
+  endText: { color: colors.white, fontSize: font.body, fontWeight: weight.bold },
 });

@@ -238,9 +238,27 @@ export function verifyBleTag(groupSecret: Uint8Array, body: Uint8Array, tag: Uin
 
 // ── SMS integrity tag ─────────────────────────────────────────────────────────
 
-/** 8 base64url chars of HMAC-SHA256, as budgeted in the 160-char SMS payload. */
-export function smsTag(groupSecret: Uint8Array, payload: string): string {
-  const mac = hmac(sha256, groupSecret, enc.encode(payload));
+/**
+ * ★ The key the K1 SMS tag is computed under — NOT the group secret. ★
+ * The server verifies sig8 with `family.sms_hmac_key` (`internal/store`:
+ * "It is NOT the E2EE family group secret — the server must never hold that").
+ * The phone used to MAC with the group secret itself, which the server can
+ * never be given, so no SMS-borne incident could ever verify (fail-open kept
+ * them flowing, unverified). This derivation is what both sides can hold: the
+ * founding phone sends it as `smsHmacKey` when the family is created and every
+ * joiner recomputes it from the group secret it receives in the sealed box.
+ * Purpose-bound by HKDF, so holding it says nothing about the group secret.
+ */
+export function smsHmacKey(groupSecret: Uint8Array): Uint8Array {
+  return deriveKey(groupSecret, 'sms', 'v1');
+}
+
+/**
+ * 8 base64url chars of HMAC-SHA256 under `key`, as budgeted in the 160-char SMS
+ * payload. Pass `smsHmacKey(groupSecret)`, never the group secret itself.
+ */
+export function smsTag(key: Uint8Array, payload: string): string {
+  const mac = hmac(sha256, key, enc.encode(payload));
   return bytesToBase64(mac.slice(0, 6)).replace(/\+/g, '-').replace(/\//g, '_').slice(0, 8);
 }
 
@@ -294,10 +312,27 @@ export function shamirSplit(secret: Uint8Array, shares: number, threshold: numbe
   return out;
 }
 
-/** Lagrange interpolation at x=0. Runs ON-DEVICE only — shares never meet on a server. */
+/**
+ * Lagrange interpolation at x=0. Runs ON-DEVICE only — shares never meet on a server.
+ *
+ * Throws on a duplicate or out-of-range index. Two shares with the same index
+ * make the denominator `x_i ^ x_j` zero, and `gfDiv` by zero silently returns
+ * the numerator — so a guardian who pasted the same share twice during a
+ * recovery drill got a plausible 32-byte "key" that opened nothing and no
+ * explanation. A loud error is the only useful answer there.
+ */
 export function shamirCombine(shares: ShamirShare[]): Uint8Array {
   if (shares.length < 2) throw new Error('need at least 2 shares');
   const len = shares[0].data.length;
+  const seen = new Set<number>();
+  for (const s of shares) {
+    if (!Number.isInteger(s.index) || s.index < 1 || s.index > 255) {
+      throw new Error(`shamir share index ${s.index} is outside 1..255`);
+    }
+    if (seen.has(s.index)) throw new Error(`shamir share index ${s.index} appears twice`);
+    seen.add(s.index);
+    if (s.data.length !== len) throw new Error('shamir shares differ in length');
+  }
   const out = new Uint8Array(len);
   for (let byteIdx = 0; byteIdx < len; byteIdx++) {
     let acc = 0;

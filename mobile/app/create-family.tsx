@@ -39,10 +39,33 @@ export default function CreateFamilyScreen() {
   const dec = () => setSize((n) => Math.max(MIN_SIZE, n - 1));
   const inc = () => setSize((n) => Math.min(MAX_SIZE, n + 1));
 
+  /**
+   * One save at a time, and the outcome on screen. Two taps during the await
+   * used to run `createFamily` twice and `router.back()` twice — straight out
+   * of Settings. And a save that did not complete used to look exactly like
+   * one that did: the store's `createFamily` is fail-soft on the network, so
+   * the only way this screen learns of a failure is a rejection or, once the
+   * store reports it, a `false` return — both are read as failure here.
+   */
+  const [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+
   async function save() {
-    if (!trimmed) return;
-    await createFamily(trimmed, size);
-    router.back();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    setSaveFailed(false);
+    try {
+      const result = (await createFamily(trimmed, size)) as unknown;
+      if (result === false) {
+        setSaveFailed(true);
+        return;
+      }
+      router.back();
+    } catch {
+      setSaveFailed(true);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -99,7 +122,20 @@ export default function CreateFamilyScreen() {
         </View>
       </View>
 
-      <Button label={t('family.save')} size="lg" onPress={save} disabled={!trimmed} />
+      {saveFailed ? (
+        <Text style={styles.failed} accessibilityLiveRegion="assertive">
+          Saving did not complete. Nothing you typed was lost — it is still here. Try again; until
+          it succeeds the family is not registered with the server.
+        </Text>
+      ) : null}
+
+      <Button
+        label={saving ? 'Saving…' : t('family.save')}
+        size="lg"
+        onPress={() => void save()}
+        disabled={!trimmed || saving}
+        accessibilityLabel={saving ? 'Saving' : t('family.save')}
+      />
     </ScrollView>
   );
 }
@@ -124,6 +160,9 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: font.body,
   },
+  // warnText, not warn: the fill token is under 3:1 on this background and the
+  // one sentence saying the save did not happen must not be the faintest one.
+  failed: { color: colors.warnText, fontSize: font.small, lineHeight: leading.small },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: space.xl },
   sizeValue: {
     minWidth: 40,

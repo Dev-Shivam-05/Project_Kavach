@@ -18,8 +18,8 @@
  * The literal digits stay on screen even after a failure, because the true floor
  * is a human reading "112" and dialling it by hand.
  */
-import React, { useCallback, useState } from 'react';
-import { Linking, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useCallback, useState } from 'react';
+import { Linking, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { t } from '../../i18n';
 import { NO_MOTION } from '../motion';
@@ -31,6 +31,7 @@ import {
   MIN_TOUCH_TARGET,
   radius,
   space,
+  tracking,
   weight,
 } from '../theme';
 import { PressableScale } from './PressableScale';
@@ -38,27 +39,32 @@ import { PressableScale } from './PressableScale';
 export interface Call112ButtonProps {
   /** Inline placement (a card footer, a responder row) rather than the panic screen. */
   compact?: boolean;
+  style?: StyleProp<ViewStyle>;
 }
 
 const COMPACT_HEIGHT = MIN_TOUCH_TARGET + space.sm;
 
-export function Call112Button({ compact = false }: Call112ButtonProps): React.ReactElement {
+function Call112ButtonImpl({ compact = false, style }: Call112ButtonProps): React.ReactElement {
   const [failed, setFailed] = useState(false);
 
   const open = useCallback(() => {
-    // No await, no state machine, no telemetry hop before the dialler opens.
+    // Cleared on every attempt: a warning left over from a failure a minute ago,
+    // under a button that now works, is a lie — the same rule medical-card.tsx
+    // applies to its ICE dial. No await, no state machine, no telemetry hop
+    // before the dialler opens.
+    setFailed(false);
     Linking.openURL('tel:112').catch(() => setFailed(true));
   }, []);
 
   const label = t('panic.call112');
 
   return (
-    <View>
+    <View style={style}>
       <PressableScale
         onPress={open}
         accessibilityRole="button"
         accessibilityLabel={label}
-        accessibilityHint="Opens the phone dialler with 112 entered. You press call."
+        accessibilityHint={t('call112.hint')}
         // ★ §6.4: nothing on the panic path moves except the countdown ring.
         // NO_MOTION keeps the haptic — the confirmation that a shaking hand
         // actually landed — and drops the travel.
@@ -85,7 +91,7 @@ export function Call112Button({ compact = false }: Call112ButtonProps): React.Re
         // the warn FILL colour, 3.25:1 — the least legible string in the product
         // sitting at the one moment nothing else on screen can help.
         <Text style={styles.fallback} accessibilityLiveRegion="polite">
-          Dialler did not open. Dial 112 by hand.
+          {t('call112.failed')}
         </Text>
       ) : null}
     </View>
@@ -107,7 +113,8 @@ const styles = StyleSheet.create({
   label: {
     color: colors.white,
     fontWeight: weight.heavy,
-    letterSpacing: 1.5,
+    // An all-caps label takes `caps`, like every other one (theme.ts).
+    letterSpacing: tracking.caps,
     includeFontPadding: false,
   },
   fallback: {
@@ -120,4 +127,5 @@ const styles = StyleSheet.create({
   },
 });
 
+export const Call112Button = memo(Call112ButtonImpl);
 export default Call112Button;

@@ -46,10 +46,12 @@ import {
 } from '../../src/domain/consentStatus';
 import { haversineM } from '../../src/domain/geofence';
 import { relativeTime, t } from '../../src/i18n';
+import { wsStatus } from '../../src/net/ws';
 import { lastKnownFix, useKavach, watchContextForUi } from '../../src/state/store';
 import { startWatchSession, watchMediaAvailable } from '../../src/state/watchSession';
 import {
   Card,
+  EmptyState,
   MemberAvatar,
   Pill,
   PressableScale,
@@ -101,6 +103,21 @@ function startWatch(member: Member, scope: Extract<ConsentScope, 'camera' | 'aud
       'The camera and microphone transport did not load. Nothing was sent to their phone.',
       [{ text: t('common.done') }],
     );
+    return;
+  }
+  /*
+   * ★ REFUSE OFFLINE, RATHER THAN QUEUE THE INVITE ★
+   * `sendFrame` queues a frame the socket cannot carry and flushes it on
+   * reconnect. For a watch invite that is the wrong behaviour twice over: the
+   * viewer sits on "Asking…" with no invite timeout to end it, and when the
+   * socket comes back — possibly after they have backed out — the invite is
+   * delivered, the watched phone auto-accepts, plays its cue, writes an
+   * access-log row and starts its camera for a viewer who is no longer
+   * looking. The store already refuses to queue a location fix for the same
+   * reason (`broadcastFix`); a camera session is not less sensitive than a fix.
+   */
+  if (wsStatus() !== 'open') {
+    Alert.alert(t('watch.noConnectionTitle'), t('watch.noConnectionBody'), [{ text: t('common.done') }]);
     return;
   }
   const session = startWatchSession(scope === 'camera' ? 'camera' : 'audio', member.id, ctx);
@@ -205,20 +222,36 @@ export default function WatchScreen(): React.ReactElement {
   // shows.
   const [refreshing, setRefreshing] = useState<Record<UUID, boolean>>({});
   const refreshTimers = useRef<Record<UUID, ReturnType<typeof setTimeout>>>({});
+  // The other answer the button can give. `requestLocationRefresh` folds
+  // offline, 401, 404 and a dead server into one `false`; without this line
+  // the spinner flashed for a round-trip and reverted, and the parent could
+  // not tell "refused" from "sent, fix pending" — the one distinction this
+  // screen's header says the button exists to make. Shown for the same 8 s
+  // window the spinner runs (spec C2), then cleared.
+  const [refreshError, setRefreshError] = useState<Record<UUID, string>>({});
+  const errorTimers = useRef<Record<UUID, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
     const timers = refreshTimers.current;
+    const errors = errorTimers.current;
     return () => {
       for (const id of Object.values(timers)) clearTimeout(id);
+      for (const id of Object.values(errors)) clearTimeout(id);
     };
   }, []);
 
   async function onRefreshPress(member: Member): Promise<void> {
     if (refreshing[member.id]) return;
     setRefreshing((prev) => ({ ...prev, [member.id]: true }));
+    setRefreshError((prev) => ({ ...prev, [member.id]: '' }));
     const sent = await requestLocationRefresh(member.id);
     if (!sent) {
       setRefreshing((prev) => ({ ...prev, [member.id]: false }));
+      setRefreshError((prev) => ({ ...prev, [member.id]: t('watch.refreshFailed') }));
+      clearTimeout(errorTimers.current[member.id]);
+      errorTimers.current[member.id] = setTimeout(() => {
+        setRefreshError((prev) => ({ ...prev, [member.id]: '' }));
+      }, 8_000);
       return;
     }
     clearTimeout(refreshTimers.current[member.id]);
@@ -242,9 +275,13 @@ export default function WatchScreen(): React.ReactElement {
 
         <Section title={t('tab.watch')} right={`${others.length}`}>
           {others.length === 0 ? (
-            <Card>
-              <Text style={styles.body}>Nobody else has joined this family yet.</Text>
-            </Card>
+            // The way in is on the screen that says to do it, same as Home.
+            <EmptyState
+              icon="users"
+              title={t('watch.nobodyElseTitle')}
+              body={t('watch.nobodyElseBody')}
+              action={{ label: t('home.addPhone'), onPress: () => router.push('/enrol') }}
+            />
           ) : (
             others.map((member) => {
               const status = statuses[member.id];
@@ -328,6 +365,11 @@ export default function WatchScreen(): React.ReactElement {
                       {reason}
                     </Text>
                   ))}
+                  {refreshError[member.id] ? (
+                    <Text style={styles.actionError} accessibilityLiveRegion="polite">
+                      {refreshError[member.id]}
+                    </Text>
+                  ) : null}
                 </Card>
               );
             })
@@ -364,8 +406,6 @@ const styles = StyleSheet.create({
     letterSpacing: tracking.small,
   },
 
-  body: { color: colors.text, fontSize: font.body, lineHeight: leading.body },
-
   row: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   middle: { flex: 1, gap: space.xxs },
   name: { color: colors.text, fontSize: font.h3, fontWeight: weight.semibold },
@@ -382,6 +422,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   actionReason: { color: colors.textFaint, fontSize: font.tiny, lineHeight: leading.tiny },
+  // warnText, not warn: a fill token at font.small on bgCard is under 3:1.
+  actionError: { color: colors.warnText, fontSize: font.small, lineHeight: leading.small, fontWeight: weight.semibold },
 
   footnote: {
     color: colors.textFaint,

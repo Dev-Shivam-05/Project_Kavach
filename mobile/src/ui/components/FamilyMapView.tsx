@@ -29,15 +29,16 @@
  * A pin we ARE allowed to draw but which is old is drawn dimmed and dashed with
  * its age spoken in the label — honest about freshness rather than confident.
  */
-import React, { useState } from 'react';
-import type { LayoutChangeEvent } from 'react-native';
+import React, { memo, useState } from 'react';
+import type { LayoutChangeEvent, StyleProp, ViewStyle } from 'react-native';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
 
 import type { Member, MemberPresence, UUID } from '../../core/types';
-import { relativeTime } from '../../i18n';
+import { relativeTime, t } from '../../i18n';
+import { legibleForegroundOn } from '../crest';
 import { colors, font, leading, MIN_TOUCH_TARGET, radius, space, tracking, weight } from '../theme';
-import { initialsFor, MemberAvatar } from './MemberAvatar';
+import { avatarBackgroundFor, initialsFor, MemberAvatar } from './MemberAvatar';
 import { PressableScale } from './PressableScale';
 
 export interface FamilyMapViewProps {
@@ -46,6 +47,7 @@ export interface FamilyMapViewProps {
   incidentAt?: { lat: number; lon: number } | null;
   onSelectMember?: (id: UUID) => void;
   height?: number;
+  style?: StyleProp<ViewStyle>;
 }
 
 const DEFAULT_HEIGHT = 280;
@@ -142,12 +144,13 @@ function label(metres: number): string {
   return metres >= 1000 ? `${metres / 1000} km` : `${metres} m`;
 }
 
-export function FamilyMapView({
+function FamilyMapViewImpl({
   members,
   presence,
   incidentAt,
   onSelectMember,
   height = DEFAULT_HEIGHT,
+  style,
 }: FamilyMapViewProps): React.ReactElement {
   const [width, setWidth] = useState(0);
   const now = Date.now();
@@ -161,18 +164,20 @@ export function FamilyMapView({
     const p: MemberPresence | undefined = presence[m.id];
     if (p && p.monitoringPaused) {
       // P-066 — a right exercised, stated plainly, not an error.
-      hidden.push({ id: m.id, member: m, reason: 'Monitoring paused' });
+      hidden.push({ id: m.id, member: m, reason: t('map.paused') });
       continue;
     }
     if (!p || !p.location) {
-      hidden.push({ id: m.id, member: m, reason: 'Location not shared' });
+      hidden.push({ id: m.id, member: m, reason: t('map.notShared') });
       continue;
     }
     plotted.push({
       id: m.id,
       name: m.displayName,
       initials: initialsFor(m),
-      colour: m.avatarColor || colors.info,
+      // The same colour the avatar beside their name wears, so a pin can be
+      // matched to a person without reading it (crest.ts).
+      colour: avatarBackgroundFor(m),
       lat: p.location.lat,
       lon: p.location.lon,
       accuracyM: p.location.accuracyM,
@@ -194,19 +199,17 @@ export function FamilyMapView({
   const bar = g ? scaleBar(g.metresPerPx, width) : null;
 
   return (
-    <View>
+    <View style={style}>
       <View
         style={[styles.canvas, { height }]}
         onLayout={(e: LayoutChangeEvent) => setWidth(Math.round(e.nativeEvent.layout.width))}
         accessible={false}
       >
         {measuring ? null : g === null || bar === null ? (
-          <View style={styles.empty} accessible accessibilityRole="text" accessibilityLabel="Nothing to map">
-            <Text style={styles.emptyTitle}>Nothing to map</Text>
+          <View style={styles.empty} accessible accessibilityRole="text" accessibilityLabel={t('map.nothingToMap')}>
+            <Text style={styles.emptyTitle}>{t('map.nothingToMap')}</Text>
             <Text style={styles.emptyBody}>
-              {members.length === 0
-                ? 'No family members yet.'
-                : 'Nobody is sharing a live location right now.'}
+              {members.length === 0 ? t('map.noMembers') : t('map.nobodySharing')}
             </Text>
           </View>
         ) : (
@@ -318,10 +321,12 @@ export function FamilyMapView({
                       stroke={colors.bg}
                       strokeWidth={2.5}
                     />
+                    {/* Measured, not fixed: `bg` on a mid-dark crest hue is ~3.6:1;
+                        the better of text/textInverse clears 4.5 on every hue. */}
                     <SvgText
                       x={x}
                       y={y + 4}
-                      fill={colors.bg}
+                      fill={legibleForegroundOn(p.colour)}
                       fontSize={font.tiny}
                       fontWeight="700"
                       textAnchor="middle"
@@ -387,12 +392,15 @@ export function FamilyMapView({
                       key={`hit-${p.id}`}
                       onPress={() => onSelectMember(p.id)}
                       accessibilityRole="button"
-                      accessibilityLabel={`${p.name}, last fix ${age}, accurate to about ${Math.max(
-                        1,
-                        Math.round(p.accuracyM),
-                      )} metres`}
-                      accessibilityHint="Opens this person's details"
-                      hitSlop={6}
+                      accessibilityLabel={t('map.pinLabel', {
+                        name: p.name,
+                        ago: age,
+                        m: Math.max(1, Math.round(p.accuracyM)),
+                      })}
+                      accessibilityHint={t('member.opensDetails')}
+                      // Narrow on purpose: pins overlap on a crowded map, and a
+                      // wide slop lets one swallow a press aimed at its neighbour.
+                      hitSlop={space.xs}
                       highlightColor={colors.focus}
                       highlightRadius={MIN_TOUCH_TARGET / 2}
                       style={[
@@ -412,7 +420,7 @@ export function FamilyMapView({
       {/* ★ The honest list. See the file header — these people are NOT pins. */}
       {hidden.length === 0 ? null : (
         <View style={styles.hiddenBlock}>
-          <Text style={styles.hiddenHeading}>Not on the map</Text>
+          <Text style={styles.hiddenHeading}>{t('map.notOnMap')}</Text>
           {hidden.map((h) =>
             onSelectMember === undefined ? (
               <View
@@ -436,7 +444,7 @@ export function FamilyMapView({
                 onPress={() => onSelectMember(h.id)}
                 accessibilityRole="button"
                 accessibilityLabel={`${h.member.displayName}, ${h.reason}`}
-                accessibilityHint="Opens this person's details"
+                accessibilityHint={t('member.opensDetails')}
                 highlightColor={colors.info}
                 highlightRadius={radius.md}
                 style={styles.hiddenRow}
@@ -528,4 +536,5 @@ const styles = StyleSheet.create({
   },
 });
 
+export const FamilyMapView = memo(FamilyMapViewImpl);
 export default FamilyMapView;

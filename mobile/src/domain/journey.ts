@@ -247,7 +247,14 @@ export function journeyStatus(j: Journey, pos: Fix): JourneyStatus {
 
   if (j.arrivedAt !== null || j.state === 'arrived' || j.state === 'cancelled') return 'arrived';
 
-  const dest = j.corridorPoints.length > 0 ? j.corridorPoints[j.corridorPoints.length - 1] : null;
+  // ★ A one-point corridor is the ORIGIN, not a destination. ★ The store seeds
+  // `corridorPoints` with the fix the traveller is standing on when the journey
+  // starts, and until the corridor has been walked that single point is where
+  // she left from. Treating it as the destination reported "Arrived" on the
+  // active card while she was still within 120 m + GPS accuracy of her own
+  // front door — and again on the way back. Two points is the minimum for the
+  // last one to mean anything.
+  const dest = j.corridorPoints.length >= 2 ? j.corridorPoints[j.corridorPoints.length - 1] : null;
   if (dest && haversineM(pos, dest) <= ARRIVAL_RADIUS_M + Math.max(0, pos.accuracyM)) {
     return 'arrived';
   }
