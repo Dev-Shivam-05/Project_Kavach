@@ -48,11 +48,36 @@ const KOTLIN_GUARD = `    // ★ Kavach T0 — injected by plugins/withKavachT0P
 const KOTLIN_HELPER = `
   /** True when this Application instance is being created in the ":t0" process. */
   private fun ${GUARD_MARKER}(): Boolean {
+    val name = ${GUARD_MARKER}Name()
+    if (name.isNullOrEmpty()) {
+      // Unknown is treated as the main process because that is the only answer
+      // that cannot break the UI — but it is logged, because if this ever fires
+      // in :t0 the whole React Native runtime boots inside the survival process.
+      android.util.Log.w("KavachT0", "process name unknown; assuming main process")
+      return false
+    }
+    return name.endsWith(":t0")
+  }
+
+  /**
+   * The process name, from the most authoritative source available. The
+   * ActivityManager list is last: it is null on some OEM builds and omits the
+   * caller on others, and a null there used to be read as "main".
+   */
+  private fun ${GUARD_MARKER}Name(): String? {
+    if (android.os.Build.VERSION.SDK_INT >= 28) {
+      // Read from ActivityThread, never from a list an OEM may have trimmed.
+      val direct = runCatching { android.app.Application.getProcessName() }.getOrNull()
+      if (!direct.isNullOrEmpty()) return direct
+    }
+    // API 26–27: the kernel's record of argv[0], NUL-padded; NUL is <= ' '.
+    val cmdline = runCatching {
+      java.io.File("/proc/self/cmdline").readBytes().toString(Charsets.UTF_8).trim { it <= ' ' }
+    }.getOrNull()
+    if (!cmdline.isNullOrEmpty()) return cmdline
     val pid = android.os.Process.myPid()
     val am = getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
-    val name = am?.runningAppProcesses?.firstOrNull { it.pid == pid }?.processName
-      ?: return false
-    return name.endsWith(":t0")
+    return am?.runningAppProcesses?.firstOrNull { it.pid == pid }?.processName
   }
 `;
 
@@ -67,14 +92,39 @@ const JAVA_GUARD = `    // ★ Kavach T0 — injected by plugins/withKavachT0Pro
 
 const JAVA_HELPER = `
   private boolean ${GUARD_MARKER}() {
+    String name = ${GUARD_MARKER}Name();
+    if (name == null || name.isEmpty()) {
+      // See the Kotlin variant: unknown reads as main, and is logged.
+      android.util.Log.w("KavachT0", "process name unknown; assuming main process");
+      return false;
+    }
+    return name.endsWith(":t0");
+  }
+
+  private String ${GUARD_MARKER}Name() {
+    if (android.os.Build.VERSION.SDK_INT >= 28) {
+      try {
+        String direct = android.app.Application.getProcessName();
+        if (direct != null && !direct.isEmpty()) return direct;
+      } catch (Throwable ignored) {
+      }
+    }
+    try {
+      byte[] raw = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/proc/self/cmdline"));
+      String cmdline = new String(raw, java.nio.charset.StandardCharsets.UTF_8).trim();
+      int nul = cmdline.indexOf('\\0');
+      if (nul >= 0) cmdline = cmdline.substring(0, nul);
+      if (!cmdline.isEmpty()) return cmdline;
+    } catch (Throwable ignored) {
+    }
     int pid = android.os.Process.myPid();
     android.app.ActivityManager am =
         (android.app.ActivityManager) getSystemService(android.content.Context.ACTIVITY_SERVICE);
-    if (am == null || am.getRunningAppProcesses() == null) return false;
+    if (am == null || am.getRunningAppProcesses() == null) return null;
     for (android.app.ActivityManager.RunningAppProcessInfo p : am.getRunningAppProcesses()) {
-      if (p.pid == pid && p.processName != null) return p.processName.endsWith(":t0");
+      if (p.pid == pid) return p.processName;
     }
-    return false;
+    return null;
   }
 `;
 

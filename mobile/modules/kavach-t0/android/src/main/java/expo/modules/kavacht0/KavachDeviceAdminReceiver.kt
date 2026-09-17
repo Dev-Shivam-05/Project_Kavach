@@ -25,6 +25,21 @@ class KavachDeviceAdminReceiver : DeviceAdminReceiver() {
     super.onEnabled(context, intent)
     T0Config.noteLong(context, KEY_ADMIN_ENABLED_AT, System.currentTimeMillis())
     Log.i(TAG, "device admin enabled")
+    // `adb shell dpm set-device-owner` — the only provisioning path this app
+    // offers today; managed (QR/NFC) provisioning needs ACTION_GET_PROVISIONING_MODE
+    // and ACTION_ADMIN_POLICY_COMPLIANCE activities the manifest does not declare —
+    // fires ONLY this callback, never onProfileProvisioningComplete. Without
+    // this block Device Owner status granted nothing until a JS caller that does
+    // not exist invoked applyDeviceOwnerPolicy. applyWave is a no-op unless we
+    // are owner, and wave 1 is the reversible set (PRD §5.3).
+    if (DeviceOwnerConfigurator.isDeviceOwner(context)) {
+      try {
+        val result = DeviceOwnerConfigurator.applyWave(context, DeviceOwnerConfigurator.WAVE_1)
+        Log.i(TAG, "wave 1 at admin enable: $result")
+      } catch (t: Throwable) {
+        Log.e(TAG, "wave 1 failed at admin enable", t)
+      }
+    }
   }
 
   /**

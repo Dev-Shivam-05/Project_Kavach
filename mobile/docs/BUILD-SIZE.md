@@ -56,12 +56,18 @@ PY
 | After dropping x86 + x86_64 (arithmetic, near-exact) | 74.5 MB | −58.3 MB |
 | After R8 minification (estimate: 20–40% of 19.8 MB dex) | ~67–70 MB | −4 to −8 MB |
 | After resource shrinking (estimate, from a 3.3 MB `res` + `arsc` pool) | ~66–70 MB | −0.3 to −1 MB |
-| **After (measured — fill in from the next build)** | _TBD_ | |
+| **After (measured)** | **31.97 MB** | **−100.8 MB** |
 
 Only the first row is arithmetic on measured bytes; the ABI drop simply deletes
 zip entries, so 74.5 MB is reliable. The R8 and resource numbers are estimates
-and are deliberately labelled as such — replace this table's last row with the
-real figure once the orchestrator's build lands.
+and are deliberately labelled as such. The measured row is the local
+`assembleRelease` artefact `android/app/build/outputs/apk/release/app-release.apk`
+— 33,523,499 bytes, built by the Gradle run recorded in `android/build-apk.log`
+against the SDK named in `android/local.properties` — and is the 31.97 MB that
+D-008 and PROJECT_MAP quote. The estimates above were pessimistic: R8 and the
+resource shrinker together took ~42 MB off the 74.5 MB ABI-trimmed figure, not
+4–9 MB, because minification also removed unreferenced native-library entries
+the arithmetic row could not see.
 
 ---
 
@@ -281,9 +287,10 @@ z = zipfile.ZipFile(p)
 dex = b"".join(z.read(n) for n in z.namelist() if n.endswith(".dex"))
 classes = ["KavachForegroundService", "BootReceiver", "ShutdownReceiver",
            "KavachDeviceAdminReceiver", "KavachT0Module", "ForegroundAgentOptions",
-           "T0Config", "T0Sms", "DeviceOwnerConfigurator"]
+           "T0Config", "T0Sms", "DeviceOwnerConfigurator", "KeyVault"]
 fields  = ["emergencyNumbers", "peerFingerprints", "guardianReleaseTokenSha256",
-           "policySnapshotJson", "preferredSubscriptionId", "incidentActive"]
+           "policySnapshotJson", "preferredSubscriptionId", "incidentActive",
+           "signingKeyAlias"]
 miss_c = [c for c in classes if c.encode() not in dex]
 miss_f = [f for f in fields  if f.encode() not in dex]
 print("classes:", miss_c or "all present")
@@ -295,6 +302,14 @@ PY
 Expected after the hardened build:
 
 - `classes: all present` — proves `-keep class expo.modules.kavacht0.**` held.
+  `KeyVault` is in the list because it is the one T0 class the manifest does
+  NOT root: it is reached only through `KavachT0Module`'s four `keyVault*`
+  functions, so a keep rule that quietly narrowed to manifest components would
+  strip it and every SOS would fall back to the JS-heap key (F-17) with no
+  crash. It has been compiled locally (`modules/kavach-t0/android/build/tmp/
+  kotlin-classes/release/…/KeyVault.class`, 5 Aug) but the only EAS artefact
+  this checkout has seen (28 Jul) predates `KeyVault.kt`, so the next cloud
+  build is the first one whose dex can be checked for it.
 - `record fields: all present` — the Record property names were **not** renamed.
   This is the one that fails silently at runtime if the keep rules are wrong, so
   it is the one worth checking.

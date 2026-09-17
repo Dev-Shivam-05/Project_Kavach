@@ -42,6 +42,9 @@ import android.telephony.SubscriptionManager
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import expo.modules.interfaces.permissions.Permissions
+import expo.modules.interfaces.permissions.PermissionsResponse
+import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.exception.Exceptions
@@ -88,6 +91,8 @@ class KavachT0Module : Module() {
   private var torchCameraId: String? = null
   private var legacyAdvertiseCallback: AdvertiseCallback? = null
   private var extendedAdvertiseCallback: AdvertisingSetCallback? = null
+  /** The pending TTL stop for the CURRENT advertisement, so a newer one can cancel it. */
+  private var advertiseStop: Runnable? = null
   private val requestCodes = AtomicInteger(1)
 
   override fun definition() = ModuleDefinition {
@@ -151,9 +156,15 @@ class KavachT0Module : Module() {
     AsyncFunction("startForegroundAgent") { options: ForegroundAgentOptions ->
       // Provision first, start second. The agent reads its configuration from
       // device-protected storage on startup (P-035); writing after the start
-      // would race the very first pulse.
+      // would race the very first pulse. The options ALSO ride on the intent so
+      // the :t0 process re-applies them in its own copy — T0Config.prefs says
+      // why one write from this process is not enough.
       T0Config.writeProvisioning(context, options)
-      KavachForegroundService.start(context)
+      if (!KavachForegroundService.start(context, options)) {
+        // A refused start used to resolve, and native.ts then recorded a running
+        // agent that did not exist (P-031). Reject so it records the truth.
+        throw AgentStartRefusedException()
+      }
     }
 
     AsyncFunction("stopForegroundAgent") {
@@ -168,6 +179,34 @@ class KavachT0Module : Module() {
     }
 
     AsyncFunction("bleStopAdvertise") { stopAdvertising() }
+
+    // ── §4.4 L1 · the BLE runtime permission ─────────────────────────────────
+    // BLUETOOTH_ADVERTISE / BLUETOOTH_CONNECT became runtime ("Nearby devices")
+    // permissions in API 31. Declaring them holds nothing, and nothing in the JS
+    // layer had ever asked — so `bleAdvertise` resolved false on every phone the
+    // product targets while the outbox recorded the leg as attempted. The expo
+    // permissions manager owns the Activity round-trip and answers in the same
+    // {status, expires, granted, canAskAgain} shape as every Expo permission
+    // call; below API 31 there is nothing to ask and the answer is "granted".
+    AsyncFunction("requestBlePermissions") { promise: Promise ->
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        promise.resolve(
+          Bundle().apply {
+            putString(PermissionsResponse.STATUS_KEY, PermissionsStatus.GRANTED.status)
+            putString(PermissionsResponse.EXPIRES_KEY, PermissionsResponse.PERMISSION_EXPIRES_NEVER)
+            putBoolean(PermissionsResponse.GRANTED_KEY, true)
+            putBoolean(PermissionsResponse.CAN_ASK_AGAIN_KEY, true)
+          }
+        )
+        return@AsyncFunction
+      }
+      Permissions.askForPermissionsWithPermissionsManager(
+        appContext.permissions,
+        promise,
+        Manifest.permission.BLUETOOTH_ADVERTISE,
+        Manifest.permission.BLUETOOTH_CONNECT
+      )
+    }
 
     AsyncFunction("openOemSettings") { intent: String -> openOemSettings(intent) }
 
@@ -472,27 +511,48 @@ class KavachT0Module : Module() {
 
   // ══ P-031 · the checks with no JS API ═════════════════════════════════════════
 
+  /**
+   * A probe the platform would not answer is OMITTED from the bundle, never
+   * defaulted — `PermissionReport` in KavachT0.types.ts promises exactly that,
+   * and diagnostics relies on it to tell "denied" (a red row with a Fix button
+   * the user can act on) from "unknown" (a row the user cannot satisfy). Every
+   * probe below therefore returns `Boolean?`, null meaning "could not read".
+   * The one deliberate pessimist is t0SigningAvailablePredawn; its header says why.
+   */
   private fun collectPermissions(): Bundle {
     val ctx = context.applicationContext
     return Bundle().apply {
-      putBoolean("batteryOptimisationExempt", batteryOptimisationExempt(ctx))
-      putBoolean("notBackgroundRestricted", notBackgroundRestricted(ctx))
-      putBoolean("exactAlarmsPermitted", exactAlarmsPermitted(ctx))
-      putBoolean("notificationsEnabled", notificationsEnabled(ctx))
-      putBoolean("dndBypassGranted", dndBypassGranted(ctx))
+      putIfKnown("batteryOptimisationExempt", batteryOptimisationExempt(ctx))
+      putIfKnown("notBackgroundRestricted", notBackgroundRestricted(ctx))
+      putIfKnown("exactAlarmsPermitted", exactAlarmsPermitted(ctx))
+      putIfKnown("notificationsEnabled", notificationsEnabled(ctx))
+      putIfKnown("dndBypassGranted", dndBypassGranted(ctx))
       putBoolean("bgLocationGranted", bgLocationGranted(ctx))
-      putBoolean("autoRevokeDisabled", autoRevokeDisabled(ctx))
+      putIfKnown("autoRevokeDisabled", autoRevokeDisabled(ctx))
       putBoolean("t0SigningAvailablePredawn", t0SigningAvailablePredawn(ctx))
+
+      // Agent health (AgentHealth in KavachT0.types.ts), from the pre-unlock
+      // config the :t0 process stamps. The service records WHY it could not stay
+      // in the foreground (KEY_AGENT_BLOCKED_REASON) precisely so the user
+      // learns it from the app — and until now nothing on the JS side read it.
+      runCatching { T0Config.prefs(ctx) }.getOrNull()?.let { prefs ->
+        putString("agentBlockedReason", prefs.getString(T0Config.KEY_AGENT_BLOCKED_REASON, "").orEmpty())
+        putDouble("lastHeartbeatAt", prefs.getLong(T0Config.KEY_LAST_HEARTBEAT_AT, 0L).toDouble())
+      }
     }
   }
 
-  private fun batteryOptimisationExempt(ctx: Context): Boolean {
-    val power = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
+  private fun Bundle.putIfKnown(key: String, value: Boolean?) {
+    if (value != null) putBoolean(key, value)
+  }
+
+  private fun batteryOptimisationExempt(ctx: Context): Boolean? {
+    val power = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return null
     return try {
       power.isIgnoringBatteryOptimizations(ctx.packageName)
     } catch (t: Throwable) {
       Log.w(TAG, "battery optimisation state unreadable", t)
-      false
+      null
     }
   }
 
@@ -501,25 +561,25 @@ class KavachT0Module : Module() {
    * app and choosing Restrict. It is separate from battery optimisation, it is
    * far more lethal to a foreground service, and there is no JS API for it at all.
    */
-  private fun notBackgroundRestricted(ctx: Context): Boolean {
+  private fun notBackgroundRestricted(ctx: Context): Boolean? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return true
-    val activity = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return true
+    val activity = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return null
     return try {
       !activity.isBackgroundRestricted
     } catch (t: Throwable) {
       Log.w(TAG, "background restriction unreadable", t)
-      true
+      null
     }
   }
 
-  private fun exactAlarmsPermitted(ctx: Context): Boolean {
+  private fun exactAlarmsPermitted(ctx: Context): Boolean? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
-    val alarms = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return false
+    val alarms = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return null
     return try {
       alarms.canScheduleExactAlarms()
     } catch (t: Throwable) {
       Log.w(TAG, "exact alarm state unreadable", t)
-      false
+      null
     }
   }
 
@@ -528,25 +588,25 @@ class KavachT0Module : Module() {
    * on but muted our channel has, from the OS's point of view, silenced the
    * foreground service notification — and Android will then kill the service.
    */
-  private fun notificationsEnabled(ctx: Context): Boolean {
-    val notifications = ctx.getSystemService(NotificationManager::class.java) ?: return false
+  private fun notificationsEnabled(ctx: Context): Boolean? {
+    val notifications = ctx.getSystemService(NotificationManager::class.java) ?: return null
     return try {
       if (!notifications.areNotificationsEnabled()) return false
       val channel = notifications.getNotificationChannel(T0_CHANNEL_ID) ?: return true
       channel.importance != NotificationManager.IMPORTANCE_NONE
     } catch (t: Throwable) {
       Log.w(TAG, "notification state unreadable", t)
-      false
+      null
     }
   }
 
-  private fun dndBypassGranted(ctx: Context): Boolean {
-    val notifications = ctx.getSystemService(NotificationManager::class.java) ?: return false
+  private fun dndBypassGranted(ctx: Context): Boolean? {
+    val notifications = ctx.getSystemService(NotificationManager::class.java) ?: return null
     return try {
       notifications.isNotificationPolicyAccessGranted
     } catch (t: Throwable) {
       Log.w(TAG, "DND policy state unreadable", t)
-      false
+      null
     }
   }
 
@@ -564,13 +624,13 @@ class KavachT0Module : Module() {
    * months. A guardian's phone that quietly loses SEND_SMS because nothing went
    * wrong for a season is the most insidious failure mode T0 has.
    */
-  private fun autoRevokeDisabled(ctx: Context): Boolean {
+  private fun autoRevokeDisabled(ctx: Context): Boolean? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
     return try {
       ctx.packageManager.isAutoRevokeWhitelisted
     } catch (t: Throwable) {
       Log.w(TAG, "auto-revoke state unreadable", t)
-      false
+      null
     }
   }
 
@@ -832,10 +892,19 @@ class KavachT0Module : Module() {
    */
   private fun scheduleAdvertiseStop(ttlMs: Long) {
     if (ttlMs <= 0L) return
-    auxHandler?.postDelayed({ runCatching { stopAdvertising() } }, ttlMs)
+    val stop = Runnable { runCatching { stopAdvertising() } }
+    advertiseStop = stop
+    auxHandler?.postDelayed(stop, ttlMs)
   }
 
   private fun stopAdvertising() {
+    // Cancel the previous TTL first. The runnable used to be posted and
+    // forgotten, so a re-dispatch inside the window inherited the earlier
+    // call's timer and was killed at (TTL − elapsed) — during the exact retry
+    // storm PEER_ONLY exists for. Removing a runnable that is executing right
+    // now (this call may BE it) is a harmless no-op.
+    advertiseStop?.let { auxHandler?.removeCallbacks(it) }
+    advertiseStop = null
     val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     val advertiser = try {
       manager?.adapter?.bluetoothLeAdvertiser
@@ -873,10 +942,17 @@ class KavachT0Module : Module() {
       Intent().setComponent(ComponentName(pkg, cls))
     } else {
       Intent(trimmed).apply {
-        // These three refuse to resolve without a package: URI, and silently open
-        // the wrong screen if given one they do not expect.
-        if (trimmed in PACKAGE_SCOPED_ACTIONS) {
-          data = Uri.fromParts("package", context.packageName, null)
+        when (trimmed) {
+          // APP_NOTIFICATION_SETTINGS reads EXTRA_APP_PACKAGE and nothing else.
+          // Given a package: URI instead, AOSP's NotificationSettings finds no
+          // package, toasts and finishes — so the Fix button for the one setting
+          // that decides whether an alert rings opened nothing.
+          Settings.ACTION_APP_NOTIFICATION_SETTINGS ->
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+          // These three refuse to resolve without a package: URI, and silently
+          // open the wrong screen if given one they do not expect.
+          in PACKAGE_SCOPED_ACTIONS ->
+            data = Uri.fromParts("package", context.packageName, null)
         }
       }
     }
@@ -929,11 +1005,11 @@ class KavachT0Module : Module() {
     const val MAX_CONTROLLER_TIMEOUT_MS = 180_000L
     val KAVACH_SERVICE_UUID: UUID = UUID.fromString("6b617661-6368-4b56-4348-543000000001")
 
+    /** Actions that take the package as a `package:` data URI (not APP_NOTIFICATION_SETTINGS — see openOemSettings). */
     val PACKAGE_SCOPED_ACTIONS = setOf(
       Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
       Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-      "android.settings.REQUEST_SCHEDULE_EXACT_ALARM",
-      "android.settings.APP_NOTIFICATION_SETTINGS"
+      "android.settings.REQUEST_SCHEDULE_EXACT_ALARM"
     )
   }
 }
@@ -1082,3 +1158,9 @@ class AlarmVolumeRefusedException(reason: String) :
 
 class ProximityUnavailableException :
   CodedException("This device reported no proximity reading.")
+
+class AgentStartRefusedException :
+  CodedException(
+    "The platform refused to start the T0 agent (background start not allowed, " +
+      "or no declared foreground-service type is permitted)."
+  )

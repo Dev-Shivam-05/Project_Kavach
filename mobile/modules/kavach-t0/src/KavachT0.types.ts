@@ -15,6 +15,7 @@
  * exactly the dishonesty T0 is built to avoid.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
+import type { PermissionResponse } from 'expo-modules-core';
 
 /**
  * Per-SIM outcome of one dispatch.
@@ -106,11 +107,30 @@ export type PermissionKey =
   | 't0SigningAvailablePredawn';
 
 /**
+ * What the `:t0` process last recorded about itself, read back off the
+ * pre-unlock config (P-035). Neither field is a permission; they ride in the
+ * same report because `checkPermissions` is the one call diagnostics already
+ * makes, and the service's own "why I could not stay in the foreground" record
+ * had no reader at all until they did.
+ */
+export interface AgentHealth {
+  /**
+   * Empty when the last start promoted to the foreground; otherwise the
+   * service's reason string (e.g. `no_foreground_service_type_permitted`,
+   * Android 14+ refusing every declared type). A non-empty value means the
+   * agent JS believes is running is NOT.
+   */
+  agentBlockedReason?: string;
+  /** Epoch ms of the last heartbeat the agent stamped; 0 when it never ran. */
+  lastHeartbeatAt?: number;
+}
+
+/**
  * Partial by construction. A key the platform will not answer for is OMITTED,
  * never defaulted to `false` — `native.ts` distinguishes "denied" from "unknown"
  * and the diagnostics screen reports the difference (P-031).
  */
-export type PermissionReport = Partial<Record<PermissionKey, boolean>>;
+export type PermissionReport = Partial<Record<PermissionKey, boolean>> & AgentHealth;
 
 /** PRD §5.3 rolls the Device Owner lockdown out in two waves, never one. */
 export type DeviceOwnerWave = 1 | 2;
@@ -171,9 +191,22 @@ export interface KavachT0NativeModule {
   setAlarmVolume(level: number): Promise<void>;
   isDeviceOwner(): Promise<boolean>;
   checkPermissions(): Promise<PermissionReport>;
+  /**
+   * Rejects when the platform refused to start the service (background start
+   * not allowed, or no declared foreground-service type permitted). A refused
+   * start used to resolve, and `native.ts` then recorded an agent that did not
+   * exist (P-031).
+   */
   startForegroundAgent(options: ForegroundAgentOptions): Promise<void>;
   stopForegroundAgent(): Promise<void>;
   getProximityCm(): Promise<number>;
+  /**
+   * §4.4 L1. BLUETOOTH_ADVERTISE / BLUETOOTH_CONNECT are runtime permissions
+   * from API 31; until something asks, `bleAdvertise` resolves false on every
+   * Android 12+ phone. Resolves `granted: true` below API 31, where there is
+   * nothing to ask. Same shape as every Expo permission call.
+   */
+  requestBlePermissions(): Promise<PermissionResponse>;
   bleAdvertise(payloadBase64: string, ttlMs: number): Promise<boolean>;
   bleStopAdvertise(): Promise<void>;
   openOemSettings(intent: string): Promise<boolean>;

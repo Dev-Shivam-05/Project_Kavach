@@ -33,38 +33,24 @@ function resolveBabelModule(name, ...fallbackHosts) {
   return name;
 }
 
-/** True when `name` can actually be loaded from somewhere on disk. */
-function isResolvable(name, ...fallbackHosts) {
-  return path.isAbsolute(resolveBabelModule(name, ...fallbackHosts));
-}
-
 module.exports = function (api) {
   api.cache(true);
 
-  const plugins = [];
-
-  // ★ MUST BE LAST. ★
+  // ★ The Reanimated/Worklets plugin is NOT listed here on purpose. ★
   //
-  // The Reanimated/Worklets plugin rewrites worklet function bodies, and it has
-  // to see the output of every other transform to do that. Anything appended
-  // after it silently produces animations that run on the JS thread — which on
-  // this app means the panic screen's countdown stutters exactly when the phone
-  // is busiest.
-  //
-  // Reanimated 4 moved the transform into `react-native-worklets` and now only
-  // re-exports it; `react-native-reanimated/plugin` is a two-line shim over
-  // `require('react-native-worklets/plugin')`. react-native-worklets is a
-  // *required* peer of react-native-reanimated@4 and is not always materialised
-  // by installs run with --legacy-peer-deps. Guarding the entry means a missing
-  // optional install degrades to "no worklet transform" instead of hard-crashing
-  // the bundler before a single screen renders — and `npm i react-native-worklets`
-  // restores it with no edit here.
-  if (isResolvable('react-native-worklets/plugin', 'react-native-reanimated')) {
-    plugins.push('react-native-reanimated/plugin');
-  }
-
+  // babel-preset-expo adds `react-native-worklets/plugin` itself whenever the
+  // package resolves (`babel-preset-expo/build/configs/expo.js`, "Automatically
+  // add worklets or reanimated plugin when package is installed"), and places
+  // it last among its own plugins — which is where the worklet transform has
+  // to run, after every other transform has rewritten the function bodies it
+  // reads. `react-native-reanimated/plugin` is a two-line re-export of the same
+  // module, so listing it here registered one transform twice and moved the
+  // "must be last" decision to a file that cannot actually enforce it: Babel
+  // runs a config's `plugins` BEFORE its presets' plugins, so nothing declared
+  // here can ever run after the preset's copy. One owner, the preset. Pass
+  // `{ worklets: false }` to the preset if that ownership ever has to move.
   return {
     presets: [resolveBabelModule('babel-preset-expo', 'expo')],
-    plugins,
+    plugins: [],
   };
 };

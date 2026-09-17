@@ -18,6 +18,7 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
@@ -130,6 +131,13 @@ class KavachForegroundService : Service() {
     // Anything that is not an explicit STOP means "run". We never bail out before
     // calling startForeground: the system started us with startForegroundService
     // and adds its own crash on top of ours if we die without answering it.
+    //
+    // ★ Re-apply the provisioning the intent carries BEFORE the first read. JS
+    // wrote it in the MAIN process; this process's copy of the file can predate
+    // that write (T0Config.prefs says why), and `incidentActive` below is what
+    // this process acts on. A restart (null intent) or BootReceiver carries no
+    // extras and simply reads what is on disk.
+    T0Config.provisioningFromExtras(intent?.extras)?.let { T0Config.writeProvisioning(dps, it) }
     val snapshot = T0Config.snapshot(dps)
     T0Config.noteBool(dps, T0Config.KEY_AGENT_ENABLED, true)
     incidentActive = snapshot.incidentActive
@@ -431,16 +439,25 @@ class KavachForegroundService : Service() {
     private const val LOCATION_INTERVAL_MS = 5_000L
     private const val LOCATION_MIN_DIST_M = 10f
 
-    /** Idempotent: safe to call from JS, from BootReceiver, and from a restart. */
-    fun start(context: Context) {
+    /**
+     * Idempotent: safe to call from JS, from BootReceiver, and from a restart.
+     * `options`, when given, ride along as extras so the :t0 process re-applies
+     * them in its own SharedPreferences copy (T0Config.prefs). Returns false when
+     * the platform refused the start; a caller must not report a running agent
+     * on false — that was how JS came to believe in an agent that did not exist.
+     */
+    fun start(context: Context, options: ForegroundAgentOptions? = null): Boolean {
       val intent = Intent(context, KavachForegroundService::class.java).setAction(ACTION_START)
-      try {
+      options?.let { intent.putExtras(T0Config.provisioningExtras(it)) }
+      return try {
         ContextCompat.startForegroundService(context, intent)
+        true
       } catch (t: Throwable) {
         // Android 12+ throws ForegroundServiceStartNotAllowedException if we are
         // in the background without an exemption. BOOT_COMPLETED and
         // LOCKED_BOOT_COMPLETED are exempt, which is why those are our entry points.
         Log.e(TAG, "cannot start agent", t)
+        false
       }
     }
 
@@ -536,11 +553,29 @@ object T0Config {
   /**
    * Always resolves the device-protected variant, even when handed the ordinary
    * context. Getting this wrong is invisible until 3 a.m. on a locked phone.
+   *
+   * ★ MODE_MULTI_PROCESS — deprecated, and load-bearing. ★
+   * This file is written from TWO processes: the main process (provisioning from
+   * JS, KeyVault's alias, the DeviceAdminReceiver stamps) and `:t0` (heartbeats,
+   * location, the agent-enabled flag). A plain SharedPreferences loads the file
+   * ONCE per process and serves every later read from that copy, so a write made
+   * in the other process is invisible until the process dies: the agent would
+   * read `incidentActive=false` for ever from the copy it took at boot, and its
+   * next heartbeat `apply()` would write that stale copy back over the JS write.
+   * The flag makes every `getSharedPreferences()` call re-stat the file and
+   * reload it when another process changed it — still what ContextImpl does on
+   * every API level this module ships to, with nanosecond mtime from API 26.
+   * It does NOT merge concurrent writes; that is why the provisioning the agent
+   * acts on is also carried on the START intent and re-applied inside `:t0`
+   * (KavachForegroundService.onStartCommand), so the process that heartbeats is
+   * the process that last wrote the fields it reads, and why writeProvisioning
+   * commits synchronously before the intent is sent.
    */
+  @Suppress("DEPRECATION")
   fun prefs(context: Context): SharedPreferences {
     val protectedContext =
       if (context.isDeviceProtectedStorage) context else context.createDeviceProtectedStorageContext()
-    return protectedContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    return protectedContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE or Context.MODE_MULTI_PROCESS)
   }
 
   fun snapshot(context: Context): T0Snapshot {
@@ -598,7 +633,59 @@ object T0Config {
     if (p.getLong(KEY_FIRST_PROVISIONED_AT, 0L) == 0L) {
       e.putLong(KEY_FIRST_PROVISIONED_AT, System.currentTimeMillis())
     }
-    e.apply()
+    // commit(), not apply(): the main-process caller sends the START intent the
+    // moment this returns, and the :t0 reload (see prefs) can only see what is
+    // already on disk. Runs on the module queue or the :t0 main thread, never on
+    // the JS thread, and the file is a few hundred bytes.
+    e.commit()
+  }
+
+  /**
+   * The provisioning payload as Intent extras, keyed exactly as it is stored, so
+   * `:t0` can re-apply it with [writeProvisioning] before its first read (see
+   * [prefs] for why the write has to happen in that process at all). Absent
+   * fields stay absent, preserving writeProvisioning's leave-alone contract.
+   */
+  fun provisioningExtras(options: ForegroundAgentOptions): Bundle = Bundle().apply {
+    putString(KEY_NOTIF_TITLE, options.title)
+    putString(KEY_NOTIF_BODY, options.body)
+    putBoolean(KEY_INCIDENT_ACTIVE, options.incidentActive)
+    options.incidentId8?.let { putString(KEY_INCIDENT_ID8, it) }
+    options.emergencyNumbers?.let { putStringArrayList(KEY_EMERGENCY_NUMBERS, ArrayList(it)) }
+    options.policySnapshotJson?.let { putString(KEY_POLICY_SNAPSHOT, it) }
+    options.signingKeyAlias?.let { putString(KEY_SIGNING_KEY_ALIAS, it) }
+    options.peerFingerprints?.let { putStringArrayList(KEY_PEER_FINGERPRINTS, ArrayList(it)) }
+    options.preferredSubscriptionId?.let { putInt(KEY_PREFERRED_SUB_ID, it) }
+    options.guardianReleaseTokenSha256?.let { putString(KEY_GUARDIAN_RELEASE_SHA, it) }
+    options.guardianFrpAccounts?.let { putStringArrayList(KEY_GUARDIAN_FRP_ACCOUNTS, ArrayList(it)) }
+    options.lastKnownLat?.let { putDouble(KEY_LAST_LAT, it) }
+    options.lastKnownLon?.let { putDouble(KEY_LAST_LON, it) }
+    options.lastKnownAccuracyM?.let { putDouble(KEY_LAST_ACC_M, it) }
+    options.lastKnownAt?.let { putDouble(KEY_LAST_LOC_AT, it) }
+  }
+
+  /** Inverse of [provisioningExtras]; null when the extras carry no provisioning. */
+  fun provisioningFromExtras(extras: Bundle?): ForegroundAgentOptions? {
+    if (extras == null || !extras.containsKey(KEY_NOTIF_TITLE)) return null
+    return ForegroundAgentOptions(
+      title = extras.getString(KEY_NOTIF_TITLE).orEmpty(),
+      body = extras.getString(KEY_NOTIF_BODY).orEmpty(),
+      incidentActive = extras.getBoolean(KEY_INCIDENT_ACTIVE, false),
+      incidentId8 = extras.getString(KEY_INCIDENT_ID8),
+      emergencyNumbers = extras.getStringArrayList(KEY_EMERGENCY_NUMBERS),
+      policySnapshotJson = extras.getString(KEY_POLICY_SNAPSHOT),
+      signingKeyAlias = extras.getString(KEY_SIGNING_KEY_ALIAS),
+      peerFingerprints = extras.getStringArrayList(KEY_PEER_FINGERPRINTS),
+      preferredSubscriptionId =
+        if (extras.containsKey(KEY_PREFERRED_SUB_ID)) extras.getInt(KEY_PREFERRED_SUB_ID) else null,
+      guardianReleaseTokenSha256 = extras.getString(KEY_GUARDIAN_RELEASE_SHA),
+      guardianFrpAccounts = extras.getStringArrayList(KEY_GUARDIAN_FRP_ACCOUNTS),
+      lastKnownLat = if (extras.containsKey(KEY_LAST_LAT)) extras.getDouble(KEY_LAST_LAT) else null,
+      lastKnownLon = if (extras.containsKey(KEY_LAST_LON)) extras.getDouble(KEY_LAST_LON) else null,
+      lastKnownAccuracyM =
+        if (extras.containsKey(KEY_LAST_ACC_M)) extras.getDouble(KEY_LAST_ACC_M) else null,
+      lastKnownAt = if (extras.containsKey(KEY_LAST_LOC_AT)) extras.getDouble(KEY_LAST_LOC_AT) else null
+    )
   }
 
   fun noteHeartbeat(context: Context, at: Long, batteryPct: Int) {

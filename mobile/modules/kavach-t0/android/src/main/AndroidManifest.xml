@@ -5,10 +5,11 @@
       locked and the app force-stopped. READ_PHONE_STATE is what makes
       SubscriptionManager enumerate the SIMs; without it we can only reach the
       system default subscription and lose the second SIM entirely.
+      READ_PHONE_NUMBERS is deliberately NOT declared: it only unlocks
+      SubscriptionInfo.getNumber(), which nothing here reads (T0Sms).
     -->
     <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
 
     <!-- P-035: the agent must be running again before the user reaches the lock screen. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -21,9 +22,21 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
-    <!-- §4.4 L1 PEER_ONLY: shout over BLE when every IP transport is gone. -->
+    <!--
+      §4.4 L1 PEER_ONLY: shout over BLE when every IP transport is gone.
+      ADVERTISE and CONNECT are runtime permissions from API 31 and are asked for
+      by `requestBlePermissions` (KavachT0Module); declaring them grants nothing.
+
+      BLUETOOTH_SCAN is RESERVED, not used: no scanner exists yet (docs/PHASES.md —
+      "BLE FIND_ME GATT fallback" and "BLE mesh relay", both planned). It stays
+      declared so the FIND_ME scanner lands without a permission-list change, and
+      it stays WITHOUT `neverForLocation` because P-039 splits that decision
+      between the fob path (flag) and the family mesh (no flag), and neither path
+      has been built. Delete this block if those rows are ever dropped.
+    -->
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
 
     <!-- STREAM_ALARM cannot be raised past the DND ceiling without policy access (P-021). -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
@@ -136,12 +149,23 @@
           sends before the radios go down; it is the only chance to tell the family
           that the phone was switched off rather than that its owner stopped moving.
           QUICKBOOT_POWEROFF is the same event on several Chinese OEM builds.
+
+          ★ android:permission="android.permission.SHUTDOWN" — the SENDER must
+          hold it. ACTION_SHUTDOWN is a protected broadcast, but the two
+          QUICKBOOT_POWEROFF actions are OEM strings that any installed app may
+          send; without this gate a third-party app could fire a fake Final
+          Breath during an incident — "phone POWERING OFF … Last lat,lon" over
+          every SIM, in plaintext, plus a poisoned blind-gap record at next boot.
+          SHUTDOWN is signature|privileged: the system_server that actually powers
+          the phone off passes every receiver permission check (root and system
+          uid are always granted), a sideloaded app can never hold it.
         -->
         <receiver
             android:name="expo.modules.kavacht0.ShutdownReceiver"
             android:process=":t0"
             android:directBootAware="true"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.SHUTDOWN">
             <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.ACTION_SHUTDOWN" />
                 <action android:name="android.intent.action.QUICKBOOT_POWEROFF" />

@@ -11,7 +11,7 @@
     "icon": "./assets/icon.png",
     "android": {
       "package": "in.example.kavach",
-      "versionCode": 2,
+      "versionCode": 3,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -26,24 +26,18 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.USE_FULL_SCREEN_INTENT",
         "android.permission.ACCESS_NOTIFICATION_POLICY",
-        "android.permission.USE_EXACT_ALARM",
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
-        "android.permission.FOREGROUND_SERVICE_CAMERA",
-        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-        "android.permission.BLUETOOTH_SCAN",
         "android.permission.BLUETOOTH_ADVERTISE",
         "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.BODY_SENSORS",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.VIBRATE",
         "android.permission.WAKE_LOCK",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "ios": {
@@ -132,7 +126,9 @@
         }
       ],
       "@config-plugins/react-native-webrtc",
-      "./plugins/withKavachT0Process"
+      "./plugins/withKavachT0Process",
+      "./plugins/withKavachNetworkSecurity",
+      "./plugins/withKavachReleaseGuard"
     ],
     "extra": {
       "apiBase": "http://10.0.2.2:8081",

@@ -80,7 +80,15 @@ object KeyVault {
    * gave us. An existing alias is NEVER regenerated: rotating the emergency key
    * would invalidate the public key the server has on file for this device, and
    * the first anyone would learn of it is a rejected SOS.
+   *
+   * @Synchronized because this is check-then-generate and `generateKeyPair()`
+   * on an existing alias REPLACES it. `keyVaultEnsure` is dispatched on the
+   * module coroutine queue, not a serial executor, and `prepareKeys()` is
+   * documented "safe to call repeatedly" — two overlapping bootstraps (a
+   * foreground launch racing a background wake) would otherwise both see
+   * "absent" and mint two keys, the second invalidating the one the server has.
    */
+  @Synchronized
   fun ensure(context: Context, alias: String): Bundle {
     val a = requireKnownAlias(alias)
     val store = keyStore()
