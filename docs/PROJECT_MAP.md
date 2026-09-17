@@ -13,7 +13,8 @@ Status board: [PHASES.md](PHASES.md) · Risks: [RISK.md](RISK.md) · History: [h
 | mobile verify | `npm run verify` (= `tsc --noEmit` + `npm test`) | `mobile/` |
 | backend | `go build ./...` · `go test ./... -race` (`CGO_ENABLED=1`) | `backend/` |
 | codegen | `npm run gen` · drift check `npm run gen:check` | root |
-| run stack | `docker compose -f ops/docker-compose.yml up --build -d` | root |
+| lints | `npm run lint` (= schema-lint I-3 · protolint I-13 · envlint: ops/README §5 vs the binaries) | root |
+| run stack | `docker compose -f ops/docker-compose.yml up --build -d` · or `pwsh ops/run-backend.ps1` (four processes, no Docker; `-Stop`, `-Build`, `-DataDir`) | root |
 | release APK | `npx eas build --platform android --profile preview` | `mobile/` |
 
 **Verified green 2026-08-21 (after W10-j):** `go build` ✅ · `go vet ./...` ✅ · `staticcheck ./...`
@@ -36,9 +37,11 @@ afterwards. Do not report this package's tests as passing without having run the
 **Two other toolchains are absent here, and it matters.** Re-checked 1 Sep: a JDK **is** present now
 (OpenJDK 17, `JAVA_HOME` set — this line used to say otherwise), but `ANDROID_HOME` and
 `ANDROID_SDK_ROOT` are unset, so the Kotlin under `mobile/modules/kavach-t0/android/` still
-**cannot be compiled on this machine** and no CI gate compiles it either — the nine gates are Go, TypeScript and Node. Any change to the native
-Tier-0 plane is unverifiable from this checkout (D-021). No Firebase credentials either: see
-`KAVACH_FCM_CREDENTIALS` below.
+**cannot be compiled on this machine**. Since 6 Sep CI has a separate `kotlin` job (`Gate K`,
+`.github/workflows/ci.yml`) that runs `expo prebuild` + `gradlew :app:compileReleaseKotlin` on
+ubuntu-latest — **its first run is in CI; it has never executed here**, so until a green run is
+seen, treat a native change as unverified from this checkout (D-021). No Firebase credentials
+either: see `KAVACH_FCM_CREDENTIALS` below.
 
 Env vars: full table in [ops/README.md](../ops/README.md) §5. External services: **none** — no
 Postgres, no Redis, no NATS, no cloud account. `backend/go.mod` has zero `require` lines.
@@ -111,12 +114,12 @@ before 6-D-1 removed it. `home.tsx`'s own full-width footer button is unchanged 
 
 ## Demo-mode surface
 
-`CONFIG.demoMode` defaults **true** (`config.ts:66`, `app.json:140`) and is **not a mock layer** —
-the state machine, crypto, timers and alarm are all real (D-004). Forks live in:
-`src/net/api.ts` (17 endpoints short-circuited) · `src/net/ws.ts:302,365,472,490` ·
-`connectivity.ts:123,319` · `outboxDrain.ts:265` · `store.ts:373,447,1130,1271,1280` ·
-`settings.tsx:51,199,610,812` · `nodeStore.ts:405` (a fake camera peer). Fixtures:
-`src/domain/demo.ts`, 1,261 lines. Demo PINs `1234` / `9119` are written to SecureStore at boot.
+**There is none.** `demoMode`, `src/domain/demo.ts` (the Desai family, 1,261 lines), the demo
+PINs, `simulateResponders`, the ~20 `demoMode` short-circuits in `net/api.ts` and the fake camera
+peer in `nodeStore.ts` were all deleted in `116dae6a` (22 Aug, phase 6 G / RISK 1). The flag is gone
+from `config.ts` and `app.json`, so a release build *cannot* ship demo data. With no backend the app
+runs the L0 floor for real — state machine, alarm, SMS leg, black box — and the network legs fail
+soft and say so. If a doc still describes simulated responders, it predates that commit.
 
 ## Build and release
 
@@ -124,7 +127,9 @@ Prebuild/dev-client workflow — `expo prebuild`, custom native module, EAS prof
 (dev client), `preview` (APK, the sideloadable one), `production` (`.aab`). Measured baseline
 132.8 MB → **31.97 MB** after dropping x86/x86_64, R8 and resource shrinking; see
 [mobile/docs/BUILD-SIZE.md](../mobile/docs/BUILD-SIZE.md) and D-008 for the two deliberate
-trade-offs. **`eas.json` sets no `env`, so a release build ships in demo mode** — [RISK.md](RISK.md) §1.
+trade-offs. **`eas.json` sets no `env`, so every profile ships `app.json`'s hosts — the emulator
+alias `10.0.2.2`.** A build for a real phone must set `EXPO_PUBLIC_KAVACH_API` / `_API_DIRECT` /
+`_CONTROL` / `_WS` (`src/core/config.ts`, [ops/README.md](../ops/README.md) §4) in the profile.
 
 ## Conventions actually used
 
@@ -205,15 +210,19 @@ sticky, PUBLIC on the lock screen — D-023), and the socket path at `store.ts r
 
 ## Known broken
 
-- `ops/run-backend.ps1:77` passes `-addr`/`-data` to all four binaries; two define neither and exit.
-- `control-plane` and `sos-ingest` **both default to `:8081`** (main.go:60 / main.go:1138).
-- `controlBase` falls back to `extra.apiBase` (`config.ts:51`), moving the control plane to :8081.
-- `README.md:34` still says to use Expo Go, which cannot run this app.
+- ~~`ops/run-backend.ps1:77` passes `-addr`/`-data` to all four binaries~~ — **fixed 6 Sep**: a
+  per-binary argument table, verified by starting all four and probing the four health endpoints.
+- `control-plane` and `sos-ingest` **both default to `:8081`** (main.go:60 / main.go:1138) — the
+  script and the compose file pass the port explicitly for that reason.
+- `controlBase` falls back to `extra.apiBase` (`config.ts:54`), moving the control plane to :8081
+  unless `EXPO_PUBLIC_KAVACH_CONTROL` is set.
+- ~~`README.md:34` still says to use Expo Go~~ — **rewritten 6 Sep** to the prebuild / dev-client flow.
 - **`app.json` has no `android.googleServicesFile`.** Every build produced today therefore ships
   without Firebase config, `getDevicePushTokenAsync()` throws, `acquireDevicePushToken()` returns
   null, and the server records `KV-NOTOKEN` for that handset — forever. Adding
   `google-services.json` to the repo is not enough on its own; the key must be in `app.json` for
   `expo prebuild` to place it (PHASES 1.35d step 3).
-- `mobile/docs/PHASE-STATUS.md` is **stale** — audited at `20a5fdf`, before ADRs/CI/proto existed.
+- ~~`mobile/docs/PHASE-STATUS.md` is **stale**~~ — **replaced 6 Sep** by a two-line pointer to
+  [PHASES.md](PHASES.md); the re-verification of its findings stays in [RISK.md](RISK.md) item 6.
 - Windows: `go test ./...` may fail once with *"An Application Control policy has blocked this
   file"* on a freshly linked test binary. Re-run — it is the OS, not the code.

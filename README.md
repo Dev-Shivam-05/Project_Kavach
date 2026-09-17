@@ -25,25 +25,38 @@ Project Kavach, built from `Project-Kavach-Family-Safety-Platform-PRD-v1.0.md`.
 
 ## Quick start
 
-### 1. Run the app (no backend needed)
+### 1. Run the app
+
+**Expo Go cannot run this app** (D-001): `mobile/modules/kavach-t0` is a custom
+native module — a foreground service, silent multi-SIM SMS and Direct Boot are
+the survival plane, and no sandbox hosts them. It is a prebuild / dev-client
+project:
 
 ```bash
-cd mobile && npm install && npx expo start
+cd mobile && npm ci
+npm run prebuild && npm run android     # needs a local Android SDK + a device or emulator
+npm run build:apk                        # or: a sideloadable APK from EAS's cloud, no local SDK
 ```
 
-Scan the QR code with **Expo Go** (Android). The app runs fully standalone in
-demo mode: incidents open locally, the state machine runs, the alarm sounds, the
-escalation ladder advances on real timers, and simulated family responders claim.
+There is no demo mode. An SOS on a build with no backend is real on the device —
+the state machine, the alarm, the SMS leg and the black box all run locally, and
+the network legs degrade honestly instead of fabricating a response (RISK 1,
+closed 22 Aug). The default hosts in `app.json` are the Android *emulator's*
+alias for this machine (`10.0.2.2`); a physical phone needs
+`EXPO_PUBLIC_KAVACH_API` / `_API_DIRECT` / `_CONTROL` / `_WS` set at build time
+to a host it can reach — [ops/README.md](ops/README.md) §4.
 
-### 2. Run the backend (optional — enables the real ingest path)
+### 2. Run the backend (enables the real ingest path)
 
 ```bash
-pwsh ops/run-backend.ps1
+pwsh ops/run-backend.ps1                                 # four processes, no Docker
+docker compose -f ops/docker-compose.yml up --build -d   # or four containers
 ```
 
-Starts `sos-ingest` (:8081), `control-plane` (:8080), `realtime-gw` (:8082) and
-the `canary` (:9090). Requires only Go — no Docker, no Postgres, no external
-dependencies.
+Either starts `sos-ingest` (:8081), `control-plane` (:8080), `realtime-gw`
+(:8082) and the `canary` (:9090). Go toolchain only — no Postgres, no NATS, no
+cloud account. Ports, on-disk layout, health checks and every environment
+variable: [ops/README.md](ops/README.md).
 
 ### 3. Verify
 
@@ -60,6 +73,13 @@ cd backend && go test ./...
 Runs the Go suite, including the **same** state-machine conformance fixtures the
 TypeScript client runs. If those two ever disagree, the implementations have
 diverged and the build fails — which is the entire point of `spec/state-machine.yaml`.
+
+```bash
+npm run lint    # root: Class-A schema lint (I-3), proto additive-only (I-13), env-var docs
+```
+
+The Kotlin Tier-0 module cannot be compiled on a machine without an Android SDK;
+CI's separate `kotlin` job does that on ubuntu-latest (`.github/workflows/ci.yml`).
 
 ---
 
