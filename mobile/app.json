@@ -128,7 +128,8 @@
       "@config-plugins/react-native-webrtc",
       "./plugins/withKavachT0Process",
       "./plugins/withKavachNetworkSecurity",
-      "./plugins/withKavachReleaseGuard"
+      "./plugins/withKavachReleaseGuard",
+      "expo-font"
     ],
     "extra": {
       "apiBase": "http://10.0.2.2:8081",
