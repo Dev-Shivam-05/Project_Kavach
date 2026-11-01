@@ -4,7 +4,19 @@
       "PowerShell(node --version)",
       "PowerShell(npm --version)",
       "PowerShell(go version)",
-      "PowerShell(java -version 2>&1)"
+      "PowerShell(java -version 2>&1)",
+      "Read(//d/Projects/backend/internal/envelope/**)",
+      "Bash(node -e \"const s=require\\('node:sqlite'\\); const d=new s.DatabaseSync\\(':memory:'\\); console.log\\('node:sqlite ok', typeof d.exec\\)\")",
+      "Bash(git rm *)",
+      "Bash(git check-ignore *)",
+      "PowerShell($null = [System.Management.Automation.Language.Parser]::ParseFile\\(\"D:\\\\Projects\\\\Project_Kavach\\\\ops\\\\run-backend.ps1\", [ref]$null, [ref]$errs\\); if \\($errs\\) { $errs | ForEach-Object { \"PARSE ERROR: $\\($_.Message\\) at line $\\($_.Extent.StartLineNumber\\)\" } } else { \"run-backend.ps1 parses clean\" }; & \"D:\\\\Projects\\\\Project_Kavach\\\\ops\\\\run-backend.ps1\" -Build 2>&1 | Select-Object -Last 4)",
+      "Bash(cd /d/Projects/Project_Kavach/mobile && echo \"=== SDK dir? ===\" && ls /c/Users/shiva/AppData/Local/Kavach/android-sdk 2>/dev/null | head; ls /c/Users/shiva/AppData/Local/Kavach 2>/dev/null | head; echo \"=== withAudio.js 15-70 ===\" && sed -n 15,70p node_modules/expo-audio/plugin/build/withAudio.js; echo \"=== service start condition ===\" && grep -rn \"AudioPlaybackServiceConnection\\\\|showNowPlayingNotification\\\\|startServiceAndBind\" node_modules/expo-audio/android/src/main/java/expo/modules/audio/AudioModule.kt node_modules/expo-audio/android/src/main/java/expo/modules/audio/*.kt 2>/dev/null | head -12; echo \"=== app usage of expo-audio ===\" && grep -rn \"expo-audio\\\\|showNowPlayingNotification\\\\|useAudioPlayer\\\\|createAudioPlayer\" src app --include='*.ts' --include='*.tsx' | head -8)",
+      "Read(//c/Users/shiva/AppData/Local/Kavach/android-sdk/**)",
+      "Read(//c/Users/shiva/AppData/Local/Kavach/**)",
+      "Bash(go test *)",
+      "Bash(java -version)",
+      "Bash(timeout 170 ./gradlew --offline --version)",
+      "Bash(./gradlew --offline :kavach-t0:compileReleaseKotlin --console=plain)"
     ]
   }
 }
